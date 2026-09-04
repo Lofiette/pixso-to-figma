@@ -1,0 +1,48 @@
+node_modules/
+
+# Scratch scripts written by the exporters on each run
+tools/_*.js
+_phase.js
+
+# Regenerable intermediates. Everything here is produced from the Pixso file by
+# tools/px-*.mjs in a few minutes; none of it is source.
+out/*.json
+out/chunks/
+out/hdr/
+out/screen/
+out/full-section.js
+out/sect*.js
+out/import-payload*.js
+out/build4.js
+
+# Payload carriers and extracted design images (regenerable, large)
+out/section-v*.png
+out/img-*.png
+out/img-*.jpg
+out/probe*.png
+
+# Intermediate renders and crops from earlier fix rounds
+out/section-figma-v[1-9].png
+out/section-figma.png
+out/rebuilt-figma.png
+out/screen2-figma.png
+out/crop-*.png
+out/icons-*.png
+out/nav-*.png
+out/v7-*.png
+out/v8-*.png
+out/hs[0-9A-Z]-*.png
+out/dd-pixso.png
+out/dd-figma*.png
+out/dd-sbs.png
+out/dd.svg
+out/icon-figma.png
+out/icon-figma-z.png
+out/section.png
+out/section[0-9].png
+out/source-pixso.png
+out/t7out.json
+
+# Environment: Product OS library copied in by po.ps1. Not project source.
+.claude/
+t-inflate.mjs

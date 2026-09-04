@@ -1,0 +1,87 @@
+The following main page files are available in pageEntries. Fetch each URL to get the file content. Save to the specified path when present; if path is missing, derive a framework-appropriate path from id or name:
+{
+  "pageEntries": [
+    {
+      "id": "0:0",
+      "type": "page",
+      "url": "http://localhost:3667/code/1788515259464/0%3A0"
+    }
+  ]
+}
+CRITICAL REQUIRED POST-PROCESSING ORDER FOR DESIGN_TO_CODE:
+The manifests above contain TEMPORARY localhost URLs. You MUST complete these steps in order before doing unrelated work or optional refinement:
+
+1. **Code files** (listed in `pageEntries` and `codeEntries`):
+   - HTTP GET every file URL in the manifests.
+   - Save each file to the `path` specified in the manifest when present.
+   - If `path` is missing, derive a framework-appropriate path from `id` or `name`.
+
+2. **Image resources** (http://localhost:PORT/assets/BATCH_TS/xxx.png|jpg|svg|gif):
+   - Download every image URL referenced by the saved code files.
+   - Save images to the project's assets/images directory.
+   - Treat BATCH_TS as a temporary server cache key; never keep it in the local project path.
+   - Replace each full http://localhost URL with a local path using only the basename, e.g. `http://localhost:PORT/assets/BATCH_TS/logo.png` -> `assets/images/logo.png`.
+
+3. **Font resources** (http://localhost:PORT/assets/BATCH_TS/xxx.ttf|otf|woff|woff2):
+   - Download every font URL referenced by @font-face rules.
+   - Save fonts to the project's fonts directory.
+   - Treat BATCH_TS as a temporary server cache key; never keep it in the local project path.
+   - Update @font-face src URLs to use local relative paths with only the basename, e.g. `http://localhost:PORT/assets/BATCH_TS/Outfit-Regular.ttf` -> `fonts/Outfit-Regular.ttf`.
+
+WARNING: All resource URLs are TEMPORARY. The server has a 100MB cache limit - older resources may be evicted without notice.
+Do NOT perform default code refinement, call refine_generated_code, or perform optional cleanup before completing steps 1-3.
+IMPORTANT - Preserve design fidelity:
+design_to_code output already closely matches the Pixso design. Unless the user explicitly asks to change the UI or visual appearance, do NOT rewrite layouts, spacing, colors, typography, radii, shadows, or restyle/swap pieces for a subjective better look.
+This preserves rendered appearance, not the generated DOM shape; semantic tag replacement is allowed when styles and behavior are preserved.
+You MAY replace generated pieces with the project's existing design-system or app components when integrating into the codebase, but you MUST first warn the user that the on-screen UI may diverge from the Pixso export (spacing, theming, behavior).
+You may adjust non-visual project conventions (file paths, imports, module naming) after confirming with the user. Default semantic/code-quality refinement is described separately below; optional refinements should only use refine_generated_code with tags the user selected.
+MANDATORY SCREENSHOT CONTEXT AFTER DESIGN_TO_CODE:
+Before default code refinement, call get_screenshot separately for each of these design node ids: ["2:361712"].
+Do not collapse multiple ids into one get_screenshot call, and do not call get_screenshot for only the first id.
+MANDATORY DEFAULT CODE REFINEMENT AFTER DESIGN_TO_CODE:
+After completing the required resource-handling and screenshot-context steps above, apply these mandatory default refinements to the saved generated code.
+This default refinement is part of completing design_to_code, not optional cleanup. Even if the user only asks to generate, save, or place Vue/React/HTML code in a project, you MUST perform this step before reporting completion.
+Do not treat requests like generate framework code, minimal changes, or preserve UI as permission to skip semantic markup, class naming, or syntax/code-quality cleanup. Make every safe no-visual-change refinement, and leave only the specific unsafe element unchanged when confidence is low.
+Use both the saved code and the required screenshot(s) to infer element roles. Preserve the rendered UI and behavior, not the generated tag names: do NOT change layout strategy, spacing, colors, typography, radii, shadows, visual hierarchy, assets, event behavior, or API behavior.
+Semantic tag replacement is expected when it keeps the same classes, styles, handlers, and rendered output.
+
+1. Semantic markup:
+   - Do not optimize for reducing the number of div elements; preserve the rendered Pixso layout. However, preserving layout does not mean preserving generated `div` tags. Change generated tags whenever the screenshot and code show a clear semantic role and the existing styles/handlers can be kept.
+   - Treat visible command text, CTA text, navigation items, page-level regions, and heading-like text as clear role signals. Do not skip the whole semantic pass because some elements are ambiguous; only leave the ambiguous element unchanged.
+   - Priority 1: interactive controls. Convert a generated container to `button` only when the screenshot and code show a clear control: CTA or command text, button-like visual styling, existing click/submit behavior, or an icon+label command. Use `type="button"` unless native submit/reset behavior is required. Preserve existing event handlers and do not invent navigation.
+   - Priority 2: text hierarchy. Use heading tags only for real page or content headings. If a headline is split into multiple generated text nodes for styling, create at most one heading wrapper only when the visual output can be preserved safely; otherwise keep the generated structure.
+   - Priority 3: page landmarks. Use `header`, `nav`, `main`, `footer`, or `section` only for clear high-level regions inferred from the screenshot. Do not convert layout-only frame/group/vector wrappers to semantic tags.
+   - Links and images: use `a` only when a real href or route is known; do not create `href="#"` placeholders. Keep CSS-background images and decorative vectors as containers unless the image is meaningful content and safe alt text is clear.
+   - Fallback applies per element only: when a specific element has unclear role or cannot be changed without broad layout rewrites, keep only that element unchanged and continue refining other clear elements.
+
+2. Class naming cleanup:
+   - Rename only machine-generated className/class values derived from layer or node numeric patterns when the element has a clear high-level role and every reference can be updated safely.
+   - Examples: `xxx-frame-1_1`, `xxx-frame-13_12`, `xxx-group-3_7`, where `xxx` represents the project-wide generated class prefix.
+   - Prefer semantic names for clear regions or controls, such as hero, primary-cta, site-nav, login-button, or feature-list, based on visible content and role inferred from the code and screenshot.
+   - Keep low-level layout, vector, background, clipping, mask, absolute-position helper, and generated component-scope classes unchanged when they are required for visual fidelity.
+   - Update all matching class references in HTML, CSS, JS, TS, Vue, and React consistently.
+   - If a class is manually meaningful, project-defined, globally shared, or cannot be safely renamed with all references updated, keep it unchanged.
+
+3. Syntax and code-quality cleanup:
+   - Remove unused imports, variables, functions, and non-documentation commented-out blocks.
+   - Fix invalid or fragile markup patterns, duplicate attributes, and clearly redundant rules only when computed styles remain unchanged.
+   - Prefer modern, idiomatic JS/TS syntax where it simplifies code without changing behavior.
+   - Do not extract shared components, change event handlers, change API calls, or change branch semantics as part of this default refinement.
+USER-INTERACTION GATE:
+After completing the resource-handling steps and mandatory default code refinement above, you MUST ask the user whether to apply optional refinement tags A-E before performing any optional optimization.
+Required post-processing means completing the resource-handling steps above and applying the mandatory default semantic/class/code-quality refinement.
+Do NOT call refine_generated_code unless the user explicitly selects one or more optional tags from A-E.
+NEXT-TURN TAG HANDLING: If the next user message contains valid tags (examples: `A`, `AB`, `A+B`, `A,B`, `execute A and B`), treat it as explicit selection and immediately call refine_generated_code({ refinementTags }) before inspecting, editing, or manually applying refinements.
+Do NOT manually apply selected refinements until refine_generated_code returns the official guide text for those tags.
+If the user does not select any tags, keep the current output as the baseline result and do not apply optional refinements on your own.
+**Optional refinement tags available for user selection:**
+
+| Tag | Refinement Direction | Description |
+| :--- | :--- | :--- |
+| **A** | Responsive & Flexbox | Replace hard-coded pixels and float layouts |
+| **B** | Extract CSS Variables | Convert colors and font sizes to reusable variables |
+| **C** | Convert to Tailwind | Remove inline styles, use Tailwind utility classes |
+| **D** | DRY / duplicate extraction | Extract repeated UI or logic; merge only equivalent copies; warn if visuals might drift |
+| **E** | Project DS & components | Map to project tokens and shared components; **UI may diverge from the Pixso export** - warn the user |
+
+*Reply with one or more optional tags to apply, e.g. `AB`, `A+B`, or `Execute A, D, and E`. If you do not want optional refinement, say so directly.*
