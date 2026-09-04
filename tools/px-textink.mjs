@@ -13,9 +13,17 @@ const paths = [];
 })(ir.tree, []);
 console.log("text nodes: " + paths.length);
 const chunk = (a, n) => { const o = []; for (let i = 0; i < a.length; i += n) o.push(a.slice(i, i + n)); return o; };
+function run(src) {
+  writeFileSync("_ink.js", src, "utf8");
+  try { return JSON.parse(execFileSync("node", ["mcp.mjs", "script", "_ink.js"], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 }).trim()); }
+  catch (e) { return { __err: String(e.message).slice(0, 200) }; }
+}
 const out = {};
-for (const batch of chunk(paths, Number(process.env.PX_TEXTINK_BATCH || 60))) {
-  writeFileSync("_ink.js", [
+let splits = 0, hardFail = 0;
+const queue = chunk(paths, Number(process.env.PX_TEXTINK_BATCH || 60));
+while (queue.length) {
+  const batch = queue.shift();
+  const r = run([
     "await pixso.loadAllPagesAsync();",
     "const root = pixso.getNodeById(" + JSON.stringify(ROOT_ID) + ");",
     "const P = " + JSON.stringify(batch) + ";",
@@ -23,11 +31,15 @@ for (const batch of chunk(paths, Number(process.env.PX_TEXTINK_BATCH || 60))) {
     "for (const p of P) { let n = root; for (const i of p) n = n.children[i];",
     "  res.push({ c: n.characters, w: n.width, h: n.height, arb: n.absoluteRenderBounds, abb: n.absoluteBoundingBox, ar: n.textAutoResize }); }",
     "return res;"
-  ].join("\n"), "utf8");
-  const r = JSON.parse(execFileSync("node", ["mcp.mjs", "script", "_ink.js"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).trim());
+  ].join(String.fromCharCode(10)));
+  if (r.__err || !Array.isArray(r)) {
+    if (batch.length > 1) { const h = Math.ceil(batch.length / 2); queue.unshift(batch.slice(h)); queue.unshift(batch.slice(0, h)); splits++; continue; }
+    console.log("  FAIL " + batch[0].join("/") + ": " + String(r.__err || "non-array").slice(0, 120)); hardFail++; continue;
+  }
   r.forEach((v, i) => { out[batch[i].join(".")] = v; });
-  process.stdout.write("\r  " + Object.keys(out).length + "/" + paths.length + "  ");
+  process.stdout.write(String.fromCharCode(13) + "  " + Object.keys(out).length + "/" + paths.length + " (splits " + splits + ")  ");
 }
+if (hardFail) console.log(String.fromCharCode(10) + "  UNMEASURED: " + hardFail);
 console.log("");
 writeFileSync(OUT, JSON.stringify(out), "utf8");
 console.log("written " + OUT);

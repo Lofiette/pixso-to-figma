@@ -20,8 +20,10 @@ function run(src) {
 }
 const chunk = (a, n) => { const o = []; for (let i = 0; i < a.length; i += n) o.push(a.slice(i, i + n)); return o; };
 const out = {};
-let done = 0;
-for (const batch of chunk(jobs, Number(process.env.PX_BOUNDS_BATCH || 60))) {
+let done = 0, splits = 0, hardFail = 0;
+const queue = chunk(jobs, Number(process.env.PX_BOUNDS_BATCH || 60));
+while (queue.length) {
+  const batch = queue.shift();
   const r = run([
     "await pixso.loadAllPagesAsync();",
     "const root = pixso.getNodeById(" + JSON.stringify(ROOT_ID) + ");",
@@ -33,11 +35,15 @@ for (const batch of chunk(jobs, Number(process.env.PX_BOUNDS_BATCH || 60))) {
     "  res.push({ arb: n.absoluteRenderBounds, abb: n.absoluteBoundingBox, pab: pa.absoluteBoundingBox, prot: pa.rotation || 0 });",
     "}",
     "return res;"
-  ].join("\n"));
-  if (r.__err) { console.log("  FAIL " + r.__err); continue; }
+  ].join(String.fromCharCode(10)));
+  if (r.__err || !Array.isArray(r)) {
+    if (batch.length > 1) { const h = Math.ceil(batch.length / 2); queue.unshift(batch.slice(h)); queue.unshift(batch.slice(0, h)); splits++; continue; }
+    console.log("  FAIL " + batch[0].path.join("/") + ": " + String(r.__err || "non-array").slice(0, 120)); hardFail++; continue;
+  }
   r.forEach((v, i) => { out[batch[i].path.join(".")] = v; done++; });
-  process.stdout.write("\r  " + done + "/" + jobs.length + "   ");
+  process.stdout.write(String.fromCharCode(13) + "  " + done + "/" + jobs.length + " (splits " + splits + ")   ");
 }
+if (hardFail) console.log(String.fromCharCode(10) + "  UNMEASURED: " + hardFail);
 console.log("");
 writeFileSync(OUT, JSON.stringify(out), "utf8");
 console.log("written " + OUT + " (" + Object.keys(out).length + ")");
