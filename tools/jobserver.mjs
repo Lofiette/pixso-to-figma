@@ -22,7 +22,7 @@ export function startJobServer(port = 3778) {
     if (req.method === "OPTIONS") { cors(res); res.writeHead(204); return res.end(); }
 
     if (url.pathname === "/job" && req.method === "GET") {
-      lastPoll = Date.now();
+      if (url.searchParams.get("client") === "plugin") lastPoll = Date.now();
       cors(res, "application/json");
       return res.end(JSON.stringify(pending || { kind: "noop" }));
     }
@@ -40,6 +40,15 @@ export function startJobServer(port = 3778) {
       if (!b) { cors(res); res.writeHead(404); return res.end("no such image"); }
       cors(res, "application/octet-stream");
       return res.end(b);
+    }
+
+    // Heartbeat from the plugin UI while the main thread builds: without it a long build and a
+    // closed window look identical from here.
+    if (url.pathname === "/alive" && req.method === "POST") {
+      lastPoll = Date.now();
+      req.resume();
+      cors(res, "application/json");
+      return res.end(JSON.stringify({ ok: true }));
     }
 
     if (url.pathname === "/report" && req.method === "POST") {
@@ -98,7 +107,7 @@ export function startJobServer(port = 3778) {
             console.log("  waiting: the plugin has not polled for " + Math.round(quiet / 1000) + "s" +
               (warned === 1 ? " — is the pix-to-fig runner still open in Figma?" : ""));
           } else if (warned || Date.now() - t0w > 60000) {
-            console.log("  waiting: plugin is polling, job " + id + " in progress");
+            console.log("  waiting: plugin alive, job " + id + " in progress (" + Math.round((Date.now() - t0w) / 1000) + "s)");
           }
         }, 20000);
         if (watch.unref) watch.unref();

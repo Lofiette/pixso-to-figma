@@ -25,6 +25,15 @@ async function post(path, body) {
 
 function send(msg) { parent.postMessage({ pluginMessage: msg }, "*"); }
 
+// While code.js is building, this frame keeps running, so it can tell the runner the plugin is
+// alive. Without it the runner cannot tell a long build from a closed window.
+let beat = null;
+function startBeat(id) {
+  stopBeat();
+  beat = setInterval(() => { post("/alive", { id }).catch(() => {}); }, 5000);
+}
+function stopBeat() { if (beat) { clearInterval(beat); beat = null; } }
+
 async function runJob(job) {
   log("job " + job.id + " (" + job.kind + ")");
   status("running job " + job.id + "…", "on");
@@ -42,6 +51,8 @@ async function runJob(job) {
     send({ t: "image", hash: imgs[i], bytes: Array.from(new Uint8Array(buf)) });
     status("images " + (i + 1) + "/" + imgs.length, "on");
   }
+  startBeat(job.id);
+  status("building — this can take a few minutes", "on");
   send({ t: "payload-end" });
 }
 
@@ -50,6 +61,7 @@ onmessage = async (e) => {
   if (!m) return;
   if (m.t === "log") { log(m.m); return; }
   if (m.t === "report") {
+    stopBeat();
     log("report for " + m.id);
     try { await post("/report", { id: m.id, report: m.report }); } catch (err) { log("post failed: " + err); }
     busy = false;
@@ -60,7 +72,7 @@ onmessage = async (e) => {
 async function poll() {
   if (!busy) {
     try {
-      const j = await fetch(HOST + "/job").then(r => r.json());
+      const j = await fetch(HOST + "/job?client=plugin").then(r => r.json());
       misses = 0;
       if (j && j.kind && j.kind !== "noop") {
         busy = true;
@@ -68,6 +80,7 @@ async function poll() {
         try { await runJob(j); }
         catch (jerr) {
           busy = false;
+          stopBeat();
           log("job " + j.id + " failed: " + jerr);
           status("job failed — " + jerr, "off");
           try { await post("/report", { id: j.id, report: { error: String(jerr && jerr.message || jerr) } }); } catch (e2) {}
