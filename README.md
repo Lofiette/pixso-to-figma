@@ -145,6 +145,7 @@ node bootstrap.mjs verify <imageHash> <rootId>
 | `migrate.mjs` | the whole run, end to end, no model in the loop |
 | `jobserver.mjs` | localhost job queue the Figma plugin polls |
 | `px-images.mjs` | image bytes out of Pixso, with a render fallback for remote-library images |
+| `px-textruns.mjs` | rebuilds per-range text fills with getRangeFills, because getStyledTextSegments returns nothing |
 | `px-lostpaths.mjs` | maps the build's reported indices back to child-index paths |
 | `bootstrap.mjs` | emits the reader for the PNG carrier (agent-driven path) |
 | `crop.mjs` / `diffmap.mjs` / `sbs.mjs` | dependency-free PNG crop, block difference map, side-by-side |

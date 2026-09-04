@@ -39,8 +39,11 @@ step("bounds / transforms / text ink");
 sh("px-bounds.mjs", [f("ir.json"), ROOT_ID, f("bounds.json")]);
 sh("px-abs.mjs", [f("ir.json"), ROOT_ID, f("abs.json")]);
 sh("px-textink.mjs", [f("ir.json"), ROOT_ID, f("textink.json")]);
+sh("px-textruns.mjs", [f("ir.json"), ROOT_ID, f("textruns.json")]);
 step("images");
 sh("px-images.mjs", [f("ir.json"), ROOT_ID, f("img")]);
+
+process.env.PX_TEXTRUNS = f("textruns.json");
 
 function pack(out, textsvg) {
   const args = [f("ir.json"), ROOT_ID, f("svg.json"), f("bounds.json"), f("abs.json"), out, f("textink.json")];

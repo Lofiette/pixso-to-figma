@@ -574,3 +574,63 @@ fill is exported as PNG, uploaded, and remapped onto the original hash by the pa
 Neither the extraction nor the upload existed as a tool before this run — the pilot's images were
 moved by hand, and the documented pipeline had no step for them at all, which is exactly why the
 first build of this section came back with empty circles where the avatars should be.
+
+## Fix round 7 — two silent losses, both found by looking at pixels
+
+The verifier was green on this section and both defects were still there. Neither is geometry, so
+nothing the verifier measures could have caught them; both were found by comparing renders at 1:1.
+
+### Per-side stroke weights
+
+A frame with only a bottom border came out with a border on all four sides. Pixso reports
+`strokeWeight` as **1** on that frame while `strokeLeftWeight` is 0 — and, unlike Figma, it does
+**not** report the property as `mixed`, so a single number arrives that says something the node does
+not mean. Carrying `strokeWeight` alone and letting Figma default the rest draws strokes the source
+never had.
+
+Measured on `Диво Мера`: 1019 nodes carry per-side weights, **330 disagree with `strokeWeight`, 218
+of them visible and actually stroked** — a live Pixso sweep and the exported IR agree on 218. The
+shape is a design-system idiom, not an accident: `Header` is `[0,0,1,0]`, `SideMenu` is `[0,1,0,0]`.
+
+The four weights are now serialized, carried only where they disagree, and applied **after**
+`strokeWeight` — assigning it resets them.
+
+### Text with two colours, and a Pixso API that is simply dead
+
+A hex field renders its `#` grey and the value near-black. It arrived entirely black.
+
+`fills` on that node is `mixed`, so the packer skipped it and Figma defaulted to black — the worst
+possible fallback for a colour. The recovery should have been the styled segments, except:
+
+```
+getStyledTextSegments(["fills"])     -> []
+getStyledTextSegments(["fontName"])  -> []
+getStyledTextSegments(["fills","fontSize"]) -> []
+```
+
+**It returns an empty array for every node and every field set.** That is also why an earlier
+measurement here reported "no mixed-style text in this section at all": the measurement was reading
+a dead API, and the correct figure is 90 nodes with mixed fills, 72 of them visible.
+
+`getRangeFills(i, i+1)` does work:
+
+```
+#=68,83,113   =68,83,113   F=14,17,23  1=14,17,23  F=14,17,23  ...
+```
+
+So `px-textruns.mjs` rebuilds the runs character by character in the sandbox, coalesces them there
+so only the runs cross the wire, and the builder applies them with `setRangeFills` after the node
+fills are set. All 90 recovered, every one of them two runs, zero failures on rebuild.
+
+### What the two fixes did to the picture
+
+On the `Interface style` block, strong 24 px blocks fell **60 -> 25**. What is left is a colour
+picker's gradient, where the two renderers interpolate slightly differently — 24 px on a large
+smooth field, and no data behind it.
+
+### The lesson worth keeping
+
+Both losses were silent: Pixso answered every question asked of it, and answered wrong. A single
+number where four were meant, and an empty array where two segments were meant. The acceptance test
+measures geometry, and geometry was perfect through both. **Only a pixel comparison at 1:1 finds
+this class**, which is why it belongs in the pipeline and not in someone's judgement.

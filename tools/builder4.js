@@ -108,6 +108,18 @@ for (var i = 0; i < F.length; i++) {
       tryset(node, "strokeLeftWeight", d.x, id);
       REPORT.sideStrokes = (REPORT.sideStrokes || 0) + 1;
     }
+
+    // Per-range text fills. Pixso reports fills as mixed for a two-tone string and returns no
+    // segments at all, so px-textruns.mjs rebuilds the runs with getRangeFills and they are
+    // applied here, after the node fills have been set.
+    if (d.b === "TEXT" && d["5"]) {
+      var runs = d["5"];
+      for (var rr = 0; rr < runs.length; rr++) {
+        try { node.setRangeFills(runs[rr][0], runs[rr][1], D[runs[rr][2]]); }
+        catch (er) { REPORT.failures.push(id + ".setRangeFills: " + String(er.message || er).slice(0, 60)); }
+      }
+      REPORT.textRuns = (REPORT.textRuns || 0) + 1;
+    }
   } else {
     if (d.P !== undefined) tryset(node, "effects", dv(d, "P"), id);
     for (var q2 = 0; q2 < SVG_PLAIN.length; q2++) if (d[SVG_PLAIN[q2][0]] !== undefined) tryset(node, SVG_PLAIN[q2][1], dv(d, SVG_PLAIN[q2][0]), id);

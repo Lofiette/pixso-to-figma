@@ -58,6 +58,11 @@ const IMG_OK = new Set(["type", "scaleMode", "imageHash", "imageTransform", "sca
 // are uploaded. The exception is an image whose bytes Pixso never held locally (remote library):
 // px-images.mjs renders a substitute, which uploads under a different hash, so those get remapped.
 const IMAGEMAP = process.env.PX_IMAGEMAP ? JSON.parse(readFileSync(process.env.PX_IMAGEMAP, "utf8")) : {};
+// Per-range text fills, recovered by px-textruns.mjs because getStyledTextSegments is dead in
+// Pixso. Without them a two-tone string arrives with fills reported as mixed, which the loop
+// below skips, and Figma falls back to black.
+const TEXTRUNS = process.env.PX_TEXTRUNS ? JSON.parse(readFileSync(process.env.PX_TEXTRUNS, "utf8")) : {};
+let textRuns = 0;
 let imageRemapped = 0;
 function sanitizePaints(v) {
   if (!Array.isArray(v)) return v;
@@ -188,6 +193,12 @@ function encode(n, path, parentIdx, parentAbs, parentNode) {
     if (differs) { for (const [k2, a2] of sides) o[a2] = r2(n[k2]); sideStrokes++; }
   }
   if (n.type === "TEXT") {
+    const runs = TEXTRUNS[key];
+    if (runs && runs.length) {
+      o["5"] = runs.map((rr) => [rr.s, rr.e, intern(sanitizePaints(rr.f))]);
+      if (o.N === undefined) o.N = intern(sanitizePaints(runs[0].f));
+      if (runs.length > 1) textRuns++;
+    }
     const ti = TEXTINK[key];
     if (ti && ti.arb && typeof n.characters === "string" && n.characters.indexOf(String.fromCharCode(10)) < 0) { o["8"] = r2(ti.arb.width); inkTagged++; }
   }
@@ -255,6 +266,7 @@ console.log("json:        " + JSON_OUT);
 console.log("root:        " + target.type + " " + JSON.stringify(target.name));
 console.log("nodes:       " + flat.length + "  (svg " + svgNodes + ", dict " + dict.length + ", svg assets " + svgList.length + ")");
 console.log("missing:     svg " + missingSvg + ", abs " + missingAbs);
+console.log("text runs:   " + textRuns + " nodes with per-range fills recovered");
 console.log("strokes:     " + sideStrokes + " nodes with per-side stroke weights");
 console.log("images:      " + Object.keys(IMAGEMAP).length + " hashes remapped in " + imageRemapped + " paints");
 console.log("recovered:   " + arbFallback + " render boxes from viewBox, " + alRotSwap + " auto-layout quarter turns baked into size, " + inkOffset + " svg wrappers with ink outside the layout box");
