@@ -12,9 +12,7 @@ function grab(n,keys,into){ for(const k of keys){ try{ const v=n[k]; if(v!==unde
 function noteStyle(o){ for(const k of ["fillStyleId","strokeStyleId","effectStyleId","gridStyleId","textStyleId"]){ const v=o[k]; if(v&&typeof v==="string") styleIds.add(v); } }
 function noteFont(f){ if(f&&f.family) fonts.set(f.family+"|"+f.style,{family:f.family,style:f.style}); }
 function notePaints(a){ if(Array.isArray(a)) for(const p of a) if(p&&p.type==="IMAGE"&&p.imageHash) imageHashes.add(p.imageHash); }
-let BUDGET=Infinity; const deferred=[];
 function ser(n,depth){
-  if(--BUDGET<0){ deferred.push(n.id); return {id:n.id,__defer:1}; }
   const o={id:n.id}; grab(n,COMMON,o);
   try{ const f=n.fills; if(f!==undefined){ o.fills=val(f); notePaints(f);} }catch(e){}
   try{ const s=n.strokes; if(s!==undefined){ o.strokes=val(s); notePaints(s);} }catch(e){}
@@ -34,7 +32,7 @@ function ser(n,depth){
   }
   if(n.type==="VECTOR"||n.type==="BOOLEAN_OPERATION"||n.type==="STAR"||n.type==="POLYGON"||n.type==="LINE"||n.type==="ELLIPSE"){
     try{ if(n.vectorPaths) o.vectorPaths=val(n.vectorPaths);}catch(e){}
-    // vectorNetwork intentionally not serialized: geometry travels as SVG (px-svg.mjs).
+    try{ const g=n.vectorNetwork; if(g&&g.vertices){ o.vectorNetwork={ vertices:g.vertices.map(function(v){return {x:v.x,y:v.y,cornerRadius:v.cornerRadius,handleMirroring:v.handleMirroring,strokeCap:v.strokeCap,strokeJoin:v.strokeJoin};}), segments:g.segments.map(function(sg){return {start:sg.start,end:sg.end,tangentStart:{x:sg.tangentStart.x,y:sg.tangentStart.y},tangentEnd:{x:sg.tangentEnd.x,y:sg.tangentEnd.y}};}), regions:(g.regions||[]).map(function(r){return {windingRule:r.windingRule,loops:r.loops};}) }; } }catch(e){}
     try{ if(n.arcData) o.arcData=val(n.arcData);}catch(e){}
     try{ if(n.pointCount) o.pointCount=n.pointCount;}catch(e){}
     try{ if(n.booleanOperation) o.booleanOperation=n.booleanOperation;}catch(e){}

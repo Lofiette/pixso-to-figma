@@ -197,7 +197,9 @@ const json = Buffer.from(JSON.stringify({ D: dict, S: svgList, F: flat, B: BUILD
 const body = Buffer.alloc(4 + json.length);
 body.writeUInt32BE(json.length, 0); json.copy(body, 4);
 
-const W = 2048, H = Math.ceil(body.length / W);
+const W = Math.max(2048, Math.ceil(Math.sqrt(body.length)));
+const H = Math.ceil(body.length / W);
+if (H > 4000 || W > 4000) console.error("WARN carrier " + W + "x" + H + " — Figma may resample above 4096 px");
 const raw = Buffer.alloc(H * (W + 1));
 for (let y = 0; y < H; y++) { raw[y * (W + 1)] = 0; body.copy(raw, y * (W + 1) + 1, y * W, Math.min(body.length, (y + 1) * W)); }
 function crc32(buf) {
