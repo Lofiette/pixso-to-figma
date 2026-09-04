@@ -24,6 +24,11 @@ const W = join(HERE, WORK);
 mkdirSync(W, { recursive: true });
 const f = (n) => join(W, n);
 const t0 = Date.now();
+// Up first, before the Pixso phase: the plugin polls for a job and should connect straight away
+// rather than sitting on "connecting" for the length of an export.
+const srv = startJobServer(3778);
+await srv.ready;
+console.log("job server on http://localhost:3778 — the pix-to-fig runner plugin can connect now");
 const step = (n) => console.log("\n=== " + n + "  (" + Math.round((Date.now() - t0) / 1000) + "s) ===");
 
 function sh(script, args) {
@@ -63,9 +68,6 @@ const manifest = JSON.parse(readFileSync(join(W, "img", "manifest.json"), "utf8"
 const images = new Map();
 for (const m of manifest) images.set(m.hash, readFileSync(join(HERE, m.file.replace(/^\.\.\//, "../"))));
 
-const srv = startJobServer(3778);
-await srv.ready;
-console.log("\njob server on http://127.0.0.1:3778 — start the pix-to-fig runner plugin in Figma");
 
 async function build(cleanupRootId) {
   return srv.post({ kind: "build", cleanupRootId }, readFileSync(payloadFile, "utf8"), images);
