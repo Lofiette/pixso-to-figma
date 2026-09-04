@@ -231,6 +231,15 @@ function encode(n, path, parentIdx, parentAbs, parentNode) {
 const rootAbs = ABS[""] || [1, 0, 0, 0, 1, 0];
 encode(target, [], -1, rootAbs, null);
 
+// The builder and verifier are shipped as source and only parsed inside Figma, where a syntax
+// error would surface as a failed build with no useful message. Parse them here instead.
+{
+  const AF = Object.getPrototypeOf(async function () {}).constructor;
+  for (const [nm, src] of [["builder", BUILDER_SRC], ["verifier", VERIFIER_SRC]]) {
+    try { new AF("figma", "PAY", "ROOT_NODE_ID", "let RESULT=null;" + String.fromCharCode(10) + src + String.fromCharCode(10) + "return RESULT;"); }
+    catch (e) { console.error(nm + " does not parse: " + e.message); process.exit(1); }
+  }
+}
 const json = Buffer.from(JSON.stringify({ D: dict, S: svgList, F: flat, B: BUILDER_SRC, V: VERIFIER_SRC }), "utf8");
 const body = Buffer.alloc(4 + json.length);
 body.writeUInt32BE(json.length, 0); json.copy(body, 4);

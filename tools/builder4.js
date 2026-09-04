@@ -166,8 +166,9 @@ for (var j = 0; j < F.length; j++) {
 // Degenerate hug/stretch chains resolve differently in the two engines. Where the size ends up
 // wrong, source geometry wins: pin the axis and resize. Two passes, parents settle first.
 REPORT.sizeRepaired = 0;
-function repairPass(countIt) {
+async function repairPass(countIt) {
 {
+  await settle();
   for (var s1 = 0; s1 < F.length; s1++) {
     var ds = F[s1].d, ns = built[s1];
     if (ds.j === undefined || ds.k === undefined) continue;
@@ -181,6 +182,8 @@ function repairPass(countIt) {
       if (ns.layoutAlign === "STRETCH") tryset(ns, "layoutAlign", "INHERIT", "#" + s1);
       if (ns.layoutGrow) tryset(ns, "layoutGrow", 0, "#" + s1);
     }
+    // re-read before acting: a stale size would pin an axis at the wrong value
+    if (Math.abs(ns.width - ds.j) <= 0.5 && Math.abs(ns.height - ds.k) <= 0.5) { REPORT.sizeRejected = (REPORT.sizeRejected || 0) + 1; continue; }
     try { ns.resize(Math.max(0.01, ds.j), Math.max(0.01, ds.k)); if (countIt) REPORT.sizeRepaired++; } catch (e5) {}
   }
 }
@@ -218,7 +221,7 @@ for (var tx = 0; tx < F.length; tx++) {
   if (cl) { try { cl.remove(); } catch (e9) {} }
 }
 
-repairPass(false); placePass(); repairPass(true); placePass();
+await repairPass(false); placePass(); await repairPass(true); placePass();
 
 // The two engines do not lay out identically. Two differences are real and measured:
 //  - Pixso keeps HIDDEN children in the auto-layout flow; Figma drops them, so the visible
@@ -228,6 +231,13 @@ repairPass(false); placePass(); repairPass(true); placePass();
 // Source position wins. Try to reproduce it while keeping the child in the flow, by choosing the
 // counter-axis alignment that lands closest; only take the child out of the flow if nothing does.
 REPORT.flowAligned = 0; REPORT.flowAbsolute = 0; REPORT.flowStillOff = 0;
+REPORT.flowRejected = 0; REPORT.flowReverted = 0;
+// Reading a size or a bounding box can return a layout that has not settled. Through the MCP
+// channel something forced a recompute between passes and through the plugin it did not, so the
+// same payload produced 23 flow fixes in one and 520 in the other, and the 497 spurious ones
+// pinned their parents to the wrong width. Yield to the engine, then never act on a single
+// reading: re-read immediately before changing anything, and put it back if it did not help.
+function settle() { return new Promise(function (r) { if (typeof setTimeout === "function") setTimeout(r, 0); else r(); }); }
 var MUL = function (m, n) { return [
   m[0]*n[0]+m[1]*n[3], m[0]*n[1]+m[1]*n[4], m[0]*n[2]+m[1]*n[5]+m[2],
   m[3]*n[0]+m[4]*n[3], m[3]*n[1]+m[4]*n[4], m[3]*n[2]+m[4]*n[5]+m[5]]; };
@@ -251,10 +261,24 @@ function flowDeltas() {
     var ax = bb ? bb.x - ox : mnx, ay = bb ? bb.y - oy : mny;
     dp[v] = { dx: ax - mnx, dy: ay - mny, d: Math.sqrt((ax-mnx)*(ax-mnx) + (ay-mny)*(ay-mny)), vis: vis[v] };
   }
-  return dp;
+  return { dp: dp, exp: exp };
 }
-function flowFixPass(last) {
-  var dp = flowDeltas();
+// Same rule as flowDeltas, for a single node, so a candidate can be re-checked on the spot.
+function deltaOf(idx, expAbs) {
+  var d0 = F[idx].d, e = expAbs, ew = d0.j || 0, eh = d0.k || 0, mnx = 1e9, mny = 1e9;
+  for (var c = 0; c < 4; c++) {
+    var cx = (c === 1 || c === 2) ? ew : 0, cy = (c >= 2) ? eh : 0;
+    var px = e[0]*cx + e[1]*cy + e[2], py = e[3]*cx + e[4]*cy + e[5];
+    if (px < mnx) mnx = px; if (py < mny) mny = py;
+  }
+  var rn0 = built[0], rt1 = rn0.absoluteTransform, ox = rt1[0][2], oy = rt1[1][2];
+  var bb = built[idx].absoluteBoundingBox;
+  var ax = bb ? bb.x - ox : mnx, ay = bb ? bb.y - oy : mny;
+  return { dx: ax - mnx, dy: ay - mny, d: Math.sqrt((ax-mnx)*(ax-mnx) + (ay-mny)*(ay-mny)) };
+}
+async function flowFixPass(last) {
+  await settle();
+  var fd = flowDeltas(), dp = fd.dp, EXP = fd.exp;
   for (var g = 1; g < F.length; g++) {
     var dg = F[g].d, ng = built[g], pi = F[g].p;
     if (!dp[g].vis || dp[g].d <= 0.5) continue;
@@ -263,6 +287,10 @@ function flowFixPass(last) {
     if (!pdg.y || pdg.y === "NONE") continue;
     if (dg.M === "ABSOLUTE") continue;
     var m = dg["7"]; if (!m) continue;
+    // Never act on the batch reading alone: re-measure this node now.
+    var now = deltaOf(g, EXP[g]);
+    if (now.d <= 0.5) { REPORT.flowRejected++; continue; }
+    dp[g] = { dx: now.dx, dy: now.dy, d: now.d, vis: dp[g].vis };
     var horiz = pdg.y === "HORIZONTAL";
     var primOff = horiz ? dp[g].dx : dp[g].dy, cntOff = horiz ? dp[g].dy : dp[g].dx;
     if (Math.abs(primOff) <= 0.5) {
@@ -289,11 +317,16 @@ function flowFixPass(last) {
       if (Math.abs(png.width - pw) > 0.01 || Math.abs(png.height - ph) > 0.01) {
         try { png.resize(Math.max(0.01, pw), Math.max(0.01, ph)); } catch (e) {}
       }
-      REPORT.flowAbsolute++;
+      var after = deltaOf(g, EXP[g]);
+      if (after.d > now.d - 0.01) {
+        // taking it out of the flow did not improve anything: put it back
+        try { ng.layoutPositioning = "AUTO"; } catch (e7) {}
+        REPORT.flowReverted++;
+      } else REPORT.flowAbsolute++;
     } catch (e6) { if (last) REPORT.flowStillOff++; }
   }
 }
-flowFixPass(false); flowFixPass(true);
+await flowFixPass(false); await flowFixPass(true);
 
 const root = built[0];
 var maxX = 0;

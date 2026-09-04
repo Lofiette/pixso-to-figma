@@ -8,6 +8,7 @@ export function startJobServer(port = 3778) {
   let blobs = new Map();           // hash -> Buffer
   const waiting = new Map();       // id -> { resolve, reject }
   let seq = 0;
+  let lastPoll = 0;            // when the plugin last asked for work
 
   const cors = (res, type) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -21,6 +22,7 @@ export function startJobServer(port = 3778) {
     if (req.method === "OPTIONS") { cors(res); res.writeHead(204); return res.end(); }
 
     if (url.pathname === "/job" && req.method === "GET") {
+      lastPoll = Date.now();
       cors(res, "application/json");
       return res.end(JSON.stringify(pending || { kind: "noop" }));
     }
@@ -73,6 +75,7 @@ export function startJobServer(port = 3778) {
 
   return {
     ready,
+    lastPoll: () => lastPoll,
     // Queue one job and resolve when the plugin reports back. One job at a time by construction:
     // the plugin only ever sees the job that is pending right now.
     post(job, payloadText, images = new Map(), timeoutMs = 20 * 60 * 1000) {
@@ -83,9 +86,26 @@ export function startJobServer(port = 3778) {
       blobs = images;
       return new Promise((resolve, reject) => {
         waiting.set(id, { resolve, reject });
+        // Say something long before the timeout: a silent twenty-minute wait tells nobody whether
+        // the plugin is working, closed, or wedged.
+        let warned = 0;
+        const t0w = Date.now();
+        const watch = setInterval(() => {
+          if (!waiting.has(id)) { clearInterval(watch); return; }
+          const quiet = Date.now() - lastPoll;
+          if (quiet > 15000) {
+            warned++;
+            console.log("  waiting: the plugin has not polled for " + Math.round(quiet / 1000) + "s" +
+              (warned === 1 ? " — is the pix-to-fig runner still open in Figma?" : ""));
+          } else if (warned || Date.now() - t0w > 60000) {
+            console.log("  waiting: plugin is polling, job " + id + " in progress");
+          }
+        }, 20000);
+        if (watch.unref) watch.unref();
         setTimeout(() => {
           if (waiting.has(id)) {
             waiting.delete(id);
+            clearInterval(watch);
             reject(new Error("no report for job " + id + " within " + Math.round(timeoutMs / 1000) + "s — is the plugin running?"));
           }
         }, timeoutMs).unref?.();

@@ -62,8 +62,17 @@ async function poll() {
     try {
       const j = await fetch(HOST + "/job").then(r => r.json());
       misses = 0;
-      if (j && j.kind && j.kind !== "noop") { busy = true; await runJob(j); }
-      else status("idle — waiting for the next job", "on");
+      if (j && j.kind && j.kind !== "noop") {
+        busy = true;
+        // Anything thrown in here used to leave busy latched and the plugin silent for good.
+        try { await runJob(j); }
+        catch (jerr) {
+          busy = false;
+          log("job " + j.id + " failed: " + jerr);
+          status("job failed — " + jerr, "off");
+          try { await post("/report", { id: j.id, report: { error: String(jerr && jerr.message || jerr) } }); } catch (e2) {}
+        }
+      } else status("idle — waiting for the next job", "on");
     } catch (err) {
       misses++;
       if (misses > 2) status("runner not reachable on " + HOST, "off");

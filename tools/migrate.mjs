@@ -11,7 +11,7 @@
 //   - text whose instance override Pixso will not disclose is detected by the build, rendered as
 //     vector, repacked, and rebuilt once.
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from "node:fs";
 import { dirname, join, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startJobServer } from "./jobserver.mjs";
@@ -31,22 +31,30 @@ await srv.ready;
 console.log("job server on http://localhost:3778 — the pix-to-fig runner plugin can connect now");
 const step = (n) => console.log("\n=== " + n + "  (" + Math.round((Date.now() - t0) / 1000) + "s) ===");
 
+// A rerun should not repeat twenty minutes of Pixso work that already succeeded. A step whose
+// output is already on disk is skipped unless PX_FORCE is set.
+function done(path) { try { return statSync(path).size > 2; } catch { return false; } }
+function stepFile(name, script, args, out) {
+  if (!process.env.PX_FORCE && done(out)) { console.log("  " + name + ": already in " + out + ", skipping"); return; }
+  sh(script, args);
+}
+
 function sh(script, args) {
   execFileSync("node", [join(HERE, script), ...args], { stdio: "inherit", cwd: HERE });
 }
 
 // ---------- Pixso side ----------
 step("export");
-sh("px-export.mjs", [ROOT_ID, f("ir.json")]);
+stepFile("export", "px-export.mjs", [ROOT_ID, f("ir.json")], f("ir.json"));
 step("svg");
-sh("px-svg.mjs", [f("ir.json"), ROOT_ID, f("svg.json")]);
+stepFile("svg", "px-svg.mjs", [f("ir.json"), ROOT_ID, f("svg.json")], f("svg.json"));
 step("bounds / transforms / text ink");
-sh("px-bounds.mjs", [f("ir.json"), ROOT_ID, f("bounds.json")]);
-sh("px-abs.mjs", [f("ir.json"), ROOT_ID, f("abs.json")]);
-sh("px-textink.mjs", [f("ir.json"), ROOT_ID, f("textink.json")]);
-sh("px-textruns.mjs", [f("ir.json"), ROOT_ID, f("textruns.json")]);
+stepFile("bounds", "px-bounds.mjs", [f("ir.json"), ROOT_ID, f("bounds.json")], f("bounds.json"));
+stepFile("abs", "px-abs.mjs", [f("ir.json"), ROOT_ID, f("abs.json")], f("abs.json"));
+stepFile("textink", "px-textink.mjs", [f("ir.json"), ROOT_ID, f("textink.json")], f("textink.json"));
+stepFile("textruns", "px-textruns.mjs", [f("ir.json"), ROOT_ID, f("textruns.json")], f("textruns.json"));
 step("images");
-sh("px-images.mjs", [f("ir.json"), ROOT_ID, f("img")]);
+stepFile("images", "px-images.mjs", [f("ir.json"), ROOT_ID, f("img")], f("img/manifest.json"));
 
 process.env.PX_TEXTRUNS = f("textruns.json");
 
@@ -66,13 +74,14 @@ if (!existsSync(payloadFile)) { console.error("pack4 did not write " + payloadFi
 // ---------- Figma side ----------
 const manifest = JSON.parse(readFileSync(join(W, "img", "manifest.json"), "utf8"));
 const images = new Map();
-for (const m of manifest) images.set(m.hash, readFileSync(join(HERE, m.file.replace(/^\.\.\//, "../"))));
+for (const m of manifest) images.set(m.hash, readFileSync(isAbsolute(m.file) ? m.file : join(HERE, m.file)));
 
 
 async function build(cleanupRootId) {
   return srv.post({ kind: "build", cleanupRootId }, readFileSync(payloadFile, "utf8"), images);
 }
 
+let activePayload = payloadFile;
 step("build");
 let report = await build(null);
 if (report.error) { console.error("build failed: " + report.error + "\n" + (report.stack || "")); srv.close(); process.exit(1); }
@@ -87,6 +96,7 @@ if (Array.isArray(report.textOverrideLost) && report.textOverrideLost.length) {
   pack(f("payload2.png"), f("textsvg.json"));
   const p2 = f("payload2.json");
   const prev = report.rootId;
+  activePayload = p2;
   report = await srv.post({ kind: "build", cleanupRootId: prev }, readFileSync(p2, "utf8"), images);
   if (report.error) { console.error("rebuild failed: " + report.error); srv.close(); process.exit(1); }
   console.log(summarise(report));
@@ -94,8 +104,8 @@ if (Array.isArray(report.textOverrideLost) && report.textOverrideLost.length) {
 
 // ---------- acceptance ----------
 step("verify");
-const usedPayload = existsSync(f("payload2.json")) && report.rootId ? f("payload2.json") : payloadFile;
-const check = await srv.post({ kind: "verify", rootNodeId: report.rootId }, readFileSync(usedPayload, "utf8"));
+// verify against the payload that actually produced the build, not whatever is on disk
+const check = await srv.post({ kind: "verify", rootNodeId: report.rootId }, readFileSync(activePayload, "utf8"));
 srv.close();
 
 writeFileSync(f("report.json"), JSON.stringify({ build: report, check }, null, 2), "utf8");
