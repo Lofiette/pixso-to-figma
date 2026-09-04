@@ -14,7 +14,7 @@ const paths = [];
 console.log("text nodes: " + paths.length);
 const chunk = (a, n) => { const o = []; for (let i = 0; i < a.length; i += n) o.push(a.slice(i, i + n)); return o; };
 const out = {};
-for (const batch of chunk(paths, 60)) {
+for (const batch of chunk(paths, Number(process.env.PX_TEXTINK_BATCH || 60))) {
   writeFileSync("_ink.js", [
     "await pixso.loadAllPagesAsync();",
     "const root = pixso.getNodeById(" + JSON.stringify(ROOT_ID) + ");",

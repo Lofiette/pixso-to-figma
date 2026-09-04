@@ -126,15 +126,25 @@ function repairPass(countIt) {
 // the live node is untouched, and flag every node where Pixso drew materially wider than we can:
 // those are instance text overrides Pixso never disclosed. Ink bounds exclude side bearings, so a
 // faithful string always measures a little WIDER here, never narrower.
+// Measuring is a clone + reflow per node, and a large section has thousands of text nodes.
+// Width depends only on the string and the style that draws it, so measure once per
+// distinct (string, font, size, letter spacing, case) and reuse.
+var natCache = {};
 for (var tx = 0; tx < F.length; tx++) {
   var dt = F[tx].d;
   if (dt.b !== "TEXT" || dt["8"] === undefined || !dt.S) continue;
   var nt = built[tx], cl = null;
+  var ck = JSON.stringify([dt.S, dt.T, dt.U, dt["0"], dt.Y]);
+  var natural = natCache[ck];
   try {
-    cl = nt.clone();
-    figma.currentPage.appendChild(cl);
-    cl.textAutoResize = "WIDTH_AND_HEIGHT";
-    var natural = cl.width;
+    if (natural === undefined) {
+      cl = nt.clone();
+      figma.currentPage.appendChild(cl);
+      cl.textAutoResize = "WIDTH_AND_HEIGHT";
+      natural = cl.width;
+      natCache[ck] = natural;
+      REPORT.textMeasured = (REPORT.textMeasured || 0) + 1;
+    }
     if (dt["8"] - natural > 2) REPORT.textOverrideLost.push({ i: tx, name: dt.a, chars: String(dt.S).slice(0, 28), inked: dt["8"], drew: Math.round(natural * 10) / 10 });
   } catch (e8) { REPORT.failures.push("#" + tx + ".measure: " + String(e8.message || e8).slice(0, 60)); }
   if (cl) { try { cl.remove(); } catch (e9) {} }

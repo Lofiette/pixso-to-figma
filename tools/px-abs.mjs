@@ -22,7 +22,7 @@ function run(src) {
 const chunk = (a, n) => { const o = []; for (let i = 0; i < a.length; i += n) o.push(a.slice(i, i + n)); return o; };
 const out = {};
 let done = 0, fails = 0;
-const queue = chunk(paths, 150);
+const queue = chunk(paths, Number(process.env.PX_ABS_BATCH || 150));
 while (queue.length) {
   const batch = queue.shift();
   const r = run([
