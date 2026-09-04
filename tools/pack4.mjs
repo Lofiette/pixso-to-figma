@@ -75,7 +75,7 @@ const intern = (v0) => { const v = round(v0); const k = JSON.stringify(v);
   const i = dict.length; dict.push(v); dictIdx.set(k, i); return i; };
 
 const fonts = new Map(), flat = [];
-let svgNodes = 0, missingSvg = 0, missingAbs = 0, arbFallback = 0, alRotSwap = 0, textAsSvg = 0, inkTagged = 0;
+let svgNodes = 0, missingSvg = 0, missingAbs = 0, arbFallback = 0, alRotSwap = 0, textAsSvg = 0, inkTagged = 0, inkOffset = 0;
 
 // Pixso returns absoluteRenderBounds = null for many nodes, and absoluteBoundingBox excludes the
 // stroke, while the exported SVG is always sized to the render bounds. Recover the render box from
@@ -109,9 +109,19 @@ function encode(n, path, parentIdx, parentAbs, parentNode) {
     }
     if (ref !== undefined && box) {
       svgNodes++;
+      // The wrapper frame must occupy the LAYOUT box the source node occupied, not its inked box.
+      // A 1 px hairline is a zero-height LINE with a 1 px stroke: sizing the wrapper to the ink
+      // adds a pixel per item inside an auto-layout, and the error accumulates down the stack.
+      // So: wrapper = geometry box, and the ink is offset inside it by the difference.
+      const lay = (b && b.abb) ? b.abb : box;
       o["6"] = svgIdx.get(ref);
-      o["7"] = mul(inv(parentAbs), [1, 0, box.x, 0, 1, box.y]).map(r4);
-      o.j = r2(box.width); o.k = r2(box.height);
+      o["7"] = mul(inv(parentAbs), [1, 0, lay.x, 0, 1, lay.y]).map(r4);
+      o.j = r2(lay.width); o.k = r2(lay.height);
+      const ix = box.x - lay.x, iy = box.y - lay.y;
+      if (Math.abs(ix) > 0.001 || Math.abs(iy) > 0.001 || Math.abs(box.width - lay.width) > 0.001 || Math.abs(box.height - lay.height) > 0.001) {
+        o["9"] = [r4(ix), r4(iy)];
+        inkOffset++;
+      }
       o.a = n.name; o.b = "SVG";
       if (n.visible === false) o.c = false;
       if (n.opacity !== undefined && n.opacity !== 1) o.e = n.opacity;
@@ -223,7 +233,7 @@ writeFileSync(OUT, png);
 console.log("root:        " + target.type + " " + JSON.stringify(target.name));
 console.log("nodes:       " + flat.length + "  (svg " + svgNodes + ", dict " + dict.length + ", svg assets " + svgList.length + ")");
 console.log("missing:     svg " + missingSvg + ", abs " + missingAbs);
-console.log("recovered:   " + arbFallback + " render boxes from viewBox, " + alRotSwap + " auto-layout quarter turns baked into size");
+console.log("recovered:   " + arbFallback + " render boxes from viewBox, " + alRotSwap + " auto-layout quarter turns baked into size, " + inkOffset + " svg wrappers with ink outside the layout box");
 console.log("text:        " + textAsSvg + " rendered as svg (undisclosed override), " + inkTagged + " tagged with inked width");
 console.log("fonts:       " + [...fonts.values()].join(", "));
 console.log("json:        " + json.length.toLocaleString() + " bytes");

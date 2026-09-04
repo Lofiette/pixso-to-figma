@@ -1,7 +1,11 @@
 // Builder body. Shipped INSIDE the PNG carrier as PAY.B and eval'd by the bootstrap.
 // Globals available when it runs: figma, PAY (={D,S,F,B}).
 export const BUILDER_SRC = `
-const REPORT = { nodes: 0, svg: 0, failures: [], fontSubs: [], rtFail: 0, textPinned: 0, textOverrideLost: [] };
+const REPORT = { nodes: 0, svg: 0, failures: [], fontSubs: [], rtFail: 0, textPinned: 0, textOverrideLost: [], textUnderSubstitutedFont: [] };
+// family|style -> true once a font failed to load and the fallback was used. A substituted
+// font draws to a different width, which the override detector must not read as a lost override.
+const SUBBED = {};
+const FONTSTATE = {};
 const FB = { family: "Inter", style: "Regular" };
 const D = PAY.D, S = PAY.S, F = PAY.F;
 function tryset(n, k, v, id) { try { n[k] = v; } catch (e) { REPORT.failures.push(id + "." + k + ": " + String(e.message || e).slice(0, 80)); } }
@@ -22,7 +26,22 @@ function dv(d, k) { return d[k] === undefined ? undefined : (DICTKEY[k] ? D[d[k]
 
 function makeNode(d) {
   var t = d.b;
-  if (t === "SVG") { REPORT.svg++; var n = figma.createNodeFromSvg(S[d["6"]]); try { n.fills = []; } catch (e) {} return n; }
+  if (t === "SVG") {
+    REPORT.svg++;
+    var n = figma.createNodeFromSvg(S[d["6"]]);
+    try { n.fills = []; } catch (e) {}
+    // createNodeFromSvg sizes the frame to the viewBox, which is the INKED box. d.j/d.k are the
+    // layout box the source node occupied. Where they differ, d["9"] is where the ink sits inside
+    // the layout box. Pin the imported children to MIN/MIN first or resizing scales them.
+    var off = d["9"];
+    if (off && d.j !== undefined && d.k !== undefined) {
+      var ch = n.children;
+      for (var oi = 0; oi < ch.length; oi++) { try { ch[oi].constraints = { horizontal: "MIN", vertical: "MIN" }; } catch (e) {} }
+      try { n.resize(Math.max(0.01, d.j), Math.max(0.01, d.k)); REPORT.svgInkOffset = (REPORT.svgInkOffset || 0) + 1; } catch (e) {}
+      for (var oj = 0; oj < ch.length; oj++) { try { ch[oj].x = ch[oj].x + off[0]; ch[oj].y = ch[oj].y + off[1]; } catch (e) {} }
+    }
+    return n;
+  }
   if (t === "TEXT") return figma.createText();
   if (t === "RECTANGLE") return figma.createRectangle();
   if (t === "ELLIPSE") return figma.createEllipse();
@@ -47,8 +66,12 @@ for (var i = 0; i < F.length; i++) {
   if (d.b === "TEXT") {
     var fn = dv(d, "U");
     var use = fn && fn.family ? { family: fn.family, style: fn.style } : FB;
-    try { await figma.loadFontAsync(use); }
-    catch (e2) { REPORT.fontSubs.push(use.family + " " + use.style); use = FB; await figma.loadFontAsync(FB); }
+    var fkey = use.family + "|" + use.style;
+    if (FONTSTATE[fkey] === undefined) {
+      try { await figma.loadFontAsync(use); FONTSTATE[fkey] = 1; }
+      catch (e2) { FONTSTATE[fkey] = 0; SUBBED[fkey] = true; REPORT.fontSubs.push(fkey); await figma.loadFontAsync(FB); }
+    }
+    if (!FONTSTATE[fkey]) use = FB;
     node.fontName = use;
     if (d.S !== undefined) tryset(node, "characters", d.S, id);
     for (var t1 = 0; t1 < TXT.length; t1++) if (d[TXT[t1][0]] !== undefined) tryset(node, TXT[t1][1], dv(d, TXT[t1][0]), id);
@@ -145,12 +168,92 @@ for (var tx = 0; tx < F.length; tx++) {
       natCache[ck] = natural;
       REPORT.textMeasured = (REPORT.textMeasured || 0) + 1;
     }
-    if (dt["8"] - natural > 2) REPORT.textOverrideLost.push({ i: tx, name: dt.a, chars: String(dt.S).slice(0, 28), inked: dt["8"], drew: Math.round(natural * 10) / 10 });
+    if (dt["8"] - natural > 2) {
+      var dfn = dv(dt, "U");
+      var rec = { i: tx, name: dt.a, chars: String(dt.S).slice(0, 28), inked: dt["8"], drew: Math.round(natural * 10) / 10 };
+      if (dfn && dfn.family && SUBBED[dfn.family + "|" + dfn.style]) { rec.font = dfn.family + " " + dfn.style; REPORT.textUnderSubstitutedFont.push(rec); }
+      else REPORT.textOverrideLost.push(rec);
+    }
   } catch (e8) { REPORT.failures.push("#" + tx + ".measure: " + String(e8.message || e8).slice(0, 60)); }
   if (cl) { try { cl.remove(); } catch (e9) {} }
 }
 
 repairPass(false); placePass(); repairPass(true); placePass();
+
+// The two engines do not lay out identically. Two differences are real and measured:
+//  - Pixso keeps HIDDEN children in the auto-layout flow; Figma drops them, so the visible
+//    siblings of a hidden node land somewhere else (worst seen: 70.5 px in a SPACE_BETWEEN row).
+//  - layoutAlign STRETCH against an axis that cannot stretch: Pixso centres the child, Figma
+//    pins it to counterAxisAlignItems.
+// Source position wins. Try to reproduce it while keeping the child in the flow, by choosing the
+// counter-axis alignment that lands closest; only take the child out of the flow if nothing does.
+REPORT.flowAligned = 0; REPORT.flowAbsolute = 0; REPORT.flowStillOff = 0;
+var MUL = function (m, n) { return [
+  m[0]*n[0]+m[1]*n[3], m[0]*n[1]+m[1]*n[4], m[0]*n[2]+m[1]*n[5]+m[2],
+  m[3]*n[0]+m[4]*n[3], m[3]*n[1]+m[4]*n[4], m[3]*n[2]+m[4]*n[5]+m[5]]; };
+// Measure exactly what the acceptance test measures: the composed absolute min-corner against
+// absoluteBoundingBox, with effective visibility propagated from ancestors. Anything looser fires
+// on nodes the verifier considers fine -- including hidden subtrees, whose stored Pixso
+// coordinates are stale by design.
+function flowDeltas() {
+  var exp = [[1,0,0,0,1,0]], vis = [true], dp = [];
+  var rn = built[0], rt0 = rn.absoluteTransform, ox = rt0[0][2], oy = rt0[1][2];
+  for (var v = 0; v < F.length; v++) {
+    var dv2 = F[v].d, pv = F[v].p;
+    if (v > 0) { exp[v] = MUL(exp[pv], dv2["7"] || [1,0,0,0,1,0]); vis[v] = vis[pv] && dv2.c !== false; }
+    var e = exp[v], ew = dv2.j || 0, eh = dv2.k || 0, mnx = 1e9, mny = 1e9;
+    for (var cq = 0; cq < 4; cq++) {
+      var cx = (cq === 1 || cq === 2) ? ew : 0, cy = (cq >= 2) ? eh : 0;
+      var px = e[0]*cx + e[1]*cy + e[2], py = e[3]*cx + e[4]*cy + e[5];
+      if (px < mnx) mnx = px; if (py < mny) mny = py;
+    }
+    var bb = built[v].absoluteBoundingBox;
+    var ax = bb ? bb.x - ox : mnx, ay = bb ? bb.y - oy : mny;
+    dp[v] = { dx: ax - mnx, dy: ay - mny, d: Math.sqrt((ax-mnx)*(ax-mnx) + (ay-mny)*(ay-mny)), vis: vis[v] };
+  }
+  return dp;
+}
+function flowFixPass(last) {
+  var dp = flowDeltas();
+  for (var g = 1; g < F.length; g++) {
+    var dg = F[g].d, ng = built[g], pi = F[g].p;
+    if (!dp[g].vis || dp[g].d <= 0.5) continue;
+    if (dp[pi] && dp[pi].d > 0.5) continue;
+    var pdg = F[pi].d, png = built[pi];
+    if (!pdg.y || pdg.y === "NONE") continue;
+    if (dg.M === "ABSOLUTE") continue;
+    var m = dg["7"]; if (!m) continue;
+    var horiz = pdg.y === "HORIZONTAL";
+    var primOff = horiz ? dp[g].dx : dp[g].dy, cntOff = horiz ? dp[g].dy : dp[g].dx;
+    if (Math.abs(primOff) <= 0.5) {
+      var before = ng.layoutAlign, opts = ["MIN", "CENTER", "MAX"], best = null, bestErr = Math.abs(cntOff);
+      var baseX = ng.x - dp[g].dx, baseY = ng.y - dp[g].dy;
+      for (var oi = 0; oi < opts.length; oi++) {
+        try { ng.layoutAlign = opts[oi]; } catch (e) { continue; }
+        var err = Math.abs(horiz ? (ng.y - baseY) : (ng.x - baseX));
+        if (err < bestErr - 0.01) { bestErr = err; best = opts[oi]; }
+      }
+      if (best !== null && bestErr <= 0.5) { try { ng.layoutAlign = best; REPORT.flowAligned++; continue; } catch (e) {} }
+      try { ng.layoutAlign = before; } catch (e) {}
+    }
+    // Last resort: out of the flow, on the stored matrix. Freeze the parent at its current size
+    // first so losing a flow child cannot resize it, and put the size back if it moves anyway.
+    var pw = png.width, ph = png.height;
+    try {
+      if (png.layoutMode && png.layoutMode !== "NONE") {
+        tryset(png, "primaryAxisSizingMode", "FIXED", "#" + pi);
+        tryset(png, "counterAxisSizingMode", "FIXED", "#" + pi);
+      }
+      ng.layoutPositioning = "ABSOLUTE";
+      ng.relativeTransform = [[m[0], m[1], m[2]], [m[3], m[4], m[5]]];
+      if (Math.abs(png.width - pw) > 0.01 || Math.abs(png.height - ph) > 0.01) {
+        try { png.resize(Math.max(0.01, pw), Math.max(0.01, ph)); } catch (e) {}
+      }
+      REPORT.flowAbsolute++;
+    } catch (e6) { if (last) REPORT.flowStillOff++; }
+  }
+}
+flowFixPass(false); flowFixPass(true);
 
 const root = built[0];
 var maxX = 0;
