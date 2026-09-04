@@ -54,11 +54,17 @@ function round(v) {
 }
 const FILTER_OK = ["exposure", "contrast", "saturation", "temperature", "tint", "highlights", "shadows"];
 const IMG_OK = new Set(["type", "scaleMode", "imageHash", "imageTransform", "scalingFactor", "rotation", "filters", "visible", "opacity", "blendMode"]);
+// Image hashes are content-addressed and normally resolve in Figma verbatim once the same bytes
+// are uploaded. The exception is an image whose bytes Pixso never held locally (remote library):
+// px-images.mjs renders a substitute, which uploads under a different hash, so those get remapped.
+const IMAGEMAP = process.env.PX_IMAGEMAP ? JSON.parse(readFileSync(process.env.PX_IMAGEMAP, "utf8")) : {};
+let imageRemapped = 0;
 function sanitizePaints(v) {
   if (!Array.isArray(v)) return v;
   return v.map((p) => {
     if (!p || p.type !== "IMAGE") return p;
     const o = {}; for (const k of Object.keys(p)) if (IMG_OK.has(k)) o[k] = p[k];
+    if (o.imageHash && IMAGEMAP[o.imageHash]) { o.imageHash = IMAGEMAP[o.imageHash]; imageRemapped++; }
     if (o.filters) { const f = {}; for (const k of FILTER_OK) if (o.filters[k] !== undefined) f[k] = o.filters[k]; o.filters = f; }
     return o;
   });
@@ -75,6 +81,7 @@ const intern = (v0) => { const v = round(v0); const k = JSON.stringify(v);
   const i = dict.length; dict.push(v); dictIdx.set(k, i); return i; };
 
 const fonts = new Map(), flat = [];
+let sideStrokes = 0;
 let svgNodes = 0, missingSvg = 0, missingAbs = 0, arbFallback = 0, alRotSwap = 0, textAsSvg = 0, inkTagged = 0, inkOffset = 0;
 
 // Pixso returns absoluteRenderBounds = null for many nodes, and absoluteBoundingBox excludes the
@@ -170,6 +177,16 @@ function encode(n, path, parentIdx, parentAbs, parentNode) {
     const vv = (k === "fills" || k === "strokes") ? sanitizePaints(v) : v;
     o[a] = INTERN.has(k) && typeof vv === "object" ? intern(vv) : round(vv);
   }
+  // Pixso reports strokeWeight as a single number even when the four sides differ, so a frame
+  // with only a bottom border reads as a full 1 px box and Figma draws one. Carry the sides, but
+  // only where they actually disagree with strokeWeight.
+  if (typeof n.strokeTopWeight === "number") {
+    const sw = typeof n.strokeWeight === "number" ? n.strokeWeight : 1;
+    const sides = [["strokeTopWeight", "h"], ["strokeRightWeight", "i"], ["strokeBottomWeight", "l"], ["strokeLeftWeight", "x"]];
+    let differs = false;
+    for (const [k2] of sides) if (n[k2] !== sw) differs = true;
+    if (differs) { for (const [k2, a2] of sides) o[a2] = r2(n[k2]); sideStrokes++; }
+  }
   if (n.type === "TEXT") {
     const ti = TEXTINK[key];
     if (ti && ti.arb && typeof n.characters === "string" && n.characters.indexOf(String.fromCharCode(10)) < 0) { o["8"] = r2(ti.arb.width); inkTagged++; }
@@ -229,10 +246,17 @@ ihdr.writeUInt32BE(W, 0); ihdr.writeUInt32BE(H, 4); ihdr[8] = 8; ihdr[9] = 0;
 const png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), mk("IHDR", ihdr),
   mk("IDAT", deflateSync(raw, { level: 0 })), mk("IEND", Buffer.alloc(0))]);
 writeFileSync(OUT, png);
+// The PNG carrier exists for the agent channel, where the payload has to travel as an image.
+// The plugin runner takes the JSON directly, so write that too.
+const JSON_OUT = (OUT.toLowerCase().endsWith(".png") ? OUT.slice(0, -4) : OUT) + ".json";
+writeFileSync(JSON_OUT, json);
+console.log("json:        " + JSON_OUT);
 
 console.log("root:        " + target.type + " " + JSON.stringify(target.name));
 console.log("nodes:       " + flat.length + "  (svg " + svgNodes + ", dict " + dict.length + ", svg assets " + svgList.length + ")");
 console.log("missing:     svg " + missingSvg + ", abs " + missingAbs);
+console.log("strokes:     " + sideStrokes + " nodes with per-side stroke weights");
+console.log("images:      " + Object.keys(IMAGEMAP).length + " hashes remapped in " + imageRemapped + " paints");
 console.log("recovered:   " + arbFallback + " render boxes from viewBox, " + alRotSwap + " auto-layout quarter turns baked into size, " + inkOffset + " svg wrappers with ink outside the layout box");
 console.log("text:        " + textAsSvg + " rendered as svg (undisclosed override), " + inkTagged + " tagged with inked width");
 console.log("fonts:       " + [...fonts.values()].join(", "));

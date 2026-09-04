@@ -86,8 +86,35 @@ are the two full renders it is built from.
 
 ## Running it
 
-Requires the Pixso desktop app open on the target file with its MCP at
-`http://127.0.0.1:3667/mcp`, and the Figma MCP connected. Node 24, no dependencies.
+One command, no model in the loop:
+
+```bash
+node tools/migrate.mjs <pixsoSectionId>
+```
+
+It needs two things running:
+
+- **Pixso desktop** on the source file, MCP on `http://127.0.0.1:3667/mcp`.
+- **The `pix-to-fig runner` plugin** in the target Figma file. One-time install: Figma desktop →
+  `Plugins → Development → Import plugin from manifest…` → pick `figma-plugin/manifest.json`.
+  Then run it in the file you want to migrate into and leave the window open.
+
+The runner does the export, the SVG and measurement passes, the image extraction, the packing, and
+then drives the plugin: it hands over the payload and the image bytes, gets the build report back,
+and closes both feedback loops on its own — images Pixso will not hand over as bytes are rendered
+and remapped, and text whose instance override Pixso will not disclose is rendered as vector,
+repacked and rebuilt once. Finally it runs the verifier and prints the acceptance table, exiting
+non-zero if anything is not clean. Everything it produced is left in `out/run/`, with the full
+build and verification report in `out/run/report.json`.
+
+Node 24, no dependencies.
+
+### The older agent-driven path
+
+Before the plugin existed the payload had to reach Figma as an image, because that was the only
+channel available. `pack4.mjs` still writes that PNG carrier next to the JSON, and
+`tools/bootstrap.mjs` still emits the reader for it, so the pipeline can be driven by hand through
+any Figma MCP that can execute plugin-API JavaScript:
 
 ```bash
 cd tools
@@ -96,13 +123,12 @@ node px-svg.mjs     ../out/ir.json <rootId> ../out/svg.json
 node px-bounds.mjs  ../out/ir.json <rootId> ../out/bounds.json
 node px-abs.mjs     ../out/ir.json <rootId> ../out/abs.json
 node px-textink.mjs ../out/ir.json <rootId> ../out/textink.json
+node px-images.mjs  ../out/ir.json <rootId> ../out/img
 node pack4.mjs ../out/ir.json <rootId> ../out/svg.json ../out/bounds.json ../out/abs.json \
                ../out/payload.png ../out/textink.json [../out/textsvg.json]
+node bootstrap.mjs build  <imageHash>            # paste into the Figma JS channel
+node bootstrap.mjs verify <imageHash> <rootId>
 ```
-
-Then upload `payload.png` with `upload_assets` + `curl` and run the bootstrap in `use_figma`.
-Nodes the build flags as `textOverrideLost` get a second pass: put their paths in
-`out/textlost.json`, run `px-textsvg.mjs`, and repack with the resulting `textsvg.json`.
 
 ## Tools
 
@@ -116,6 +142,11 @@ Nodes the build flags as `textOverrideLost` get a second pass: put their paths i
 | `px-textsvg.mjs` | renders specific text nodes whose override Pixso will not disclose |
 | `pack4.mjs` | builds the PNG carrier (tree + assets + builder + verifier) |
 | `builder4.js` | the in-sandbox builder and verifier, shipped inside the payload |
+| `migrate.mjs` | the whole run, end to end, no model in the loop |
+| `jobserver.mjs` | localhost job queue the Figma plugin polls |
+| `px-images.mjs` | image bytes out of Pixso, with a render fallback for remote-library images |
+| `px-lostpaths.mjs` | maps the build's reported indices back to child-index paths |
+| `bootstrap.mjs` | emits the reader for the PNG carrier (agent-driven path) |
 | `crop.mjs` / `diffmap.mjs` / `sbs.mjs` | dependency-free PNG crop, block difference map, side-by-side |
 | `inflate.js` | raw-DEFLATE inflate, kept for carriers not written with stored blocks |
 

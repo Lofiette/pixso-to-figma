@@ -24,6 +24,24 @@ const TXT = [["T", "fontSize"], ["V", "textAlignHorizontal"], ["W", "textAlignVe
 const DICTKEY = { N: 1, O: 1, P: 1, Q: 1, U: 1, "0": 1, "1": 1, w: 1 };
 function dv(d, k) { return d[k] === undefined ? undefined : (DICTKEY[k] ? D[d[k]] : d[k]); }
 
+// Image bytes are put into the file by the host before the build; PAY.IMG maps the hash Pixso
+// used to the hash this file gave the same bytes. Identical bytes give an identical hash, so it
+// is normally the identity map -- but not for images Pixso never held locally, which the runner
+// substitutes with a render.
+const IMGMAP = PAY.IMG || {};
+if (Object.keys(IMGMAP).length) {
+  var remapped = 0;
+  var seen = [];
+  (function fix(v) {
+    if (!v || typeof v !== "object" || seen.indexOf(v) >= 0) return;
+    seen.push(v);
+    if (Array.isArray(v)) { for (var i = 0; i < v.length; i++) fix(v[i]); return; }
+    if (v.imageHash && IMGMAP[v.imageHash] && IMGMAP[v.imageHash] !== v.imageHash) { v.imageHash = IMGMAP[v.imageHash]; remapped++; }
+    for (var k in v) fix(v[k]);
+  })(D);
+  REPORT.imageRemapped = remapped;
+}
+
 function makeNode(d) {
   var t = d.b;
   if (t === "SVG") {
@@ -80,6 +98,16 @@ for (var i = 0; i < F.length; i++) {
   if (d.b !== "SVG") {
     for (var pk in PAINT) if (d[pk] !== undefined) tryset(node, PAINT[pk], dv(d, pk), id);
     for (var q = 0; q < PLAIN.length; q++) if (d[PLAIN[q][0]] !== undefined) tryset(node, PLAIN[q][1], dv(d, PLAIN[q][0]), id);
+    // Assigning strokeWeight resets the four side weights, so these come after it. Pixso reports
+    // strokeWeight as one number even when the sides differ: a frame with only a bottom border
+    // arrives as a 1 px box unless the sides are carried.
+    if (d.h !== undefined) {
+      tryset(node, "strokeTopWeight", d.h, id);
+      tryset(node, "strokeRightWeight", d.i, id);
+      tryset(node, "strokeBottomWeight", d.l, id);
+      tryset(node, "strokeLeftWeight", d.x, id);
+      REPORT.sideStrokes = (REPORT.sideStrokes || 0) + 1;
+    }
   } else {
     if (d.P !== undefined) tryset(node, "effects", dv(d, "P"), id);
     for (var q2 = 0; q2 < SVG_PLAIN.length; q2++) if (d[SVG_PLAIN[q2][0]] !== undefined) tryset(node, SVG_PLAIN[q2][1], dv(d, SVG_PLAIN[q2][0]), id);

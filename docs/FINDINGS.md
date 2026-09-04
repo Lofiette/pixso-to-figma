@@ -391,10 +391,13 @@ transforms       0 relativeTransform failures
 fonts            1 substitution (Rostelecom Basis Medium -> Inter Regular)
 ```
 
-545 hidden nodes sit at different coordinates. That is not a defect: hidden children are excluded
-from auto-layout flow in both tools, and Pixso's own stored coordinates for them are stale — in
-`side menu / content / tabs` the three visible children are at 0/36/72 with the parent hugging to
-108, while the four hidden ones claim 72/108/144/144.
+545 hidden nodes sit at different coordinates. That is not a defect: Pixso's own stored coordinates
+for hidden children are stale — in `side menu / content / tabs` the three visible children are at
+0/36/72 with the parent hugging to 108, while the four hidden ones claim 72/108/144/144.
+
+> **Correction.** An earlier version of this paragraph also said hidden children are excluded from
+> auto-layout flow *in both tools*. That is wrong. Pixso keeps them in the flow; Figma does not.
+> The second section proved it — see "Fix round 6".
 
 ## The one content gap left, and it is Pixso's
 
@@ -496,3 +499,78 @@ fonts            1 substitution (Rostelecom Basis Medium -> Inter Regular)
 Strongest remaining 24x24 block difference across the whole page fell from 154 px to 36 px, and
 every one of those is text antialiasing — Figma's baseline sits about half a pixel lower than
 Pixso's and the two rasterisers hint Cyrillic differently.
+
+## Fix round 6 — the second section, and what only scale could show
+
+The pilot was 1855 nodes. `Диво Мера` is 18 837 — ten times larger, nine screens plus a style
+sheet, 3128 vector subtrees and 3854 text nodes. Almost everything that broke here was invisible at
+pilot scale, and none of it was geometry.
+
+### The exporter could not reach it at all
+
+A single `ser()` over the section never returns: Pixso times the script out. Phase 1 now serializes
+against a node budget, and when the budget runs out `ser()` leaves `{id, __defer:1}` stubs at the
+frontier which the driver fetches in follow-up calls and splices back in place, halving the id batch
+and then the budget whenever a call fails. Twelve follow-up calls covered the section.
+
+Proof it is faithful and not merely finished: re-exporting the **pilot** with the budget forced down
+to 300, so the stitching path runs many times over a tree whose correct answer is already known,
+reproduces the old IR with zero differences in order, id, type, name or property sets.
+
+`vectorNetwork` is no longer serialized. Nothing has read it since geometry started travelling as
+SVG, and it was the heaviest thing in the tree.
+
+### Three layout differences, none of them geometry
+
+The first build came back with **101 visible nodes more than 0.5 px out, worst 70.5**. Every size
+was correct, so the causes were all in how the two engines resolve auto-layout.
+
+**Pixso keeps hidden children in the flow. Figma drops them.** `Frame 277131193` is a 233 px
+SPACE_BETWEEN row holding a visible `Title` and a hidden `IconButton`. Pixso lays the hidden button
+out anyway, so the title sits at x=33; Figma has one participant left and puts it at x=0. This is
+the opposite of what was written here after the pilot, where no visible node ever shared a
+SPACE_BETWEEN parent with a hidden one.
+
+**An SVG wrapper sized to the ink adds a pixel per item.** The dividers in `Frame 22` are
+zero-height LINEs with a 1 px stroke: geometry box 260x0, render box 260x1 starting half a pixel
+higher. Sizing the wrapper to the render box gives every item one pixel of layout height that the
+source did not have, and a vertical stack accumulates it — stored tops -0.5/23.5/47.5/71.5/95.5
+against built 0/25/50/75/100. Wrappers now take the **geometry** box, with the ink offset inside
+them, and the imported children pinned to MIN/MIN before the resize so it cannot scale them.
+
+**`layoutAlign: STRETCH` against an axis that cannot stretch.** In a 36 px row hugging its content,
+a 32 px child that says STRETCH is centred by Pixso (y=2) and pinned to `counterAxisAlignItems` by
+Figma (y=0), even though Pixso itself reports that property as MIN.
+
+The remedy is a flow pass that tries counter-axis alignment first and only takes a child out of the
+flow when nothing else reproduces the source position, freezing the parent's size around the change
+so losing a flow child cannot resize it. On this section: 23 nodes taken out of flow, 0 aligned.
+
+**The measure is the whole trick.** Written against local `x`/`y`, that pass fired on 92 pilot nodes
+that were not misplaced at all — including hidden subtrees, whose Pixso coordinates are stale by
+design — and blew 33 sizes up to twice their width. Rewritten to measure exactly what the acceptance
+test measures — composed absolute min-corner against `absoluteBoundingBox`, effective visibility
+propagated from ancestors — it fires on zero. A repair pass must share the acceptance test's
+definition of wrong, or it becomes a defect generator.
+
+### A substituted font is not a lost override
+
+The override detector compares what Pixso inked with what Figma draws. A missing font draws
+narrower in its fallback, which looks exactly like a string Pixso would not disclose. Five of six
+flags on this section were `PP Neue Machina Ultrabold`; the sixth was `Inter Regular`, a font that is
+present, and it was real — the canvas reads "11. Выборка для опроса КВС" and the API discloses
+"Выборка для опроса КВС". Substituted fonts are now tracked and reported separately.
+
+### Images: hashes are SHA-1, and some bytes are not local
+
+The image hash is literally the SHA-1 of the image bytes — checked on every extracted file — so the
+same bytes uploaded to Figma land on the same hash and the `imageHash` already in the payload
+resolves untouched. Two things get in the way at scale: a large image comes back empty in one MCP
+response and has to be fetched in byte ranges, and `getImageByHash` returns **null** for images that
+belong to a remote library, because Pixso never held those bytes locally. Every avatar in this
+section is one of those. For them the renderer is the only source: the smallest node carrying the
+fill is exported as PNG, uploaded, and remapped onto the original hash by the packer.
+
+Neither the extraction nor the upload existed as a tool before this run — the pilot's images were
+moved by hand, and the documented pipeline had no step for them at all, which is exactly why the
+first build of this section came back with empty circles where the avatars should be.

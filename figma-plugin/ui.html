@@ -1,0 +1,75 @@
+<!-- Network bridge. Figma's main thread has no fetch, so everything that touches the network
+     happens here and crosses to code.js by postMessage. This file holds no migration logic. -->
+<style>
+  body { font: 12px -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 12px; color: #333; }
+  #s { font-weight: 600; margin-bottom: 6px; }
+  #l { white-space: pre-wrap; font: 11px ui-monospace, Menlo, Consolas, monospace; color: #666;
+       max-height: 180px; overflow: auto; }
+  .off { color: #b00; } .on { color: #0a0; }
+</style>
+<div id="s">connecting…</div>
+<div id="l"></div>
+<script>
+const HOST = "http://127.0.0.1:3778";
+const CHUNK = 400000;
+const S = document.getElementById("s"), L = document.getElementById("l");
+let busy = false, misses = 0;
+
+function log(m) { L.textContent = (m + "\n" + L.textContent).slice(0, 4000); }
+function status(t, cls) { S.textContent = t; S.className = cls || ""; }
+
+async function post(path, body) {
+  return fetch(HOST + path, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body) }).then(r => r.json());
+}
+
+function send(msg) { parent.postMessage({ pluginMessage: msg }, "*"); }
+
+async function runJob(job) {
+  log("job " + job.id + " (" + job.kind + ")");
+  status("running job " + job.id + "…", "on");
+
+  // payload as text, handed over in slices so a multi-megabyte string never crosses in one message
+  const text = await fetch(HOST + "/job/" + job.id + "/payload").then(r => r.text());
+  send({ t: "payload-begin", id: job.id, kind: job.kind, total: text.length,
+         rootNodeId: job.rootNodeId || null, cleanupRootId: job.cleanupRootId || null });
+  for (let o = 0; o < text.length; o += CHUNK) send({ t: "payload-chunk", d: text.slice(o, o + CHUNK) });
+
+  // image bytes, one message each; the plugin turns them into Figma images and keeps the hash map
+  const imgs = job.images || [];
+  for (let i = 0; i < imgs.length; i++) {
+    const buf = await fetch(HOST + "/image/" + imgs[i]).then(r => r.arrayBuffer());
+    send({ t: "image", hash: imgs[i], bytes: Array.from(new Uint8Array(buf)) });
+    status("images " + (i + 1) + "/" + imgs.length, "on");
+  }
+  send({ t: "payload-end" });
+}
+
+onmessage = async (e) => {
+  const m = e.data.pluginMessage;
+  if (!m) return;
+  if (m.t === "log") { log(m.m); return; }
+  if (m.t === "report") {
+    log("report for " + m.id);
+    try { await post("/report", { id: m.id, report: m.report }); } catch (err) { log("post failed: " + err); }
+    busy = false;
+    status("idle — waiting for the next job", "on");
+  }
+};
+
+async function poll() {
+  if (!busy) {
+    try {
+      const j = await fetch(HOST + "/job").then(r => r.json());
+      misses = 0;
+      if (j && j.kind && j.kind !== "noop") { busy = true; await runJob(j); }
+      else status("idle — waiting for the next job", "on");
+    } catch (err) {
+      misses++;
+      if (misses > 2) status("runner not reachable on " + HOST, "off");
+    }
+  }
+  setTimeout(poll, 600);
+}
+poll();
+</script>
