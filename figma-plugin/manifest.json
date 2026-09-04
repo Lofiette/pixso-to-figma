@@ -6,7 +6,7 @@
   "ui": "ui.html",
   "editorType": ["figma"],
   "networkAccess": {
-    "allowedDomains": ["http://127.0.0.1:3778"],
+    "allowedDomains": ["http://localhost:3778"],
     "reasoning": "Pulls migration jobs from the local runner (tools/migrate.mjs) and posts the verification report back. Localhost only."
   }
 }

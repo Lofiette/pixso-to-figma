@@ -46,3 +46,8 @@ out/t7out.json
 # Environment: Product OS library copied in by po.ps1. Not project source.
 .claude/
 t-inflate.mjs
+
+# Extracted image bytes: regenerable by px-images.mjs
+out/*-img/
+out/img/
+out/run/

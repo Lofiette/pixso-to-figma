@@ -59,9 +59,16 @@ export function startJobServer(port = 3778) {
     cors(res); res.writeHead(404); res.end("not found");
   });
 
+  // The plugin fetches http://localhost:3778 because Figma's manifest validator rejects a raw
+  // IP in allowedDomains -- and on Windows localhost often resolves to ::1 first, so binding only
+  // 127.0.0.1 would refuse the connection. Bind both loopbacks with the same handler.
+  const server6 = createServer(server.listeners("request")[0]);
   const ready = new Promise((resolve, reject) => {
     server.once("error", reject);
-    server.listen(port, "127.0.0.1", () => resolve());
+    server.listen(port, "127.0.0.1", () => {
+      server6.once("error", () => resolve());   // no IPv6 loopback here, v4 is enough
+      server6.listen(port, "::1", () => resolve());
+    });
   });
 
   return {
@@ -84,6 +91,6 @@ export function startJobServer(port = 3778) {
         }, timeoutMs).unref?.();
       });
     },
-    close() { server.close(); },
+    close() { try { server.close(); } catch {} try { server6.close(); } catch {} },
   };
 }
