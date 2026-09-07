@@ -2,83 +2,67 @@
 
 ## Now
 
-- **Task:** Pixso -> Figma migration, 1:1.
-- **Status:** the run is a single deterministic command, no model in the loop:
+- **Task:** Pixso -> Figma migration, 1:1, whole files.
+- **Status: the whole open file migrates**, both pages, 87 401 source nodes.
 
   ```
-  node tools/migrate.mjs <pixsoSectionId>
+  node tools/px-pages.mjs ../out/pages.json          # what pages exist
+  PX_EXTRACT_ONLY=1 node tools/migrate.mjs <id> <dir>   # per top-level object, Pixso only
+  PX_PLACE_ABS=1 node tools/build-all.mjs --pages ../out/pages.json <dir> [<dir> ...]
   ```
 
-  It needs Pixso desktop with its MCP on `127.0.0.1:3667`, and the `pix-to-fig runner` plugin
-  open in the target Figma file (one-time install: Plugins -> Development -> Import plugin from
-  manifest -> `figma-plugin/manifest.json`).
+  Extraction needs Pixso desktop with its MCP on `127.0.0.1:3667`. Building needs the
+  `pix-to-fig runner` plugin open in the target Figma file — and only the plugin, because the MCP
+  channel cannot see locally installed fonts at all.
 
-- **Sections done:**
-  - `Яга Статьи` (1855 nodes) — pilot. 1486/1486 built, 728 visible nodes none more than 0.5 px
-    out, max size delta 0.03 px, 0 failures.
-  - `Диво Мера` (18 837 nodes) — 18 719/18 719 built, 5623 visible nodes none more than 0.5 px
-    out, max size delta 0.05 px, 0 failures, size 3780x15990 exact.
-- **Next:** `Диво Бот` (17 512), `Стрелка` (6063), `Диво Сервис` (5858), then `Яга` (37 241).
+## Last clean run
 
-## Pipeline
+| object | nodes | misplaced | worst | sizes off | max size |
+|---|---|---|---|---|---|
+| Обложка (page) | 33/33 | 0 | 0 | 0 | 0 |
+| divider | 2/2 | 0 | 0 | 0 | 0 |
+| Яга Статьи | 1486/1486 | 28 | 0.5 | 1 | 4 |
+| Стрелка | 5997/5997 | 5 | 0.5 | 0 | 0.01 |
+| Диво Сервис | 5834/5834 | 3 | 1 | 0 | 0.01 |
+| Диво Бот | 17482/17482 | 36 | 1 | 4 | 4 |
+| Диво Мера | 18719/18719 | 164 | 2.83 | 4 | 2 |
+| Яга | 36995/36995 | 418 | 0.5 | 0 | 0.01 |
 
-`migrate.mjs` runs, in order: `px-export` -> `px-svg` -> `px-bounds` / `px-abs` / `px-textink` ->
-`px-textruns` -> `px-images` -> `pack4` -> build (plugin) -> optional second pass for undisclosed
-text overrides -> verify (plugin). It exits non-zero unless the acceptance table is clean, and
-leaves everything in `out/run/`, with `out/run/report.json` holding the build and check reports.
+Every node count exact. Worst positional error anywhere: 2.83 px. Pixel comparison of the pilot
+section against the Pixso render: 67% of pixels identical, 31% differing by 1–15 levels out of 255,
+**0.00% differing by more than 191** — nothing is drawn on one side and not the other.
 
-The plugin holds no migration logic: the builder and verifier travel inside the job as `PAY.B` and
-`PAY.V`, so the algorithm lives only in `tools/builder4.js`.
+Fonts resolve through the plugin (`Hack Regular` is the only one still missing on the machine).
 
-The older agent-driven path still works — `pack4` writes a PNG carrier next to the JSON and
-`tools/bootstrap.mjs` emits the reader for it — for any Figma MCP that can execute plugin-API JS.
+## What is left, and what each is
 
-## What is settled
+- **Half-pixel SVG wrappers** — the bulk of the remaining count. Below visual significance.
+- **INSIDE stroke content box** — Figma insets both the size and the origin of an auto-layout
+  frame's content box by the stroke; Pixso does not. Shows as 1–2.83 px.
+- **`layoutAlign: STRETCH` against an axis that cannot stretch** — Pixso centres, Figma pins. 2 px.
+- **Text rasterisation and gradient interpolation** — not defects, not fixable.
+- One diagnosed but unexplained case: placeholder text Figma draws where Pixso draws nothing.
 
-- **Vector geometry travels as SVG** (`exportAsync` -> `createNodeFromSvg`), sized to the node's
-  **geometry** box with the ink offset inside it.
-- **Placement travels as `relativeTransform`**, from `absoluteTransform` on both sides. Never
-  x/y/rotation.
-- **The build verifies itself**, and any repair pass must use the same measure as the acceptance
-  test or it becomes a defect generator (proved: measuring local x/y broke 33 sizes).
-- **Screenshots are not an acceptance test — and neither is the verifier alone.** It measures
-  geometry. Per-side strokes and per-range text fills were both lost while it stayed green; only a
-  1:1 pixel comparison found them.
-- Pixso keys do NOT resolve in Figma. Library relinking is manual, by owner's decision.
-- Image hashes are the SHA-1 of the bytes on both sides, so the same bytes land on the same hash.
+## Read this before touching anything
 
-## Pixso answers wrongly, not just incompletely
+`docs/METHOD.md` is the method. `docs/FINDINGS.md` is every defect with the evidence that found
+it. Two things in there matter more than the rest:
 
-Three cases found so far where Pixso returns a confident answer that is not what the node means:
-
-1. `strokeWeight` is a single number even when the four side weights differ (218 visible nodes on
-   `Диво Мера`). Not reported as `mixed`.
-2. `getStyledTextSegments` returns an **empty array** for every node and every field set. Mixed
-   text styling is invisible through it; `getRangeFills` works and is what `px-textruns.mjs` uses.
-3. Some instance text overrides are never disclosed — `characters`, `componentProperties`,
-   `overrides`, DSL, `design_to_code` and the SVG export all return the component default while the
-   renderer draws the real string. Detected by comparing Pixso's inked width against the width
-   Figma measures, then rebuilt from the render as vector. 1 node on `Диво Мера`.
+1. **A repair pass must measure with the acceptance test's rule, re-read before acting, undo what
+   did not help — and look at what else moved.** Every one of those clauses was paid for. The last
+   one cost a 223 px error made out of a 2 px one.
+2. **Do not verify with `page.children`.** Figma loads pages lazily and an unloaded page reads as
+   empty, which looked exactly like two migrated objects vanishing. `getNodeByIdAsync` is
+   authoritative.
 
 ## Direction (set by owner)
 
-Transfer 1:1 first. Do NOT auto-relink to the Figma libraries — done by hand afterwards. Missing
-fonts are acceptable; content must not be lost. **No hand-patching of layouts: everything must be a
-rule in code that runs without a model.**
-
-## Open
-
-- One visual difference is diagnosed but unresolved: text Figma draws where Pixso draws nothing
-  (`Заголовок` placeholders). The `absoluteRenderBounds === null` hypothesis was tested and does
-  not explain it — 0 of those nodes are effectively visible.
-- Colour-picker gradients interpolate slightly differently between the two renderers (~24 px on a
-  24 px block). No data behind it.
-- Fonts missing in the Figma account: `Rostelecom Basis`, `PP Neue Machina`, `Manrope`, `Hack`.
-  Owner-side.
+Transfer 1:1 first; relink to the Figma libraries by hand afterwards. Missing fonts are
+acceptable, lost content is not. No hand-patching of layouts: everything is a rule in code that
+runs without a model. The end state is migrating every file of the team this way.
 
 ## Checkpoint
 
-- **Updated:** 2026-09-04
-- **Verified by:** in-sandbox verifier against the rebuild, plus 1:1 pixel comparison of three
-  screens and the `Interface style` block with `tools/diffmap.mjs`.
-- **Resume from:** `docs/FINDINGS.md`, fix rounds 6 and 7.
+- **Updated:** 2026-09-07
+- **Verified by:** in-sandbox verifier per section, plus a 1:1 pixel comparison with magnitude
+  distribution rather than a block count.
