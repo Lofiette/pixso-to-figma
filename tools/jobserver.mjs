@@ -97,11 +97,21 @@ export function startJobServer(port = 3778) {
         waiting.set(id, { resolve, reject });
         // Say something long before the timeout: a silent twenty-minute wait tells nobody whether
         // the plugin is working, closed, or wedged.
-        let warned = 0;
+        let warned = 0, everSeen = lastPoll > 0;
         const t0w = Date.now();
         const watch = setInterval(() => {
           if (!waiting.has(id)) { clearInterval(watch); return; }
           const quiet = Date.now() - lastPoll;
+          if (lastPoll > 0) everSeen = true;
+          // Nothing has ever asked for work: the plugin is not open. Say so in seconds rather than
+          // holding the run for the full timeout on a job nobody will ever take.
+          if (!everSeen && Date.now() - t0w > 45000) {
+            waiting.delete(id);
+            clearInterval(watch);
+            reject(new Error("the pix-to-fig runner plugin has not contacted the server since it " +
+              "started — open it in Figma (Plugins -> Development -> pix-to-fig runner) and run again"));
+            return;
+          }
           if (quiet > 15000) {
             warned++;
             console.log("  waiting: the plugin has not polled for " + Math.round(quiet / 1000) + "s" +
@@ -109,8 +119,9 @@ export function startJobServer(port = 3778) {
           } else if (warned || Date.now() - t0w > 60000) {
             console.log("  waiting: plugin alive, job " + id + " in progress (" + Math.round((Date.now() - t0w) / 1000) + "s)");
           }
-        }, 20000);
-        if (watch.unref) watch.unref();
+        }, 15000);
+        // deliberately NOT unref'd: this is the only thing that reports what the run is waiting on,
+        // and an unref'd interval was silently skipped in a process that had nothing else pending
         setTimeout(() => {
           if (waiting.has(id)) {
             waiting.delete(id);

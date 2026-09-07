@@ -108,6 +108,24 @@ engines. Three rules, each learned the hard way:
    put it back. Counted and reported, so the next run either confirms the diagnosis with numbers or
    contradicts it.
 
+## 5a. Where the two layout engines disagree
+
+Not defects in either tool — differences in what the same properties mean. Each was found by the
+acceptance test, not by looking:
+
+1. **Hidden children.** Pixso keeps them in the auto-layout flow; Figma drops them. A
+   SPACE_BETWEEN row with one visible child and one hidden one puts the visible child in a
+   different place in each tool.
+2. **`layoutAlign: STRETCH` against an axis that cannot stretch.** Pixso centres the child; Figma
+   pins it to `counterAxisAlignItems`, even though Pixso reports that property as MIN.
+3. **An INSIDE stroke on an auto-layout frame.** Figma subtracts it from the content box, so a
+   stretched child of a 256 px frame with a 1 px right border becomes 255 px. Pixso does not
+   subtract it. This is the source of a systematic 1–2 px narrowing wherever a bordered container
+   holds stretched children.
+
+All three are repaired the same way: the source geometry wins, the child is pinned to it, and the
+repair is re-measured and reverted if it did not help.
+
 ## 6. Pixso answers wrongly, not just incompletely
 
 This is the part that generalises least and matters most. Three cases so far where Pixso returns a
