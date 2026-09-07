@@ -6,7 +6,7 @@
 //   node build-one.mjs <payloadDir> [rootNodeIdToVerifyOnly]
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { isAbsolute, join, dirname } from "node:path";
+import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startJobServer } from "./jobserver.mjs";
 
@@ -28,7 +28,7 @@ if (existsSync(f("textruns.json"))) process.env.PX_TEXTRUNS = f("textruns.json")
 const images = new Map();
 if (existsSync(f("img/manifest.json"))) {
   for (const m of JSON.parse(readFileSync(f("img/manifest.json"), "utf8"))) {
-    images.set(m.hash, readFileSync(isAbsolute(m.file) ? m.file : join(DIR, m.file)));
+    images.set(m.hash, readFileSync(join(f("img"), basename(m.file))));
   }
 }
 

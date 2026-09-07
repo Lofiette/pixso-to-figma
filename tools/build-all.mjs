@@ -51,7 +51,7 @@ for (const dir of DIRS) {
   const images = new Map();
   if (existsSync(f("img/manifest.json"))) {
     for (const m of JSON.parse(readFileSync(f("img/manifest.json"), "utf8"))) {
-      images.set(m.hash, readFileSync(isAbsolute(m.file) ? m.file : join(dir, m.file)));
+      images.set(m.hash, readFileSync(join(f("img"), basename(m.file))));
     }
   }
 
