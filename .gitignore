@@ -51,3 +51,6 @@ t-inflate.mjs
 out/*-img/
 out/img/
 out/run/
+
+# Per-section extraction directories: regenerable from Pixso
+out/s-*/
