@@ -24,11 +24,11 @@ const W = join(HERE, WORK);
 mkdirSync(W, { recursive: true });
 const f = (n) => join(W, n);
 const t0 = Date.now();
-// Up first, before the Pixso phase: the plugin polls for a job and should connect straight away
-// rather than sitting on "connecting" for the length of an export.
-const srv = startJobServer(3778);
-await srv.ready;
-console.log("job server on http://localhost:3778 — the pix-to-fig runner plugin can connect now");
+// The job server is started at the start of the Figma phase, not here. Every Pixso step runs
+// through execFileSync, which blocks this process's event loop completely: a server started before
+// them holds the port but answers nothing, so the plugin sits on "connecting" for the whole export
+// and the port is locked against anything else that wants to build.
+let srv = null;
 const step = (n) => console.log("\n=== " + n + "  (" + Math.round((Date.now() - t0) / 1000) + "s) ===");
 
 // A rerun should not repeat twenty minutes of Pixso work that already succeeded. A step whose
@@ -73,11 +73,15 @@ if (!existsSync(payloadFile)) { console.error("pack4 did not write " + payloadFi
 
 if (process.env.PX_EXTRACT_ONLY) {
   console.log("extract-only: payload is at " + payloadFile);
-  srv.close();
   process.exit(0);
 }
 
 // ---------- Figma side ----------
+// Now that no more synchronous child processes will run, the server can answer.
+srv = startJobServer(3778);
+await srv.ready;
+console.log("\njob server on http://localhost:3778 — open the pix-to-fig runner plugin in Figma now");
+
 const manifest = JSON.parse(readFileSync(join(W, "img", "manifest.json"), "utf8"));
 const images = new Map();
 for (const m of manifest) images.set(m.hash, readFileSync(isAbsolute(m.file) ? m.file : join(HERE, m.file)));
