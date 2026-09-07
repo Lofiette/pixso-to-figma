@@ -414,6 +414,74 @@ async function flowFixPass(last) {
     } catch (e6) { if (last) REPORT.flowStillOff++; }
   }
 }
+// Fixing one child at a time cannot work when the whole row is wrong. Pixso lays hidden
+// children out and Figma does not, so every visible child of such a row sits somewhere else,
+// and moving any single one of them moves the rest — which is why the per-child pass either
+// broke the siblings or, once guarded, gave up entirely.
+//
+// Take the row as a unit: if the children of an auto-layout parent are collectively misplaced,
+// lift them all out of the flow onto their stored matrices at once. Nobody shifts relative to
+// anybody, because nobody is left in the flow. Kept only if the total error actually falls.
+REPORT.flowGroups = 0; REPORT.flowGroupNodes = 0; REPORT.flowGroupsRejected = 0;
+async function flowGroupPass() {
+  await settle();
+  var fd = await flowDeltas(), dp = fd.dp, EXP = fd.exp, OX = fd.ox, OY = fd.oy;
+  // children of each auto-layout parent, in payload order
+  var kids = {};
+  for (var a = 1; a < F.length; a++) {
+    var pa = F[a].p;
+    if (pa < 0) continue;
+    var pdA = F[pa].d;
+    if (!pdA.y || pdA.y === "NONE") continue;
+    (kids[pa] = kids[pa] || []).push(a);
+  }
+  var parents = Object.keys(kids);
+  for (var pIdx = 0; pIdx < parents.length; pIdx++) {
+    if (pIdx % 50 === 0 && pIdx > 0) await settle();
+    var pi = Number(parents[pIdx]);
+    if (dp[pi] && dp[pi].vis && dp[pi].d > 0.5) continue;   // the parent is the real problem
+    var set = kids[pi], bad = 0, before = 0, movable = [];
+    for (var q = 0; q < set.length; q++) {
+      var gi = set[q], dgi = F[gi].d;
+      if (!dp[gi].vis) continue;
+      if (dgi.M === "ABSOLUTE" || !dgi["7"]) continue;
+      movable.push(gi);
+      before += dp[gi].d;
+      if (dp[gi].d > 0.5) bad++;
+    }
+    if (bad < 2 || movable.length < 2) continue;   // one stray child is the per-child pass's job
+    var png = built[pi], pw = png.width, ph = png.height;
+    var undo = [];
+    try {
+      if (png.layoutMode && png.layoutMode !== "NONE") {
+        tryset(png, "primaryAxisSizingMode", "FIXED", "#" + pi);
+        tryset(png, "counterAxisSizingMode", "FIXED", "#" + pi);
+      }
+      for (var w = 0; w < movable.length; w++) {
+        var gi2 = movable[w], ng2 = built[gi2], m2 = F[gi2].d["7"];
+        undo.push([ng2, ng2.layoutPositioning]);
+        ng2.layoutPositioning = "ABSOLUTE";
+        ng2.relativeTransform = [[m2[0], m2[1], m2[2]], [m2[3], m2[4], m2[5]]];
+      }
+      if (Math.abs(png.width - pw) > 0.01 || Math.abs(png.height - ph) > 0.01) {
+        try { png.resize(Math.max(0.01, pw), Math.max(0.01, ph)); } catch (e) {}
+      }
+      var after = 0;
+      for (var v2 = 0; v2 < movable.length; v2++) after += deltaOf(movable[v2], EXP[movable[v2]], OX, OY).d;
+      if (after < before - 0.5) {
+        REPORT.flowGroups++; REPORT.flowGroupNodes += movable.length;
+        for (var u2 = 0; u2 < movable.length; u2++) dp[movable[u2]] = { dx: 0, dy: 0, d: 0, vis: true };
+      } else {
+        for (var u = 0; u < undo.length; u++) { try { undo[u][0].layoutPositioning = undo[u][1] || "AUTO"; } catch (e) {} }
+        REPORT.flowGroupsRejected++;
+      }
+    } catch (eG) {
+      for (var u3 = 0; u3 < undo.length; u3++) { try { undo[u3][0].layoutPositioning = undo[u3][1] || "AUTO"; } catch (e) {} }
+      REPORT.flowGroupsRejected++;
+    }
+  }
+}
+await flowGroupPass(); phase("flowGroup");
 await flowFixPass(false); phase("flow1");
 await flowFixPass(true); phase("flow2");
 // The flow pass takes children out of the flow and freezes their parents, which can leave a size
