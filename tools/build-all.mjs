@@ -11,7 +11,19 @@ import { fileURLToPath } from "node:url";
 import { startJobServer } from "./jobserver.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const DIRS = process.argv.slice(2);
+const argv = process.argv.slice(2);
+// A file is not one page. --pages <px-pages output> tells the runner which page each
+// directory belongs on, so the sections land where they came from instead of all together.
+let PAGES = null;
+const pi = argv.indexOf("--pages");
+if (pi >= 0) { PAGES = JSON.parse(readFileSync(argv[pi + 1], "utf8")); argv.splice(pi, 2); }
+const DIRS = argv;
+
+function pageFor(rootId) {
+  if (!PAGES) return null;
+  for (const p of PAGES.pages) for (const c of p.children) if (c.id === rootId) return p;
+  return null;
+}
 if (!DIRS.length) { console.error("usage: node build-all.mjs <dir> [<dir> ...]"); process.exit(1); }
 for (const d of DIRS) if (!existsSync(join(d, "payload.json"))) { console.error("no payload in " + d); process.exit(1); }
 
@@ -43,6 +55,13 @@ for (const dir of DIRS) {
     }
   }
 
+  let meta = null;
+  try { meta = JSON.parse(readFileSync(f("payload-meta.json"), "utf8")); } catch (e) {}
+  const pg = meta ? pageFor(meta.rootId) : null;
+  if (pg) console.log("  page " + JSON.stringify(pg.name));
+  else if (PAGES) console.log("  page: not found for root " + (meta ? meta.rootId : "?") + " — building on the current page");
+  const jobPage = pg ? { page: pg.name, pageBg: pg.backgrounds || null } : {};
+
   let payload = readFileSync(f("payload.json"), "utf8");
   // A build is roughly linear in node count and the biggest sections were sitting right on the
   // old flat 20-minute limit, so the allowance scales with the payload instead.
@@ -50,7 +69,7 @@ for (const dir of DIRS) {
   console.log("  payload " + Math.round(payload.length / 1024) + " KB, allowing " +
     Math.round(budget / 60000) + " min");
   let r;
-  try { r = await srv.post({ kind: "build" }, payload, images, budget); }
+  try { r = await srv.post(Object.assign({ kind: "build" }, jobPage), payload, images, budget); }
   catch (e) { console.error("  " + e.message); results.push({ name, error: e.message }); continue; }
   if (r.error) { console.error("  build failed: " + r.error); results.push({ name, error: r.error }); continue; }
   if (r.ms) console.log("  time: total " + Math.round((r.msTotal || 0) / 1000) + "s  " +
@@ -74,7 +93,7 @@ for (const dir of DIRS) {
       sh("pack4.mjs", [f("ir.json"), rootId, f("svg.json"), f("bounds.json"), f("abs.json"),
         f("payload2.png"), f("textink.json"), f("textsvg.json")]);
       payload = readFileSync(f("payload2.json"), "utf8");
-      const r2 = await srv.post({ kind: "build", cleanupRootId: r.rootId }, payload, images, budget);
+      const r2 = await srv.post(Object.assign({ kind: "build", cleanupRootId: r.rootId }, jobPage), payload, images, budget);
       if (r2.error) throw new Error(r2.error);
       r = r2;
       console.log("  rebuilt: nodes " + r.nodes + ", overrides left " + (r.textOverrideLost || []).length);
@@ -83,7 +102,7 @@ for (const dir of DIRS) {
   writeFileSync(f("build-report.json"), JSON.stringify(r, null, 2), "utf8");
 
   let c;
-  try { c = await srv.post({ kind: "verify", rootNodeId: r.rootId }, payload, new Map(), budget); }
+  try { c = await srv.post(Object.assign({ kind: "verify", rootNodeId: r.rootId }, jobPage), payload, new Map(), budget); }
   catch (e) { console.error("  verify: " + e.message); results.push({ name, error: e.message }); continue; }
   writeFileSync(f("check-report.json"), JSON.stringify(c, null, 2), "utf8");
   console.log("  verify: " + c.count + "/" + c.expected + " nodes, " + c.visibleOver05 +

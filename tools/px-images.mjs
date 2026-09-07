@@ -23,20 +23,26 @@ const hashes = ir.imageHashes || [];
 console.log("image hashes: " + hashes.length);
 mkdirSync(OUTDIR, { recursive: true });
 
+// Encoding, not transport, is what made this slow. Building the string three bytes at a time
+// cost 34 microseconds per byte in Pixso's sandbox — five minutes for a 9 MB image. Pushing
+// character codes into an array and handing blocks to String.fromCharCode.apply is 2.4x faster,
+// and an 800 000-character response arrives intact, so the chunks can be far larger too.
 const B64 = [
   "const A64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';",
+  "const CODES = []; for (let i = 0; i < 64; i++) CODES.push(A64.charCodeAt(i));",
   "function b64(u) {",
-  "  let s = '';",
-  "  for (let i = 0; i < u.length; i += 3) {",
-  "    const a = u[i], b = u[i+1], c = u[i+2];",
-  "    s += A64[a >> 2];",
-  "    s += A64[((a & 3) << 4) | ((b === undefined ? 0 : b) >> 4)];",
-  "    s += b === undefined ? '=' : A64[((b & 15) << 2) | ((c === undefined ? 0 : c) >> 6)];",
-  "    s += c === undefined ? '=' : A64[c & 63];",
+  "  const out = [], block = []; const n = u.length;",
+  "  for (let i = 0; i < n; i += 3) {",
+  "    const a = u[i], b = i + 1 < n ? u[i+1] : undefined, c = i + 2 < n ? u[i+2] : undefined;",
+  "    block.push(CODES[a >> 2]);",
+  "    block.push(CODES[((a & 3) << 4) | ((b === undefined ? 0 : b) >> 4)]);",
+  "    block.push(b === undefined ? 61 : CODES[((b & 15) << 2) | ((c === undefined ? 0 : c) >> 6)]);",
+  "    block.push(c === undefined ? 61 : CODES[c & 63]);",
+  "    if (block.length >= 8192) { out.push(String.fromCharCode.apply(null, block)); block.length = 0; }",
   "  }",
-  "  return s;",
-  "}"
-].join("\n");
+  "  if (block.length) out.push(String.fromCharCode.apply(null, block));",
+  "  return out.join('');",
+  "}"].join("\n");
 
 function run(src) {
   writeFileSync("_img.js", src, "utf8");
@@ -52,7 +58,7 @@ function extOf(b) {
   return "bin";
 }
 
-const CHUNK = Number(process.env.PX_IMG_CHUNK || 90000);
+const CHUNK = Number(process.env.PX_IMG_CHUNK || 600000);
 const manifest = [];
 const unresolved = [];
 let ok = 0;

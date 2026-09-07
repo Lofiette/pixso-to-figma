@@ -56,7 +56,8 @@ async function runJob(job) {
   // payload as text, handed over in slices so a multi-megabyte string never crosses in one message
   const text = await fetchT(HOST + "/job/" + job.id + "/payload", {}, 120000).then(r => r.text());
   send({ t: "payload-begin", id: job.id, kind: job.kind, total: text.length,
-         rootNodeId: job.rootNodeId || null, cleanupRootId: job.cleanupRootId || null });
+         rootNodeId: job.rootNodeId || null, cleanupRootId: job.cleanupRootId || null,
+         page: job.page || null, pageBg: job.pageBg || null });
   for (let o = 0; o < text.length; o += CHUNK) send({ t: "payload-chunk", d: text.slice(o, o + CHUNK) });
 
   // image bytes, one message each; the plugin turns them into Figma images and keeps the hash map

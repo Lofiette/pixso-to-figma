@@ -12,7 +12,8 @@ function log(m) { figma.ui.postMessage({ t: "log", m: String(m) }); }
 figma.ui.onmessage = async function (msg) {
   if (msg.t === "payload-begin") {
     job = { id: msg.id, kind: msg.kind, total: msg.total,
-            rootNodeId: msg.rootNodeId, cleanupRootId: msg.cleanupRootId };
+            rootNodeId: msg.rootNodeId, cleanupRootId: msg.cleanupRootId,
+            page: msg.page || null, pageBg: msg.pageBg || null };
     buf = []; images = {};
     return;
   }
@@ -38,6 +39,15 @@ figma.ui.onmessage = async function (msg) {
     PAY.IMG = images;
     var AF = Object.getPrototypeOf(async function () {}).constructor;
     var NL = String.fromCharCode(10);
+
+    // A file is not one page. The builder always appends to figma.currentPage, so the page is
+    // chosen here: an existing one by name, or a new one created and named to match the source.
+    if (job.page) {
+      var target = figma.root.children.filter(function (p) { return p.name === job.page; })[0];
+      if (!target) { target = figma.createPage(); target.name = job.page; log("created page " + JSON.stringify(job.page)); }
+      if (job.pageBg) { try { target.backgrounds = job.pageBg; } catch (eb) { log("page background: " + (eb.message || eb)); } }
+      if (figma.currentPage !== target) await figma.setCurrentPageAsync(target);
+    }
 
     if (job.kind === "build") {
       report = await new AF("figma", "PAY", "let RESULT=null;" + NL + PAY.B + NL + "return RESULT;")(figma, PAY);

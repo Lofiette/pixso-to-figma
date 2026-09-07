@@ -315,6 +315,12 @@ writeFileSync(OUT, png);
 const JSON_OUT = (OUT.toLowerCase().endsWith(".png") ? OUT.slice(0, -4) : OUT) + ".json";
 writeFileSync(JSON_OUT, json);
 console.log("json:        " + JSON_OUT);
+// A short companion file so a later step can learn what this payload is without reading a
+// 155 MB intermediate just to find the root id.
+writeFileSync((JSON_OUT.toLowerCase().endsWith(".json") ? JSON_OUT.slice(0, -5) : JSON_OUT) + "-meta.json", JSON.stringify({
+  rootId: ROOT_ID, rootName: target.name, rootType: target.type,
+  nodes: flat.length, svg: svgNodes, xy: rootAbsXY,
+}, null, 2), "utf8");
 
 console.log("root:        " + target.type + " " + JSON.stringify(target.name));
 console.log("nodes:       " + flat.length + "  (svg " + svgNodes + ", dict " + dict.length + ", svg assets " + svgList.length + ")");

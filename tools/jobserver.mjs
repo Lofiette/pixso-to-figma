@@ -90,7 +90,8 @@ export function startJobServer(port = 3778) {
     post(job, payloadText, images = new Map(), timeoutMs = 20 * 60 * 1000) {
       const id = "j" + (++seq);
       pending = { id, kind: job.kind, rootNodeId: job.rootNodeId || null,
-                  cleanupRootId: job.cleanupRootId || null, images: [...images.keys()] };
+                  cleanupRootId: job.cleanupRootId || null, page: job.page || null,
+                  pageBg: job.pageBg || null, images: [...images.keys()] };
       payload = payloadText;
       blobs = images;
       return new Promise((resolve, reject) => {
