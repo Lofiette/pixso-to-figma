@@ -44,10 +44,17 @@ for (const dir of DIRS) {
   }
 
   let payload = readFileSync(f("payload.json"), "utf8");
+  // A build is roughly linear in node count and the biggest sections were sitting right on the
+  // old flat 20-minute limit, so the allowance scales with the payload instead.
+  const budget = Math.max(10 * 60 * 1000, Math.round(payload.length / 1000) * 400);
+  console.log("  payload " + Math.round(payload.length / 1024) + " KB, allowing " +
+    Math.round(budget / 60000) + " min");
   let r;
-  try { r = await srv.post({ kind: "build" }, payload, images); }
+  try { r = await srv.post({ kind: "build" }, payload, images, budget); }
   catch (e) { console.error("  " + e.message); results.push({ name, error: e.message }); continue; }
   if (r.error) { console.error("  build failed: " + r.error); results.push({ name, error: r.error }); continue; }
+  if (r.ms) console.log("  time: total " + Math.round((r.msTotal || 0) / 1000) + "s  " +
+    Object.keys(r.ms).map((k) => k + " " + Math.round(r.ms[k] / 1000) + "s").join(", "));
   console.log("  nodes " + r.nodes + ", svg " + r.svg + ", sections " + (r.sections || 0) +
     ", failures " + (r.failures || []).length + ", rtFail " + r.rtFail +
     ", sizeRepaired " + r.sizeRepaired + ", flow " + ((r.flowAligned || 0) + (r.flowAbsolute || 0)));
@@ -67,7 +74,7 @@ for (const dir of DIRS) {
       sh("pack4.mjs", [f("ir.json"), rootId, f("svg.json"), f("bounds.json"), f("abs.json"),
         f("payload2.png"), f("textink.json"), f("textsvg.json")]);
       payload = readFileSync(f("payload2.json"), "utf8");
-      const r2 = await srv.post({ kind: "build", cleanupRootId: r.rootId }, payload, images);
+      const r2 = await srv.post({ kind: "build", cleanupRootId: r.rootId }, payload, images, budget);
       if (r2.error) throw new Error(r2.error);
       r = r2;
       console.log("  rebuilt: nodes " + r.nodes + ", overrides left " + (r.textOverrideLost || []).length);
@@ -76,7 +83,7 @@ for (const dir of DIRS) {
   writeFileSync(f("build-report.json"), JSON.stringify(r, null, 2), "utf8");
 
   let c;
-  try { c = await srv.post({ kind: "verify", rootNodeId: r.rootId }, payload); }
+  try { c = await srv.post({ kind: "verify", rootNodeId: r.rootId }, payload, new Map(), budget); }
   catch (e) { console.error("  verify: " + e.message); results.push({ name, error: e.message }); continue; }
   writeFileSync(f("check-report.json"), JSON.stringify(c, null, 2), "utf8");
   console.log("  verify: " + c.count + "/" + c.expected + " nodes, " + c.visibleOver05 +

@@ -74,8 +74,18 @@ function makeNode(d) {
   return figma.createFrame();
 }
 
+// Figma terminates a plugin that holds the thread too long, which is why the two largest
+// sections died in their final passes while everything smaller finished. Yield every so many
+// iterations inside the long loops, not just between them.
+function settle() { return new Promise(function (r) { if (typeof setTimeout === "function") setTimeout(r, 0); else r(); }); }
+var YIELD_EVERY = 400;
+const T0 = Date.now(); var TMARK = T0;
+REPORT.ms = {};
+function phase(name) { var t = Date.now(); REPORT.ms[name] = t - TMARK; TMARK = t; }
+
 const built = [];
 for (var i = 0; i < F.length; i++) {
+  if (i % YIELD_EVERY === 0 && i > 0) await settle();
   var rec = F[i], d = rec.d, id = "#" + i;
   var parent = rec.p < 0 ? figma.currentPage : built[rec.p];
   var node = makeNode(d);
@@ -168,8 +178,9 @@ for (var i = 0; i < F.length; i++) {
   }
 }
 
-function placePass() {
+async function placePass() {
 for (var j = 0; j < F.length; j++) {
+  if (j % YIELD_EVERY === 0 && j > 0) await settle();
   var r2 = F[j], d2 = r2.d, n2 = built[j], id2 = "#" + j;
   if (r2.p < 0) continue;
   var pd = F[r2.p].d;
@@ -198,6 +209,7 @@ async function repairPass(countIt) {
 {
   await settle();
   for (var s1 = 0; s1 < F.length; s1++) {
+    if (s1 % YIELD_EVERY === 0 && s1 > 0) await settle();
     var ds = F[s1].d, ns = built[s1];
     if (ds.j === undefined || ds.k === undefined) continue;
     if (Math.abs(ns.width - ds.j) <= 0.5 && Math.abs(ns.height - ds.k) <= 0.5) continue;
@@ -226,8 +238,10 @@ async function repairPass(countIt) {
 // Measuring is a clone + reflow per node, and a large section has thousands of text nodes.
 // Width depends only on the string and the style that draws it, so measure once per
 // distinct (string, font, size, letter spacing, case) and reuse.
+phase("create");
 var natCache = {};
 for (var tx = 0; tx < F.length; tx++) {
+  if (tx % YIELD_EVERY === 0 && tx > 0) await settle();
   var dt = F[tx].d;
   if (dt.b !== "TEXT" || dt["8"] === undefined || !dt.S) continue;
   var nt = built[tx], cl = null;
@@ -252,7 +266,11 @@ for (var tx = 0; tx < F.length; tx++) {
   if (cl) { try { cl.remove(); } catch (e9) {} }
 }
 
-await repairPass(false); placePass(); await repairPass(true); placePass();
+phase("textMeasure");
+await repairPass(false); phase("repair1");
+await placePass(); phase("place1");
+await repairPass(true); phase("repair2");
+await placePass(); phase("place2");
 
 // The two engines do not lay out identically. Two differences are real and measured:
 //  - Pixso keeps HIDDEN children in the auto-layout flow; Figma drops them, so the visible
@@ -268,7 +286,6 @@ REPORT.flowRejected = 0; REPORT.flowReverted = 0;
 // same payload produced 23 flow fixes in one and 520 in the other, and the 497 spurious ones
 // pinned their parents to the wrong width. Yield to the engine, then never act on a single
 // reading: re-read immediately before changing anything, and put it back if it did not help.
-function settle() { return new Promise(function (r) { if (typeof setTimeout === "function") setTimeout(r, 0); else r(); }); }
 var MUL = function (m, n) { return [
   m[0]*n[0]+m[1]*n[3], m[0]*n[1]+m[1]*n[4], m[0]*n[2]+m[1]*n[5]+m[2],
   m[3]*n[0]+m[4]*n[3], m[3]*n[1]+m[4]*n[4], m[3]*n[2]+m[4]*n[5]+m[5]]; };
@@ -276,10 +293,11 @@ var MUL = function (m, n) { return [
 // absoluteBoundingBox, with effective visibility propagated from ancestors. Anything looser fires
 // on nodes the verifier considers fine -- including hidden subtrees, whose stored Pixso
 // coordinates are stale by design.
-function flowDeltas() {
+async function flowDeltas() {
   var exp = [[1,0,0,0,1,0]], vis = [true], dp = [];
   var rn = built[0], rt0 = rn.absoluteTransform, ox = rt0[0][2], oy = rt0[1][2];
   for (var v = 0; v < F.length; v++) {
+    if (v % YIELD_EVERY === 0 && v > 0) await settle();
     var dv2 = F[v].d, pv = F[v].p;
     if (v > 0) { exp[v] = MUL(exp[pv], dv2["7"] || [1,0,0,0,1,0]); vis[v] = vis[pv] && dv2.c !== false; }
     var e = exp[v], ew = dv2.j || 0, eh = dv2.k || 0, mnx = 1e9, mny = 1e9;
@@ -312,8 +330,9 @@ function deltaOf(idx, expAbs, ox, oy) {
 }
 async function flowFixPass(last) {
   await settle();
-  var fd = flowDeltas(), dp = fd.dp, EXP = fd.exp, OX = fd.ox, OY = fd.oy;
+  var fd = await flowDeltas(), dp = fd.dp, EXP = fd.exp, OX = fd.ox, OY = fd.oy;
   for (var g = 1; g < F.length; g++) {
+    if (g % YIELD_EVERY === 0 && g > 0) await settle();
     var dg = F[g].d, ng = built[g], pi = F[g].p;
     if (!dp[g].vis || dp[g].d <= 0.5) continue;
     if (dp[pi] && dp[pi].d > 0.5) continue;
@@ -360,11 +379,13 @@ async function flowFixPass(last) {
     } catch (e6) { if (last) REPORT.flowStillOff++; }
   }
 }
-await flowFixPass(false); await flowFixPass(true);
+await flowFixPass(false); phase("flow1");
+await flowFixPass(true); phase("flow2");
 // The flow pass takes children out of the flow and freezes their parents, which can leave a size
 // wrong that was right before it ran. One more repair, and one more placement after it, because
 // resizing a parent moves constrained children.
-await repairPass(true); placePass();
+await repairPass(true); phase("repair3");
+await placePass(); phase("place3");
 
 const root = built[0];
 // Migrating a whole page section by section only reproduces the page if each section lands where
@@ -379,6 +400,8 @@ if (PAY.XY) {
   for (var c = 0; c < kids.length; c++) if (kids[c] !== root) maxX = Math.max(maxX, kids[c].x + kids[c].width);
   root.x = maxX + 160; root.y = 80;
 }
+phase("placeRoot");
+REPORT.msTotal = Date.now() - T0;
 REPORT.rootId = root.id;
 REPORT.rootSize = { w: Math.round(root.width), h: Math.round(root.height) };
 RESULT = REPORT;
@@ -387,6 +410,8 @@ RESULT = REPORT;
 // Verifier body. Shipped as PAY.V. Globals: figma, PAY. Set ROOT_NODE_ID before eval.
 export const VERIFIER_SRC = `
 const F = PAY.F;
+function vsettle() { return new Promise(function (r) { if (typeof setTimeout === "function") setTimeout(r, 0); else r(); }); }
+var VYIELD = 400;
 const root = await figma.getNodeByIdAsync(ROOT_NODE_ID);
 const flatN = [];
 (function dfs(n, i) {
@@ -410,6 +435,7 @@ else {
   const rt = root.absoluteTransform;
   const ox = rt[0][2], oy = rt[1][2];
   for (var i = 0; i < F.length; i++) {
+    if (i % VYIELD === 0 && i > 0) await vsettle();
     const d = F[i].d, p = F[i].p;
     if (i > 0) { const m = d["7"] || [1,0,0,0,1,0]; exp[i] = mul(exp[p], m); shown[i] = shown[p] && d.c !== false; }
     if (shown[i]) R.visibleNodes++;
