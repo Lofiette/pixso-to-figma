@@ -281,28 +281,31 @@ function flowDeltas() {
       var px = e[0]*cx + e[1]*cy + e[2], py = e[3]*cx + e[4]*cy + e[5];
       if (px < mnx) mnx = px; if (py < mny) mny = py;
     }
+    // Reading absoluteBoundingBox forces a layout pass, so it is the expensive part of this by a
+    // wide margin. Hidden nodes are never candidates and are never reported, and on a large
+    // section they are the majority — 10 959 of 18 719 in one — so they are not measured at all.
+    if (!vis[v]) { dp[v] = { dx: 0, dy: 0, d: 0, vis: false }; continue; }
     var bb = built[v].absoluteBoundingBox;
     var ax = bb ? bb.x - ox : mnx, ay = bb ? bb.y - oy : mny;
-    dp[v] = { dx: ax - mnx, dy: ay - mny, d: Math.sqrt((ax-mnx)*(ax-mnx) + (ay-mny)*(ay-mny)), vis: vis[v] };
+    dp[v] = { dx: ax - mnx, dy: ay - mny, d: Math.sqrt((ax-mnx)*(ax-mnx) + (ay-mny)*(ay-mny)), vis: true };
   }
-  return { dp: dp, exp: exp };
+  return { dp: dp, exp: exp, ox: ox, oy: oy };
 }
 // Same rule as flowDeltas, for a single node, so a candidate can be re-checked on the spot.
-function deltaOf(idx, expAbs) {
+function deltaOf(idx, expAbs, ox, oy) {
   var d0 = F[idx].d, e = expAbs, ew = d0.j || 0, eh = d0.k || 0, mnx = 1e9, mny = 1e9;
   for (var c = 0; c < 4; c++) {
     var cx = (c === 1 || c === 2) ? ew : 0, cy = (c >= 2) ? eh : 0;
     var px = e[0]*cx + e[1]*cy + e[2], py = e[3]*cx + e[4]*cy + e[5];
     if (px < mnx) mnx = px; if (py < mny) mny = py;
   }
-  var rn0 = built[0], rt1 = rn0.absoluteTransform, ox = rt1[0][2], oy = rt1[1][2];
   var bb = built[idx].absoluteBoundingBox;
   var ax = bb ? bb.x - ox : mnx, ay = bb ? bb.y - oy : mny;
   return { dx: ax - mnx, dy: ay - mny, d: Math.sqrt((ax-mnx)*(ax-mnx) + (ay-mny)*(ay-mny)) };
 }
 async function flowFixPass(last) {
   await settle();
-  var fd = flowDeltas(), dp = fd.dp, EXP = fd.exp;
+  var fd = flowDeltas(), dp = fd.dp, EXP = fd.exp, OX = fd.ox, OY = fd.oy;
   for (var g = 1; g < F.length; g++) {
     var dg = F[g].d, ng = built[g], pi = F[g].p;
     if (!dp[g].vis || dp[g].d <= 0.5) continue;
@@ -312,7 +315,7 @@ async function flowFixPass(last) {
     if (dg.M === "ABSOLUTE") continue;
     var m = dg["7"]; if (!m) continue;
     // Never act on the batch reading alone: re-measure this node now.
-    var now = deltaOf(g, EXP[g]);
+    var now = deltaOf(g, EXP[g], OX, OY);
     if (now.d <= 0.5) { REPORT.flowRejected++; continue; }
     dp[g] = { dx: now.dx, dy: now.dy, d: now.d, vis: dp[g].vis };
     var horiz = pdg.y === "HORIZONTAL";
@@ -341,7 +344,7 @@ async function flowFixPass(last) {
       if (Math.abs(png.width - pw) > 0.01 || Math.abs(png.height - ph) > 0.01) {
         try { png.resize(Math.max(0.01, pw), Math.max(0.01, ph)); } catch (e) {}
       }
-      var after = deltaOf(g, EXP[g]);
+      var after = deltaOf(g, EXP[g], OX, OY);
       if (after.d > now.d - 0.01) {
         // taking it out of the flow did not improve anything: put it back
         try { ng.layoutPositioning = "AUTO"; } catch (e7) {}
@@ -351,6 +354,10 @@ async function flowFixPass(last) {
   }
 }
 await flowFixPass(false); await flowFixPass(true);
+// The flow pass takes children out of the flow and freezes their parents, which can leave a size
+// wrong that was right before it ran. One more repair, and one more placement after it, because
+// resizing a parent moves constrained children.
+await repairPass(true); placePass();
 
 const root = built[0];
 // Migrating a whole page section by section only reproduces the page if each section lands where

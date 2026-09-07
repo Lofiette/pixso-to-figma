@@ -60,6 +60,22 @@ function round(v) {
 }
 const FILTER_OK = ["exposure", "contrast", "saturation", "temperature", "tint", "highlights", "shadows"];
 const IMG_OK = new Set(["type", "scaleMode", "imageHash", "imageTransform", "scalingFactor", "rotation", "filters", "visible", "opacity", "blendMode"]);
+// Effects get the same treatment as image paints: Pixso puts keys in them that Figma's validator
+// rejects outright, and one rejected effect loses the whole shadow on that node.
+const EFFECT_OK = new Set(["type", "color", "offset", "radius", "spread", "visible", "blendMode",
+  "showShadowBehindNode", "boundVariables"]);
+let effectsCleaned = 0;
+function sanitizeEffects(v) {
+  if (!Array.isArray(v)) return v;
+  return v.map((e) => {
+    if (!e || typeof e !== "object") return e;
+    let dropped = false;
+    const o = {};
+    for (const k of Object.keys(e)) { if (EFFECT_OK.has(k)) o[k] = e[k]; else dropped = true; }
+    if (dropped) effectsCleaned++;
+    return o;
+  });
+}
 // Image hashes are content-addressed and normally resolve in Figma verbatim once the same bytes
 // are uploaded. The exception is an image whose bytes Pixso never held locally (remote library):
 // px-images.mjs renders a substitute, which uploads under a different hash, so those get remapped.
@@ -156,7 +172,7 @@ function encode(n, path, parentIdx, parentAbs, parentNode) {
       if (n.layoutAlign && n.layoutAlign !== "INHERIT") o.K = n.layoutAlign;
       if (n.layoutGrow) o.L = n.layoutGrow;
       if (n.layoutPositioning && n.layoutPositioning !== "AUTO") o.M = n.layoutPositioning;
-      if (n.effects && n.effects.length) o.P = intern(n.effects);
+      if (n.effects && n.effects.length) o.P = intern(sanitizeEffects(n.effects));
       const si = flat.length; flat.push({ p: parentIdx, d: o });
       return si;
     }
@@ -192,7 +208,8 @@ function encode(n, path, parentIdx, parentAbs, parentNode) {
     if (k === "strokes" && Array.isArray(v) && v.length === 0 && !STROKED.has(n.type)) continue;
     if (k === "constraints" && v.horizontal === "MIN" && v.vertical === "MIN") continue;
     if (k === "fontName" && v.family) fonts.set(v.family + "|" + v.style, v.family + " " + v.style);
-    const vv = (k === "fills" || k === "strokes") ? sanitizePaints(v) : v;
+    const vv = (k === "fills" || k === "strokes") ? sanitizePaints(v)
+      : (k === "effects" ? sanitizeEffects(v) : v);
     o[a] = INTERN.has(k) && typeof vv === "object" ? intern(vv) : round(vv);
   }
   // Pixso reports strokeWeight as a single number even when the four sides differ, so a frame
@@ -303,6 +320,7 @@ console.log("root:        " + target.type + " " + JSON.stringify(target.name));
 console.log("nodes:       " + flat.length + "  (svg " + svgNodes + ", dict " + dict.length + ", svg assets " + svgList.length + ")");
 console.log("missing:     svg " + missingSvg + ", abs " + missingAbs + (degenerate ? "   (" + degenerate + " degenerate vectors placed from their transform)" : ""));
 console.log("text runs:   " + textRuns + " nodes with per-range fills recovered");
+if (effectsCleaned) console.log("effects:     " + effectsCleaned + " had keys Figma rejects, stripped");
 console.log("strokes:     " + sideStrokes + " nodes with per-side stroke weights, " + arcs + " ellipse arcs/donuts");
 console.log("images:      " + Object.keys(IMAGEMAP).length + " hashes remapped in " + imageRemapped + " paints");
 console.log("recovered:   " + arbFallback + " render boxes from viewBox, " + alRotSwap + " auto-layout quarter turns baked into size, " + inkOffset + " svg wrappers with ink outside the layout box");
