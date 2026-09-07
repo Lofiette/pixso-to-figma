@@ -239,20 +239,33 @@ async function repairPass(countIt) {
 // Width depends only on the string and the style that draws it, so measure once per
 // distinct (string, font, size, letter spacing, case) and reuse.
 phase("create");
+// One scratch text node, reused. Cloning the real node and appending the clone to the page cost a
+// page-wide relayout per measurement, and the page holds every section migrated before this one —
+// so the same work got slower the later a section was built, until the largest never finished.
 var natCache = {};
+var probe = null;
 for (var tx = 0; tx < F.length; tx++) {
   if (tx % YIELD_EVERY === 0 && tx > 0) await settle();
   var dt = F[tx].d;
   if (dt.b !== "TEXT" || dt["8"] === undefined || !dt.S) continue;
-  var nt = built[tx], cl = null;
   var ck = JSON.stringify([dt.S, dt.T, dt.U, dt["0"], dt.Y]);
   var natural = natCache[ck];
   try {
     if (natural === undefined) {
-      cl = nt.clone();
-      figma.currentPage.appendChild(cl);
-      cl.textAutoResize = "WIDTH_AND_HEIGHT";
-      natural = cl.width;
+      if (!probe) {
+        probe = figma.createText();
+        probe.name = "pix-to-fig measurement";
+        figma.currentPage.appendChild(probe);
+      }
+      var pfn = dv(dt, "U");
+      var puse = pfn && pfn.family && FONTSTATE[pfn.family + "|" + pfn.style] ? { family: pfn.family, style: pfn.style } : FB;
+      probe.fontName = puse;
+      probe.textAutoResize = "WIDTH_AND_HEIGHT";
+      probe.characters = String(dt.S);
+      if (dt.T !== undefined) probe.fontSize = dt.T;
+      if (dt["0"] !== undefined) probe.letterSpacing = dv(dt, "0");
+      probe.textCase = dt.Y === undefined ? "ORIGINAL" : dt.Y;
+      natural = probe.width;
       natCache[ck] = natural;
       REPORT.textMeasured = (REPORT.textMeasured || 0) + 1;
     }
@@ -263,8 +276,8 @@ for (var tx = 0; tx < F.length; tx++) {
       else REPORT.textOverrideLost.push(rec);
     }
   } catch (e8) { REPORT.failures.push("#" + tx + ".measure: " + String(e8.message || e8).slice(0, 60)); }
-  if (cl) { try { cl.remove(); } catch (e9) {} }
 }
+if (probe) { try { probe.remove(); } catch (e9) {} }
 
 phase("textMeasure");
 await repairPass(false); phase("repair1");
@@ -456,14 +469,16 @@ else {
     if (dp > R.maxPos) R.maxPos = dp;
     if (dp > 0.5) { if (shown[i]) { R.visibleOver05++; if (dp > R.maxPosVisible) R.maxPosVisible = dp; } else R.hiddenOver05++; }
     dpArr[i] = dp;
-    if (dp > 0.5 && shown[i] && (i === 0 || dpArr[p] <= 0.5) && R.pos.length < 30) R.pos.push({ i: i, name: n.name, type: n.type, parent: i ? F[p].d.a : null, dx: Math.round(dx*100)/100, dy: Math.round(dy*100)/100 });
+    if (dp > 0.5 && shown[i] && (i === 0 || dpArr[p] <= 0.5)) R.pos.push({ i: i, name: n.name, type: n.type, parent: i ? F[p].d.a : null, dx: Math.round(dx*100)/100, dy: Math.round(dy*100)/100, mag: Math.round(dp*100)/100 });
     if (d.j !== undefined && d.k !== undefined) {
       const ds = Math.max(Math.abs(n.width - d.j), Math.abs(n.height - d.k));
       if (ds > R.maxSize) R.maxSize = ds;
       if (ds > 0.5) R.sizeOver = (R.sizeOver || 0) + 1;
-      if (ds > 0.5 && R.size.length < 20) R.size.push({ i: i, name: n.name, type: n.type, w: Math.round(n.width*100)/100, h: Math.round(n.height*100)/100, ew: d.j, eh: d.k });
+      if (ds > 0.5) R.size.push({ i: i, name: n.name, type: n.type, w: Math.round(n.width*100)/100, h: Math.round(n.height*100)/100, ew: d.j, eh: d.k, mag: Math.round(ds*100)/100 });
     }
   }
+  R.pos.sort(function (a, b) { return b.mag - a.mag; }); R.posTotal = R.pos.length; R.pos = R.pos.slice(0, 30);
+  R.size.sort(function (a, b) { return b.mag - a.mag; }); R.sizeTotal = R.size.length; R.size = R.size.slice(0, 20);
   R.maxPos = Math.round(R.maxPos * 100) / 100;
   R.maxPosVisible = Math.round(R.maxPosVisible * 100) / 100;
   R.maxSize = Math.round(R.maxSize * 100) / 100;
