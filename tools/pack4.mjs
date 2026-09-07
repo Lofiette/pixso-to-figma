@@ -254,7 +254,13 @@ encode(target, [], -1, rootAbs, null);
     catch (e) { console.error(nm + " does not parse: " + e.message); process.exit(1); }
   }
 }
-const json = Buffer.from(JSON.stringify({ D: dict, S: svgList, F: flat, B: BUILDER_SRC, V: VERIFIER_SRC }), "utf8");
+// PX_PLACE_ABS puts the built root at the source's own page position, so a page migrated
+// section by section comes out laid out the way it was.
+const rootAbsXY = process.env.PX_PLACE_ABS && rootAbs ? [r2(rootAbs[2]), r2(rootAbs[5])] : null;
+if (rootAbsXY) console.log("place:       root at source position " + rootAbsXY[0] + ", " + rootAbsXY[1]);
+const payloadObj = { D: dict, S: svgList, F: flat, B: BUILDER_SRC, V: VERIFIER_SRC };
+if (rootAbsXY) payloadObj.XY = rootAbsXY;
+const json = Buffer.from(JSON.stringify(payloadObj), "utf8");
 const body = Buffer.alloc(4 + json.length);
 body.writeUInt32BE(json.length, 0); json.copy(body, 4);
 

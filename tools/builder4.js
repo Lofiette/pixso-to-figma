@@ -353,10 +353,18 @@ async function flowFixPass(last) {
 await flowFixPass(false); await flowFixPass(true);
 
 const root = built[0];
-var maxX = 0;
-var kids = figma.currentPage.children;
-for (var c = 0; c < kids.length; c++) if (kids[c] !== root) maxX = Math.max(maxX, kids[c].x + kids[c].width);
-root.x = maxX + 160; root.y = 80;
+// Migrating a whole page section by section only reproduces the page if each section lands where
+// the source had it. PAY.XY carries the source's own absolute position for that; without it the
+// root is parked to the right of whatever is already on the canvas.
+if (PAY.XY) {
+  root.x = PAY.XY[0]; root.y = PAY.XY[1];
+  REPORT.placedAt = PAY.XY;
+} else {
+  var maxX = 0;
+  var kids = figma.currentPage.children;
+  for (var c = 0; c < kids.length; c++) if (kids[c] !== root) maxX = Math.max(maxX, kids[c].x + kids[c].width);
+  root.x = maxX + 160; root.y = 80;
+}
 REPORT.rootId = root.id;
 REPORT.rootSize = { w: Math.round(root.width), h: Math.round(root.height) };
 RESULT = REPORT;
