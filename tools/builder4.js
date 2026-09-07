@@ -372,6 +372,19 @@ async function flowFixPass(last) {
     }
     // Last resort: out of the flow, on the stored matrix. Freeze the parent at its current size
     // first so losing a flow child cannot resize it, and put the size back if it moves anyway.
+    //
+    // Taking a child out of the flow also moves its SIBLINGS, and that is how this pass once
+    // turned a 2 px error into a 223 px one: it lifted a slider out of a row to fix its vertical
+    // centring, and the input beside it, now the only child left in the flow, collapsed to the
+    // left edge. Remember where the siblings were and put everything back if any of them moved.
+    var sibs = [], sibXY = [];
+    try {
+      var pk2 = png.children || [];
+      for (var si = 0; si < pk2.length; si++) {
+        if (pk2[si] === ng) continue;
+        sibs.push(pk2[si]); sibXY.push([pk2[si].x, pk2[si].y]);
+      }
+    } catch (eS) {}
     var pw = png.width, ph = png.height;
     try {
       if (png.layoutMode && png.layoutMode !== "NONE") {
@@ -383,11 +396,20 @@ async function flowFixPass(last) {
       if (Math.abs(png.width - pw) > 0.01 || Math.abs(png.height - ph) > 0.01) {
         try { png.resize(Math.max(0.01, pw), Math.max(0.01, ph)); } catch (e) {}
       }
+      var moved = 0, worstSib = 0;
+      for (var sj = 0; sj < sibs.length; sj++) {
+        var dxs = Math.abs(sibs[sj].x - sibXY[sj][0]), dys = Math.abs(sibs[sj].y - sibXY[sj][1]);
+        var ds2 = Math.max(dxs, dys);
+        if (ds2 > 0.5) { moved++; if (ds2 > worstSib) worstSib = ds2; }
+      }
       var after = deltaOf(g, EXP[g], OX, OY);
-      if (after.d > now.d - 0.01) {
-        // taking it out of the flow did not improve anything: put it back
+      if (moved || after.d > now.d - 0.01) {
+        // either it did not help, or it moved the siblings — put it back either way
         try { ng.layoutPositioning = "AUTO"; } catch (e7) {}
-        REPORT.flowReverted++;
+        if (moved) {
+          REPORT.flowSiblingGuard = (REPORT.flowSiblingGuard || 0) + 1;
+          if (worstSib > (REPORT.flowSiblingWorst || 0)) REPORT.flowSiblingWorst = Math.round(worstSib * 100) / 100;
+        } else REPORT.flowReverted++;
       } else REPORT.flowAbsolute++;
     } catch (e6) { if (last) REPORT.flowStillOff++; }
   }
