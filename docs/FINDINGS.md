@@ -634,3 +634,64 @@ Both losses were silent: Pixso answered every question asked of it, and answered
 number where four were meant, and an empty array where two segments were meant. The acceptance test
 measures geometry, and geometry was perfect through both. **Only a pixel comparison at 1:1 finds
 this class**, which is why it belongs in the pipeline and not in someone's judgement.
+
+## Fix round 7 — the whole page, and three failures that looked like something else
+
+Migrating the whole page (87 368 nodes, six sections plus a divider) turned up defects the pilot
+could not: some in the transfer, and three in the machinery around it that cost far more time than
+the transfer bugs did.
+
+### A coverage audit, because "nothing is lost" has to be measured
+
+`tools/audit.mjs` reads the packer and the builder and compares them against what the exported tree
+actually holds. It found `SECTION` being rebuilt as a plain frame, `arcData` dropped so an arc came
+back a full ellipse, and `layoutGrids`, `exportSettings`, `overflowDirection`, `strokeCap` and
+`strokeMiterLimit` carried by nothing at all. What is still not carried is now a short list where
+every entry is deliberate: rotation travels inside the matrix, vector geometry travels as SVG, and
+style ids and component keys do not resolve between the two tools.
+
+### Figma subtracts an INSIDE stroke from the content box; Pixso does not
+
+A 256 px side menu with a 1 px right border gives its stretched child 255 px in Figma and 256 in
+Pixso. That was the systematic 1–2 px narrowing across every section — 256/255, 64/62, 1270/1268,
+84/82 — with the neighbouring element pushed the other way to compensate.
+
+The repair already knew what to do, and undid itself: it clears the stretch so the resize sticks,
+and the placement pass that runs next restored `layoutAlign` from the payload, handing the child
+straight back to the engine. The repair now marks what it pinned and the placement pass leaves
+those alone.
+
+### The measurement that got slower the more you migrated
+
+The two largest sections never finished — not in twenty minutes, not in twenty-seven. Adding a
+phase clock to the builder ended the guessing in one run: **94 of 113 seconds are node creation,
+and the entire repair-and-place machinery is 19.**
+
+Before that clock, the undisclosed-override detector cloned each text node and appended the clone
+to the *page* to measure it. The page holds every section migrated before this one, so each
+measurement cost a page-wide relayout across fifty thousand nodes, and there are ~500 of them per
+section. The cost therefore grew with every section already migrated, which is why the same code
+finished a 17 482-node section and never finished an 18 719-node one. One reused scratch text node
+replaced the clones, and Диво Мера went from "never" to 113 seconds.
+
+### Three ways the harness lied about itself
+
+Each of these cost more than any transfer bug, and each looked like a different problem:
+
+1. **A server inside a process that blocks its own event loop.** Every Pixso step runs through
+   `execFileSync`. The job server was started before them, so for the whole export it held the port
+   and answered nothing: the plugin showed "connecting…", another build failed with EADDRINUSE, and
+   a curl against the port timed out.
+2. **A liveness check the observer could satisfy.** The runner counted any GET /job as a sign of
+   life — and what was polling was my own curl waiting for the run to finish. It reported "plugin
+   is polling" through a twenty-minute wait that ended in a timeout. The plugin now identifies
+   itself and heartbeats while it builds.
+3. **A poll loop that could stop.** The plugin awaited a fetch and scheduled the next poll after
+   it. When the runner exited mid-request the fetch never settled — neither resolved nor rejected —
+   so the next poll was never scheduled. The window stayed open, the last status stayed painted,
+   and the plugin looked healthy while it had stopped listening for good. Every request now has a
+   deadline and the loop reschedules itself from a catch that wraps everything.
+
+The verifier had the same shape of fault in miniature: it kept the *first* thirty offenders rather
+than the worst, so its list filled with half-pixel SVG wrappers near the top of the tree while a
+223 px error further down never appeared in it.
