@@ -18,9 +18,24 @@ let busy = false, misses = 0;
 function log(m) { L.textContent = (m + "\n" + L.textContent).slice(0, 4000); }
 function status(t, cls) { S.textContent = t; S.className = cls || ""; }
 
+// Every request needs a deadline. When the runner exits mid-request the fetch never settles: the
+// await in the poll loop then never returns, the setTimeout that schedules the next poll is never
+// reached, and the plugin sits there looking alive with a dead poll loop. That is why only
+// reopening the plugin ever brought it back.
+function fetchT(url, opts, ms) {
+  const ctl = typeof AbortController === "function" ? new AbortController() : null;
+  const t = setTimeout(() => { if (ctl) ctl.abort(); }, ms || 15000);
+  const o = Object.assign({}, opts || {});
+  if (ctl) o.signal = ctl.signal;
+  return Promise.race([
+    fetch(url, o),
+    new Promise((_, rej) => setTimeout(() => rej(new Error("timeout " + url)), (ms || 15000) + 1000)),
+  ]).finally(() => clearTimeout(t));
+}
+
 async function post(path, body) {
-  return fetch(HOST + path, { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body) }).then(r => r.json());
+  return fetchT(HOST + path, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body) }, 20000).then(r => r.json());
 }
 
 function send(msg) { parent.postMessage({ pluginMessage: msg }, "*"); }
@@ -39,7 +54,7 @@ async function runJob(job) {
   status("running job " + job.id + "…", "on");
 
   // payload as text, handed over in slices so a multi-megabyte string never crosses in one message
-  const text = await fetch(HOST + "/job/" + job.id + "/payload").then(r => r.text());
+  const text = await fetchT(HOST + "/job/" + job.id + "/payload", {}, 120000).then(r => r.text());
   send({ t: "payload-begin", id: job.id, kind: job.kind, total: text.length,
          rootNodeId: job.rootNodeId || null, cleanupRootId: job.cleanupRootId || null });
   for (let o = 0; o < text.length; o += CHUNK) send({ t: "payload-chunk", d: text.slice(o, o + CHUNK) });
@@ -47,7 +62,7 @@ async function runJob(job) {
   // image bytes, one message each; the plugin turns them into Figma images and keeps the hash map
   const imgs = job.images || [];
   for (let i = 0; i < imgs.length; i++) {
-    const buf = await fetch(HOST + "/image/" + imgs[i]).then(r => r.arrayBuffer());
+    const buf = await fetchT(HOST + "/image/" + imgs[i], {}, 60000).then(r => r.arrayBuffer());
     send({ t: "image", hash: imgs[i], bytes: Array.from(new Uint8Array(buf)) });
     status("images " + (i + 1) + "/" + imgs.length, "on");
   }
@@ -70,9 +85,10 @@ onmessage = async (e) => {
 };
 
 async function poll() {
+  try {
   if (!busy) {
     try {
-      const j = await fetch(HOST + "/job?client=plugin").then(r => r.json());
+      const j = await fetchT(HOST + "/job?client=plugin", {}, 4000).then(r => r.json());
       misses = 0;
       if (j && j.kind && j.kind !== "noop") {
         busy = true;
@@ -90,6 +106,10 @@ async function poll() {
       misses++;
       if (misses > 2) status("runner not reachable on " + HOST, "off");
     }
+  }
+  } catch (fatal) {
+    // nothing may stop the loop: a stopped loop looks exactly like a working plugin
+    log("poll error: " + fatal);
   }
   setTimeout(poll, 600);
 }
