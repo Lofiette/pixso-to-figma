@@ -176,8 +176,10 @@ for (var j = 0; j < F.length; j++) {
   if (pd.y && pd.y !== "NONE") {
     if (d2.M !== undefined) tryset(n2, "layoutPositioning", d2.M, id2);
     if (d2.M !== "ABSOLUTE") {
-      if (d2.K !== undefined) tryset(n2, "layoutAlign", d2.K, id2);
-      if (d2.L !== undefined) tryset(n2, "layoutGrow", d2.L, id2);
+      if (!PINNED[j]) {
+        if (d2.K !== undefined) tryset(n2, "layoutAlign", d2.K, id2);
+        if (d2.L !== undefined) tryset(n2, "layoutGrow", d2.L, id2);
+      }
       continue;
     }
   }
@@ -190,6 +192,8 @@ for (var j = 0; j < F.length; j++) {
 // Degenerate hug/stretch chains resolve differently in the two engines. Where the size ends up
 // wrong, source geometry wins: pin the axis and resize. Two passes, parents settle first.
 REPORT.sizeRepaired = 0;
+// Nodes whose stretch the repair deliberately cleared, so the placement pass does not put it back.
+const PINNED = {};
 async function repairPass(countIt) {
 {
   await settle();
@@ -203,8 +207,11 @@ async function repairPass(countIt) {
     }
     var ps = F[s1].p >= 0 ? F[F[s1].p].d : null;
     if (ps && ps.y && ps.y !== "NONE") {
-      if (ns.layoutAlign === "STRETCH") tryset(ns, "layoutAlign", "INHERIT", "#" + s1);
-      if (ns.layoutGrow) tryset(ns, "layoutGrow", 0, "#" + s1);
+      // Clearing the stretch is what makes the resize below stick. placePass must then leave this
+      // node's layoutAlign alone: restoring STRETCH from the payload hands the child straight back
+      // to the engine, which shrinks it to the content box again.
+      if (ns.layoutAlign === "STRETCH") { tryset(ns, "layoutAlign", "INHERIT", "#" + s1); PINNED[s1] = 1; }
+      if (ns.layoutGrow) { tryset(ns, "layoutGrow", 0, "#" + s1); PINNED[s1] = 1; }
     }
     // re-read before acting: a stale size would pin an axis at the wrong value
     if (Math.abs(ns.width - ds.j) <= 0.5 && Math.abs(ns.height - ds.k) <= 0.5) { REPORT.sizeRejected = (REPORT.sizeRejected || 0) + 1; continue; }
