@@ -24,7 +24,7 @@
 | Яга Статьи | 1486/1486 | 28 | 0.5 | 1 | 4 |
 | Стрелка | 5997/5997 | 5 | 0.5 | 0 | 0.01 |
 | Диво Сервис | 5834/5834 | 3 | 1 | 0 | 0.01 |
-| Диво Бот | 17482/17482 | 36 | 1 | 4 | 4 |
+| Диво Бот | 17482/17482 | 36 | 1 | 4 | 4 |   *(rebuilt with Hack present: fonts clean, geometry identical)*
 | Диво Мера | 18719/18719 | 164 | 2.83 | 4 | 2 |
 | Яга | 36995/36995 | 418 | 0.5 | 0 | 0.01 |
 
@@ -32,7 +32,8 @@ Every node count exact. Worst positional error anywhere: 2.83 px. Pixel comparis
 section against the Pixso render: 67% of pixels identical, 31% differing by 1–15 levels out of 255,
 **0.00% differing by more than 191** — nothing is drawn on one side and not the other.
 
-Fonts resolve through the plugin (`Hack Regular` is the only one still missing on the machine).
+Fonts resolve through the plugin with **no substitutions at all**, once every family is installed
+and Figma has been restarted so it rescans them — it does that only at startup.
 
 ## What is left, and what each is
 
