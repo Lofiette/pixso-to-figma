@@ -44,7 +44,7 @@ const script = (batch) => [
 ].join("\n");
 
 const chunk = (a, n) => { const o = []; for (let i = 0; i < a.length; i += n) o.push(a.slice(i, i + n)); return o; };
-const queue = chunk(jobs, 24);
+const queue = chunk(jobs, Number(process.env.PX_SVG_BATCH || 100));
 const results = new Map();
 let splits = 0, done = 0, fails = 0;
 while (queue.length) {

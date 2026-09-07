@@ -34,15 +34,21 @@ const A = { name: "a", type: "b", visible: "c", locked: "d", opacity: "e", blend
   itemSpacing: "I", counterAxisSpacing: "J", layoutAlign: "K", layoutGrow: "L", layoutPositioning: "M",
   fills: "N", strokes: "O", effects: "P", constraints: "Q", characters: "S", fontSize: "T",
   fontName: "U", textAlignHorizontal: "V", textAlignVertical: "W", textAutoResize: "X", textCase: "Y",
-  textDecoration: "Z", letterSpacing: "0", lineHeight: "1", paragraphIndent: "2", paragraphSpacing: "3" };
-const DROP = { visible: true, locked: false, opacity: 1, blendMode: "PASS_THROUGH", isMask: false,
+  textDecoration: "Z", letterSpacing: "0", lineHeight: "1", paragraphIndent: "2", paragraphSpacing: "3",
+  // Found by the coverage audit: present in the source, carried by nothing. Two-character keys
+  // because the single-character space is full; nothing requires them to be one character.
+  strokeCap: "sC", strokeMiterLimit: "sM", layoutGrids: "lG", exportSettings: "eS",
+  overflowDirection: "oD" };
+const DROP = { strokeCap: "NONE", strokeMiterLimit: 4, overflowDirection: "NONE",
+  visible: true, locked: false, opacity: 1, blendMode: "PASS_THROUGH", isMask: false,
   cornerRadius: 0, topLeftRadius: 0, topRightRadius: 0, bottomLeftRadius: 0, bottomRightRadius: 0,
   cornerSmoothing: 0, strokeWeight: 1, strokeAlign: "INSIDE", strokeJoin: "MITER", layoutMode: "NONE",
   layoutWrap: "NO_WRAP", layoutAlign: "INHERIT", layoutGrow: 0, layoutPositioning: "AUTO", paddingLeft: 0,
   paddingRight: 0, paddingTop: 0, paddingBottom: 0, itemSpacing: 0, counterAxisSpacing: 0, paragraphIndent: 0,
   paragraphSpacing: 0, textCase: "ORIGINAL", textDecoration: "NONE", textAlignVertical: "TOP" };
 const STROKED = new Set(["ELLIPSE", "RECTANGLE"]);
-const INTERN = new Set(["fills", "strokes", "effects", "constraints", "fontName", "letterSpacing", "lineHeight", "dashPattern"]);
+const INTERN = new Set(["fills", "strokes", "effects", "constraints", "fontName", "letterSpacing",
+  "lineHeight", "dashPattern", "layoutGrids", "exportSettings"]);
 
 const r2 = (x) => (typeof x === "number" && isFinite(x)) ? Math.round(x * 100) / 100 : x;
 const r4 = (x) => (typeof x === "number" && isFinite(x)) ? Math.round(x * 10000) / 10000 : x;
@@ -86,7 +92,7 @@ const intern = (v0) => { const v = round(v0); const k = JSON.stringify(v);
   const i = dict.length; dict.push(v); dictIdx.set(k, i); return i; };
 
 const fonts = new Map(), flat = [];
-let sideStrokes = 0;
+let sideStrokes = 0, arcs = 0;
 let svgNodes = 0, missingSvg = 0, missingAbs = 0, arbFallback = 0, alRotSwap = 0, textAsSvg = 0, inkTagged = 0, inkOffset = 0;
 
 // Pixso returns absoluteRenderBounds = null for many nodes, and absoluteBoundingBox excludes the
@@ -192,6 +198,14 @@ function encode(n, path, parentIdx, parentAbs, parentNode) {
     for (const [k2] of sides) if (n[k2] !== sw) differs = true;
     if (differs) { for (const [k2, a2] of sides) o[a2] = r2(n[k2]); sideStrokes++; }
   }
+
+  // An ellipse with an arc or a donut hole is not a full ellipse, and Figma will draw one unless
+  // arcData travels. Only worth carrying when it is not the default full circle.
+  if (n.type === "ELLIPSE" && n.arcData) {
+    const ad = n.arcData;
+    const full = Math.abs((ad.endingAngle || 0) - (ad.startingAngle || 0) - Math.PI * 2) < 1e-6;
+    if (!full || (ad.innerRadius || 0) > 0) { o.aD = intern(round(ad)); arcs++; }
+  }
   if (n.type === "TEXT") {
     const runs = TEXTRUNS[key];
     if (runs && runs.length) {
@@ -276,7 +290,7 @@ console.log("root:        " + target.type + " " + JSON.stringify(target.name));
 console.log("nodes:       " + flat.length + "  (svg " + svgNodes + ", dict " + dict.length + ", svg assets " + svgList.length + ")");
 console.log("missing:     svg " + missingSvg + ", abs " + missingAbs);
 console.log("text runs:   " + textRuns + " nodes with per-range fills recovered");
-console.log("strokes:     " + sideStrokes + " nodes with per-side stroke weights");
+console.log("strokes:     " + sideStrokes + " nodes with per-side stroke weights, " + arcs + " ellipse arcs/donuts");
 console.log("images:      " + Object.keys(IMAGEMAP).length + " hashes remapped in " + imageRemapped + " paints");
 console.log("recovered:   " + arbFallback + " render boxes from viewBox, " + alRotSwap + " auto-layout quarter turns baked into size, " + inkOffset + " svg wrappers with ink outside the layout box");
 console.log("text:        " + textAsSvg + " rendered as svg (undisclosed override), " + inkTagged + " tagged with inked width");

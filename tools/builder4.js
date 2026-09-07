@@ -17,11 +17,13 @@ const PAINT = { N: "fills", O: "strokes", P: "effects" };
 const PLAIN = [["t", "strokeWeight"], ["u", "strokeAlign"], ["v", "strokeJoin"], ["w", "dashPattern"],
   ["n", "cornerRadius"], ["o", "topLeftRadius"], ["p", "topRightRadius"], ["q", "bottomLeftRadius"],
   ["r", "bottomRightRadius"], ["s", "cornerSmoothing"], ["m", "clipsContent"], ["e", "opacity"],
-  ["f", "blendMode"], ["c", "visible"], ["d", "locked"], ["g", "isMask"]];
+  ["f", "blendMode"], ["c", "visible"], ["d", "locked"], ["g", "isMask"],
+  ["sC", "strokeCap"], ["sM", "strokeMiterLimit"], ["lG", "layoutGrids"],
+  ["eS", "exportSettings"], ["oD", "overflowDirection"]];
 const SVG_PLAIN = [["e", "opacity"], ["f", "blendMode"], ["c", "visible"], ["g", "isMask"]];
 const TXT = [["T", "fontSize"], ["V", "textAlignHorizontal"], ["W", "textAlignVertical"], ["Y", "textCase"],
   ["Z", "textDecoration"], ["0", "letterSpacing"], ["1", "lineHeight"], ["2", "paragraphIndent"], ["3", "paragraphSpacing"]];
-const DICTKEY = { N: 1, O: 1, P: 1, Q: 1, U: 1, "0": 1, "1": 1, w: 1 };
+const DICTKEY = { N: 1, O: 1, P: 1, Q: 1, U: 1, "0": 1, "1": 1, w: 1, lG: 1, eS: 1, aD: 1 };
 function dv(d, k) { return d[k] === undefined ? undefined : (DICTKEY[k] ? D[d[k]] : d[k]); }
 
 // Image bytes are put into the file by the host before the build; PAY.IMG maps the hash Pixso
@@ -63,6 +65,12 @@ function makeNode(d) {
   if (t === "TEXT") return figma.createText();
   if (t === "RECTANGLE") return figma.createRectangle();
   if (t === "ELLIPSE") return figma.createEllipse();
+  // A section is a section, not a frame. It only exists at page level, which is where the source
+  // has them; createSection throws anywhere else, so fall back rather than lose the whole build.
+  if (t === "SECTION") {
+    try { REPORT.sections = (REPORT.sections || 0) + 1; return figma.createSection(); }
+    catch (e) { REPORT.failures.push("createSection: " + String(e.message || e).slice(0, 60)); }
+  }
   return figma.createFrame();
 }
 
@@ -76,9 +84,13 @@ for (var i = 0; i < F.length; i++) {
   REPORT.nodes++;
   if (d.a !== undefined) tryset(node, "name", d.a, id);
 
-  if (d.b !== "SVG" && d.j !== undefined && d.k !== undefined && node.resize) {
-    try { node.resize(Math.max(0.01, d.j), Math.max(0.01, d.k)); }
-    catch (e) { REPORT.failures.push(id + ".resize: " + String(e.message || e).slice(0, 60)); }
+  if (d.b !== "SVG" && d.j !== undefined && d.k !== undefined) {
+    // A section resizes only through resizeWithoutConstraints.
+    var rz = node.type === "SECTION" ? node.resizeWithoutConstraints : node.resize;
+    if (rz) {
+      try { rz.call(node, Math.max(0.01, d.j), Math.max(0.01, d.k)); }
+      catch (e) { REPORT.failures.push(id + ".resize: " + String(e.message || e).slice(0, 60)); }
+    }
   }
 
   if (d.b === "TEXT") {
@@ -95,7 +107,13 @@ for (var i = 0; i < F.length; i++) {
     for (var t1 = 0; t1 < TXT.length; t1++) if (d[TXT[t1][0]] !== undefined) tryset(node, TXT[t1][1], dv(d, TXT[t1][0]), id);
   }
 
-  if (d.b !== "SVG") {
+  if (node.type === "SECTION") {
+    // A section holds almost nothing: no strokes, no corners, no clipping, no auto-layout.
+    // Setting those would only fill the failure list with noise.
+    if (d.N !== undefined) tryset(node, "fills", dv(d, "N"), id);
+    if (d.c !== undefined) tryset(node, "visible", d.c, id);
+    if (d.d !== undefined) tryset(node, "locked", d.d, id);
+  } else if (d.b !== "SVG") {
     for (var pk in PAINT) if (d[pk] !== undefined) tryset(node, PAINT[pk], dv(d, pk), id);
     for (var q = 0; q < PLAIN.length; q++) if (d[PLAIN[q][0]] !== undefined) tryset(node, PLAIN[q][1], dv(d, PLAIN[q][0]), id);
     // Assigning strokeWeight resets the four side weights, so these come after it. Pixso reports
@@ -107,6 +125,12 @@ for (var i = 0; i < F.length; i++) {
       tryset(node, "strokeBottomWeight", d.l, id);
       tryset(node, "strokeLeftWeight", d.x, id);
       REPORT.sideStrokes = (REPORT.sideStrokes || 0) + 1;
+    }
+
+    // An arc or a donut is an ellipse plus arcData; without it Figma draws a full ellipse.
+    if (d.aD !== undefined) {
+      tryset(node, "arcData", dv(d, "aD"), id);
+      REPORT.arcs = (REPORT.arcs || 0) + 1;
     }
 
     // Per-range text fills. Pixso reports fills as mixed for a two-tone string and returns no

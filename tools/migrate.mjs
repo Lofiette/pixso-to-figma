@@ -71,6 +71,12 @@ pack(f("payload.png"));
 const payloadFile = f("payload.json");
 if (!existsSync(payloadFile)) { console.error("pack4 did not write " + payloadFile); process.exit(1); }
 
+if (process.env.PX_EXTRACT_ONLY) {
+  console.log("extract-only: payload is at " + payloadFile);
+  srv.close();
+  process.exit(0);
+}
+
 // ---------- Figma side ----------
 const manifest = JSON.parse(readFileSync(join(W, "img", "manifest.json"), "utf8"));
 const images = new Map();
