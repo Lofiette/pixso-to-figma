@@ -92,7 +92,7 @@ const intern = (v0) => { const v = round(v0); const k = JSON.stringify(v);
   const i = dict.length; dict.push(v); dictIdx.set(k, i); return i; };
 
 const fonts = new Map(), flat = [];
-let sideStrokes = 0, arcs = 0;
+let sideStrokes = 0, arcs = 0, degenerate = 0;
 let svgNodes = 0, missingSvg = 0, missingAbs = 0, arbFallback = 0, alRotSwap = 0, textAsSvg = 0, inkTagged = 0, inkOffset = 0;
 
 // Pixso returns absoluteRenderBounds = null for many nodes, and absoluteBoundingBox excludes the
@@ -124,6 +124,13 @@ function encode(n, path, parentIdx, parentAbs, parentNode) {
         ? { x: b.abb.x - (vb.w - b.abb.width) / 2, y: b.abb.y - (vb.h - b.abb.height) / 2, width: vb.w, height: vb.h }
         : b.abb;
       arbFallback++;
+    }
+    // A degenerate vector — zero size, inside a hidden subtree — gets no bounding box of any kind
+    // from Pixso. Dropping it would silently shorten the layer tree, so it is placed from its own
+    // absolute transform at whatever size it claims.
+    if (!box && abs) {
+      box = { x: abs[2], y: abs[5], width: n.width || 0, height: n.height || 0 };
+      degenerate++;
     }
     if (ref !== undefined && box) {
       svgNodes++;
@@ -294,7 +301,7 @@ console.log("json:        " + JSON_OUT);
 
 console.log("root:        " + target.type + " " + JSON.stringify(target.name));
 console.log("nodes:       " + flat.length + "  (svg " + svgNodes + ", dict " + dict.length + ", svg assets " + svgList.length + ")");
-console.log("missing:     svg " + missingSvg + ", abs " + missingAbs);
+console.log("missing:     svg " + missingSvg + ", abs " + missingAbs + (degenerate ? "   (" + degenerate + " degenerate vectors placed from their transform)" : ""));
 console.log("text runs:   " + textRuns + " nodes with per-range fills recovered");
 console.log("strokes:     " + sideStrokes + " nodes with per-side stroke weights, " + arcs + " ellipse arcs/donuts");
 console.log("images:      " + Object.keys(IMAGEMAP).length + " hashes remapped in " + imageRemapped + " paints");
