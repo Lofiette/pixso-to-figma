@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 export function startJobServer(port = 3778) {
   let pending = null;              // { id, kind, rootNodeId, cleanupRootId, images:[hash] }
   const parts = new Map();         // job id -> report slices still being assembled
+  const waiters = [];              // held /job requests, answered the moment a job is posted
   let payload = "";                // payload text for the pending job
   let blobs = new Map();           // hash -> Buffer
   const waiting = new Map();       // id -> { resolve, reject }
@@ -24,9 +25,35 @@ export function startJobServer(port = 3778) {
     if (req.method === "OPTIONS") { cors(res); res.writeHead(204); return res.end(); }
 
     if (url.pathname === "/job" && req.method === "GET") {
-      if (url.searchParams.get("client") === "plugin") lastPoll = Date.now();
+      const fromPlugin = url.searchParams.get("client") === "plugin";
+      if (fromPlugin) lastPoll = Date.now();
       cors(res, "application/json");
-      return res.end(JSON.stringify(pending || { kind: "noop" }));
+      if (pending || !fromPlugin) return res.end(JSON.stringify(pending || { kind: "noop" }));
+      // Nothing to give it yet, so hold the request instead of answering "noop" and letting the
+      // plugin come back later on a timer. Chromium throttles timers in a background window to one
+      // wake-up a minute, so "later" meant a minute, and a runner that gives up after 45 s of
+      // silence gave up on a plugin that was sitting there perfectly healthy. Held here, the
+      // answer arrives the instant a job is posted and the plugin never has to schedule anything.
+      let settled = false;
+      const answer = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const at = waiters.indexOf(answer);
+        if (at >= 0) waiters.splice(at, 1);
+        lastPoll = Date.now();
+        try { res.end(JSON.stringify(pending || { kind: "noop" })); } catch (e) {}
+      };
+      const timer = setTimeout(answer, 25000);
+      waiters.push(answer);
+      req.on("close", () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const at = waiters.indexOf(answer);
+        if (at >= 0) waiters.splice(at, 1);
+      });
+      return;
     }
 
     const pm = url.pathname.match(/^\/job\/([^/]+)\/payload$/);
@@ -123,6 +150,8 @@ export function startJobServer(port = 3778) {
                   pageBg: job.pageBg || null, images: [...images.keys()] };
       payload = payloadText;
       blobs = images;
+      // Wake anything that is holding a /job request rather than making it wait out its own timeout.
+      while (waiters.length) waiters.shift()();
       return new Promise((resolve, reject) => {
         waiting.set(id, { resolve, reject });
         // Say something long before the timeout: a silent twenty-minute wait tells nobody whether

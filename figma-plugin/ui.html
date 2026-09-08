@@ -142,12 +142,20 @@ onmessage = async (e) => {
   }
 };
 
+// The runner holds this request until it has a job, so the loop spends its life inside a fetch
+// rather than inside a timer. That matters because Chromium throttles timers in a background
+// window to one wake-up a minute: on a timer this plugin asked for work once a minute while the
+// runner, hearing nothing for 45 seconds, decided it was not there. Held requests need no timer,
+// so a job is picked up the instant it is posted no matter which window is in front.
+let ok = false;
 async function poll() {
+  ok = false;
   try {
   if (!busy) {
     try {
-      const j = await fetchT(HOST + "/job?client=plugin", {}, 4000).then(r => r.json());
+      const j = await fetchT(HOST + "/job?client=plugin", {}, 40000).then(r => r.json());
       misses = 0;
+      ok = true;
       if (j && j.kind && j.kind !== "noop") {
         busy = true;
         // Anything thrown in here used to leave busy latched and the plugin silent for good.
@@ -168,8 +176,11 @@ async function poll() {
   } catch (fatal) {
     // nothing may stop the loop: a stopped loop looks exactly like a working plugin
     log("poll error: " + fatal);
+    ok = false;
   }
-  setTimeout(poll, 600);
+  // Straight back in when the last request behaved — the request itself is the wait. A timer is
+  // only for the failure path, where something has to slow the retries down.
+  if (ok || busy) poll(); else setTimeout(poll, 1000);
 }
 poll();
 </script>
