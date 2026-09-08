@@ -20,7 +20,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const [, , ROOT_ID, WORK = "../out/run"] = process.argv;
 if (!ROOT_ID) { console.error("usage: node migrate.mjs <pixsoSectionId> [workDir]"); process.exit(1); }
 
-const W = join(HERE, WORK);
+const W = isAbsolute(WORK) ? WORK : join(HERE, WORK);
 mkdirSync(W, { recursive: true });
 const f = (n) => join(W, n);
 const t0 = Date.now();

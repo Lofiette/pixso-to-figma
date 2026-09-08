@@ -17,6 +17,15 @@ const argv = process.argv.slice(2);
 let PAGES = null;
 const pi = argv.indexOf("--pages");
 if (pi >= 0) { PAGES = JSON.parse(readFileSync(argv[pi + 1], "utf8")); argv.splice(pi, 2); }
+// A file with 290 top-level objects will not fit on a command line, so the set can also arrive
+// as a list file — one directory per line, which is what migrate-file.mjs writes.
+const di = argv.indexOf("--dirs");
+if (di >= 0) {
+  const lf = argv.splice(di, 2)[1];
+  for (const line of readFileSync(lf, "utf8").split(/\r?\n/)) {
+    if (line.trim()) argv.push(line.trim());
+  }
+}
 const DIRS = argv;
 
 function pageFor(rootId) {
