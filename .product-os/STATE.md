@@ -100,3 +100,25 @@ Three checks, not one:
 - **Updated:** 2026-09-08
 - **Verified by:** node counts per object, `coverage.mjs` over all 290 objects, and — from here on
   — `visual-all.mjs`, which is the only one of the three that sees what the owner sees.
+
+## Resume here (evening of 2026-09-08)
+
+Everything is committed and nothing is running. To pick up:
+
+1. Open the `pix-to-fig runner` plugin in Figma. **Check first that no node process is alive** —
+   `Get-Process node` — because a runner that outlived its shell keeps an established connection
+   to the plugin, and the plugin, now that it waits inside a held request, will sit on that dead
+   connection while a new runner waits for a plugin that never comes. Both sides look healthy and
+   neither can tell. That cost most of an evening.
+2. `PX_PLACE_ABS=1 node tools/build-all.mjs --clean --pages ../out/new/pages.json --dirs ../out/new/obj/dirs.txt`
+3. `node tools/visual-all.mjs ../out/new/obj/dirs.txt ../out/new/vis 700`
+
+The build has not been run since the mirror fix, so the file in Figma is from before it. All 290
+payloads are repacked and current.
+
+**The next real question is the visual audit's output**, which has never been produced. The owner
+looked at the file and reported plenty of visible defects beyond the known fonts, and was right to:
+the geometry verifier reported 222 of 290 objects exact on a build that looked wrong in places.
+Two defects are known by picture — a label rendered backwards (mirror handling, fixed but not yet
+verified) and petal shapes sitting on opaque white squares with a ring outline missing (cause
+unknown; the first hypothesis, white fills in the payload, was checked and is wrong).
