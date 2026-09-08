@@ -2,68 +2,101 @@
 
 ## Now
 
-- **Task:** Pixso -> Figma migration, 1:1, whole files.
-- **Status: the whole open file migrates**, both pages, 87 401 source nodes.
+- **Task:** Pixso -> Figma migration, 1:1, whole files, no model in the loop.
+- **Status:** the first file migrates cleanly. A second file — "Кейс Айдентика Лукоморье", 3 pages,
+  290 top-level objects, 25 351 nodes, heavy on photographs and boolean geometry — migrates
+  structurally (every node count exact) and is still being worked on visually.
 
-  ```
-  node tools/px-pages.mjs ../out/pages.json          # what pages exist
-  PX_EXTRACT_ONLY=1 node tools/migrate.mjs <id> <dir>   # per top-level object, Pixso only
-  PX_PLACE_ABS=1 node tools/build-all.mjs --pages ../out/pages.json <dir> [<dir> ...]
-  ```
+```
+node tools/px-pages.mjs ../out/new/pages.json                    # what pages exist
+node tools/migrate-file.mjs ../out/new/pages.json <outDir>       # extract every object, Pixso only
+node tools/repack-all.mjs <outDir>/dirs.txt                      # after any builder/packer change
+PX_PLACE_ABS=1 node tools/build-all.mjs --pages ../out/new/pages.json --dirs <outDir>/dirs.txt
+node tools/visual-all.mjs <outDir>/dirs.txt ../out/new/vis 700   # how different it LOOKS
+node tools/coverage.mjs --dirs <outDir>/dirs.txt                 # source vs payload
+```
 
-  Extraction needs Pixso desktop with its MCP on `127.0.0.1:3667`. Building needs the
-  `pix-to-fig runner` plugin open in the target Figma file — and only the plugin, because the MCP
-  channel cannot see locally installed fonts at all.
+Extraction needs Pixso desktop with its MCP on `127.0.0.1:3667`. Building needs the
+`pix-to-fig runner` plugin open in the target Figma file — and only the plugin, because the MCP
+channel cannot see locally installed fonts at all. Figma screenshots can also come through the
+Figma MCP (`get_screenshot`), which is the cheap way to look at a result.
 
-## Last clean run
+## The one thing to understand before touching anything
 
-| object | nodes | misplaced | worst | sizes off | max size |
-|---|---|---|---|---|---|
-| Обложка (page) | 33/33 | 0 | 0 | 0 | 0 |
-| divider | 2/2 | 0 | 0 | 0 | 0 |
-| Яга Статьи | 1486/1486 | 28 | 0.5 | 1 | 4 |
-| Стрелка | 5997/5997 | 5 | 0.5 | 0 | 0.01 |
-| Диво Сервис | 5834/5834 | 3 | 1 | 0 | 0.01 |
-| Диво Бот | 17482/17482 | 36 | 1 | 4 | 4 |   *(rebuilt with Hack present: fonts clean, geometry identical)*
-| Диво Мера | 18719/18719 | 164 | 2.83 | 4 | 2 |
-| Яга | 36995/36995 | 418 | 0.5 | 0 | 0.01 |
+**The geometry verifier compares the built tree against the payload.** It proves the build
+faithful to the payload. It says nothing about (a) the payload being faithful to the source, or
+(b) the two engines drawing the same payload the same way. Every defect a person actually noticed
+on this file passed it with zero nodes out of position.
 
-Every node count exact. Worst positional error anywhere: 2.83 px. Pixel comparison of the pilot
-section against the Pixso render: 67% of pixels identical, 31% differing by 1–15 levels out of 255,
-**0.00% differing by more than 191** — nothing is drawn on one side and not the other.
+Three checks, not one:
 
-Fonts resolve through the plugin with **no substitutions at all**, once every family is installed
-and Figma has been restarted so it rescans them — it does that only at startup.
+| check | what it catches | tool |
+|---|---|---|
+| build vs payload | a build that did not do what it was told | the verifier, in `build-all` |
+| source vs payload | anything that never reached the payload | `coverage.mjs` |
+| render vs render | anything the two engines draw differently | `visual-all.mjs` |
 
-## What is left, and what each is
+## Second file: what has been found and fixed
 
-- **Half-pixel SVG wrappers** — the bulk of the remaining count. Below visual significance.
-- **INSIDE stroke content box** — Figma insets both the size and the origin of an auto-layout
-  frame's content box by the stroke; Pixso does not. Shows as 1–2.83 px.
-- **`layoutAlign: STRETCH` against an axis that cannot stretch** — Pixso centres, Figma pins. 2 px.
-- **Text rasterisation and gradient interpolation** — not defects, not fixable.
-- One diagnosed but unexplained case: placeholder text Figma draws where Pixso draws nothing.
+- **Rotation and mirroring are dropped on auto-layout flow children.** The flow expresses where a
+  child sits and nothing else. A design that stands a label upright by flipping the parent and
+  flipping the child back arrives with the child's flip gone — a label written backwards. 671 nodes
+  in this file carry a mirror. Such children now leave the flow. The packer still bakes a quarter
+  turn into a LEAF's size, which is right for a divider and wrong for a node with children.
+- **Figma has no Hue among its image filters** (exposure, contrast, saturation, temperature, tint,
+  highlights, shadows — that is the list). A filter that cannot travel as data travels as pixels:
+  Pixso renders the node, and the render is turned back into the node's own frame first, because
+  exports come out in screen orientation.
+- **Figma drops an image whose longest side is over 4096** and says so on the canvas. The render
+  fallback was exporting a 4096-wide node at 4x — 16384 x 9216, 76 MB. Both renderers now fit.
+- **Rounding is not one decision.** Two decimals is right for pixels and wrong for anything
+  normalised to 0..1. Colours, transforms, gradient stops, filters and opacities keep six.
+- **A line height that differs from the font's natural one puts the first line 23 px low.** Half
+  the difference is applied where the node has its own transform, and the amount is stored on the
+  node so the verifier corrects its expectation by the same amount. Text inside a flow is left
+  alone and counted: taking it out of the flow to move it collapsed its parent to the padding, and
+  cost 61 of 88 objects in one run.
 
-## Read this before touching anything
+## Transport, which cost more time than any of the above
 
-`docs/METHOD.md` is the method. `docs/FINDINGS.md` is every defect with the evidence that found
-it. Two things in there matter more than the rest:
+- **Never use setTimeout inside the plugin.** Chromium throttles timers in a background window to
+  one wake-up a MINUTE. A single yield cost 60 seconds; three passes over a 27-node object took
+  three minutes and the watchdog then wrote it off as hung. Turns are taken through
+  `getNodeByIdAsync`, which resolves on Figma's own message loop.
+- **Settling and breathing are different things.** `settle()` gives Figma a real turn so a pending
+  relayout happens and a measurement is of the current layout; `breathe()` only stops Figma killing
+  the plugin. Making both cheap produced 6 259 of 10 133 nodes and errors of 400 px.
+- **Everything crossing into or out of the plugin must be sliced.** The report path was the one
+  direction that was not, and a report carrying a render never arrived: the frame latched on busy
+  and kept heartbeating, so the runner saw a healthy plugin that would never take another job.
+- **Image bytes travel as base64 text**, never as an array of numbers (102 MB became an array of a
+  hundred million numbers and never came back), and each hash crosses once per session.
+- **A watchdog must scale with the work handed over**, and must not free the frame while the
+  sandbox may still be busy — a single-threaded sandbox with two jobs queued fails the second one
+  for no reason of its own.
 
-1. **A repair pass must measure with the acceptance test's rule, re-read before acting, undo what
-   did not help — and look at what else moved.** Every one of those clauses was paid for. The last
-   one cost a 223 px error made out of a 2 px one.
-2. **Do not verify with `page.children`.** Figma loads pages lazily and an unloaded page reads as
-   empty, which looked exactly like two migrated objects vanishing. `getNodeByIdAsync` is
-   authoritative.
+## Extraction cost, measured
 
-## Direction (set by owner)
+- Each image is fetched once per file and cached by hash: 236 MB of the first 520 MB were repeats.
+- `pixso.base64Encode` is native and 3.8x the hand-rolled loop, and a 16-million character response
+  arrives intact, so an image up to 11 MB travels in one call.
+- What remains is Pixso's own floor: it exports one vector at a time, and a section of 933 vector
+  nodes costs twenty minutes no matter what the driver does.
 
-Transfer 1:1 first; relink to the Figma libraries by hand afterwards. Missing fonts are
-acceptable, lost content is not. No hand-patching of layouts: everything is a rule in code that
-runs without a model. The end state is migrating every file of the team this way.
+## Open
+
+- **Fonts this machine does not have** — Fact Semi Expanded, Stolzl, Pragmatica, SF Pro Text
+  Semibold. 13 objects cannot match until they are installed. Owner's decision: report them
+  honestly, do not compensate. `build-all` counts them separately from real defects.
+- **The visual audit has not yet been run on the whole file.** Owner reports plenty of visible
+  defects beyond the fonts; two are known by picture — a mirrored label (fixed, unverified) and
+  petal shapes sitting on opaque white squares (cause not yet found; the first guess, white fills
+  in the payload, was checked and is wrong).
+- Boolean operands are collapsed into one SVG on purpose: 708 of 25 351 nodes. Geometry exact,
+  operand structure not preserved. Unexplained loss: zero.
 
 ## Checkpoint
 
-- **Updated:** 2026-09-07
-- **Verified by:** in-sandbox verifier per section, plus a 1:1 pixel comparison with magnitude
-  distribution rather than a block count.
+- **Updated:** 2026-09-08
+- **Verified by:** node counts per object, `coverage.mjs` over all 290 objects, and — from here on
+  — `visual-all.mjs`, which is the only one of the three that sees what the owner sees.
