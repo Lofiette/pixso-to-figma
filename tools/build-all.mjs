@@ -26,6 +26,9 @@ if (di >= 0) {
     if (line.trim()) argv.push(line.trim());
   }
 }
+const cli = argv.indexOf("--clean");
+const CLEAN = cli >= 0 || !!process.env.PX_CLEAN;
+if (cli >= 0) argv.splice(cli, 1);
 const DIRS = argv;
 
 function pageFor(rootId) {
@@ -48,6 +51,32 @@ while (srv.lastPoll() === 0) {
   await new Promise((r) => setTimeout(r, 500));
 }
 console.log("plugin connected after " + Math.round((Date.now() - t0) / 1000) + "s\n");
+
+// Clearing what a previous run built used to be a separate script, and every process boundary
+// costs up to a minute: when the runner exits, the plugin's held request is cut and it retries
+// on a timer, which a background window throttles to one wake-up a minute. So it happens here,
+// on the connection that is already open.
+if (CLEAN) {
+  const ids = [];
+  for (const d of DIRS) {
+    try {
+      const rr = JSON.parse(readFileSync(join(d, "build-report.json"), "utf8"));
+      if (rr.rootId) ids.push(rr.rootId);
+    } catch (e) {}
+  }
+  if (ids.length) {
+    const V = [
+      "const ids = " + JSON.stringify(ids) + ";",
+      "let gone = 0;",
+      "for (const id of ids) { const n = await figma.getNodeByIdAsync(id); if (n && !n.removed) { n.remove(); gone++; } }",
+      "RESULT = { removed: gone, of: ids.length };",
+    ].join(String.fromCharCode(10));
+    try {
+      const rc = await srv.post({ kind: "render", rootNodeId: ids[0] }, JSON.stringify({ V }), new Map(), 600000);
+      console.log("cleared " + (rc.removed || 0) + " of " + ids.length + " roots this run will rebuild");
+    } catch (e) { console.log("could not clear previous builds: " + e.message); }
+  }
+}
 
 const results = [];
 for (const dir of DIRS) {

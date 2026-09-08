@@ -164,7 +164,11 @@ export function startJobServer(port = 3778) {
           if (lastPoll > 0) everSeen = true;
           // Nothing has ever asked for work: the plugin is not open. Say so in seconds rather than
           // holding the run for the full timeout on a job nobody will ever take.
-          if (!everSeen && Date.now() - t0w > 45000) {
+          // Two minutes, not 45 seconds. When the plugin cannot reach the runner it retries on
+          // a timer, and a timer in a background window fires about once a minute, so a plugin
+          // that is open and healthy can take that long to notice a runner that has just
+          // started. Giving up sooner than that accuses the innocent.
+          if (!everSeen && Date.now() - t0w > 300000) {
             waiting.delete(id);
             clearInterval(watch);
             reject(new Error("the pix-to-fig runner plugin has not contacted the server since it " +
