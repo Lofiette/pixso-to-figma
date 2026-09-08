@@ -46,8 +46,14 @@ let beat = null, rbuf = [], watchdog = null;
 // Hashes whose bytes have already crossed into the plugin this session.
 const sentImages = new Set();
 // How long a job may go without reporting before this frame stops waiting for it. A wedge costs
-// exactly this much of a run, so it is short enough to survive and long enough for a real build.
-const WATCHDOG_MIN = 8;
+// exactly this much of a run — but so does cutting off a build that was going to finish, and the
+// heaviest object in a file hands over 27 MB of payload and 100 MB of photographs before the
+// sandbox starts. So: a floor of eight minutes, plus a minute for every 5 MB handed over.
+const WATCHDOG_FLOOR_MIN = 8;
+let handedOver = 0;
+function watchdogMinutes() {
+  return Math.max(WATCHDOG_FLOOR_MIN, Math.ceil(handedOver / (5 * 1024 * 1024)));
+}
 function startBeat(id) {
   stopBeat();
   beat = setInterval(() => { post("/alive", { id }).catch(() => {}); }, 5000);
@@ -55,14 +61,15 @@ function startBeat(id) {
   // kept telling the runner all was well. After this deadline the frame gives up on the job, says
   // so, and goes back to polling — a lost job costs one run, a latched plugin costs the session.
   clearTimeout(watchdog);
+  const mins = watchdogMinutes();
   watchdog = setTimeout(() => {
     if (!busy) return;
     stopBeat();
-    log("job " + id + " produced no report in " + WATCHDOG_MIN + " minutes — giving up on it");
+    log("job " + id + " produced no report in " + mins + " minutes — giving up on it");
     status("job " + id + " abandoned — back to polling", "off");
-    post("/report", { id: id, i: 0, n: 1, d: JSON.stringify({ error: "no report from the plugin sandbox within " + WATCHDOG_MIN + " minutes" }) }).catch(() => {});
+    post("/report", { id: id, i: 0, n: 1, d: JSON.stringify({ error: "no report from the plugin sandbox within " + mins + " minutes" }) }).catch(() => {});
     busy = false;
-  }, WATCHDOG_MIN * 60 * 1000);
+  }, mins * 60 * 1000);
 }
 function stopBeat() { if (beat) { clearInterval(beat); beat = null; } clearTimeout(watchdog); watchdog = null; }
 
@@ -72,6 +79,7 @@ async function runJob(job) {
 
   // payload as text, handed over in slices so a multi-megabyte string never crosses in one message
   const text = await fetchT(HOST + "/job/" + job.id + "/payload", {}, 120000).then(r => r.text());
+  handedOver = text.length;
   send({ t: "payload-begin", id: job.id, kind: job.kind, total: text.length,
          rootNodeId: job.rootNodeId || null, cleanupRootId: job.cleanupRootId || null,
          page: job.page || null, pageBg: job.pageBg || null });
@@ -89,6 +97,7 @@ async function runJob(job) {
     send({ t: "image-begin", hash: imgs[i], total: b64.length });
     for (let o = 0; o < b64.length; o += CHUNK) send({ t: "image-chunk", d: b64.slice(o, o + CHUNK) });
     send({ t: "image-end", hash: imgs[i] });
+    handedOver += b64.length;
     sentImages.add(imgs[i]);
     fetched++;
     status("images " + fetched + " new of " + imgs.length, "on");
