@@ -23,14 +23,15 @@ const hashes = ir.imageHashes || [];
 console.log("image hashes: " + hashes.length);
 mkdirSync(OUTDIR, { recursive: true });
 
-// Encoding, not transport, is what made this slow. Building the string three bytes at a time
-// cost 34 microseconds per byte in Pixso's sandbox — five minutes for a 9 MB image. Pushing
-// character codes into an array and handing blocks to String.fromCharCode.apply is 2.4x faster,
-// and an 800 000-character response arrives intact, so the chunks can be far larger too.
+// Pixso's sandbox has no btoa and no Buffer, so this used to hand-roll base64 a byte at a time.
+// It also clones Figma's API surface, and that surface includes base64Encode — native, measured
+// at 135 ms/MB against 513 ms/MB for the hand-rolled loop, with byte-identical output. The loop
+// stays as a fallback for a build that predates the method.
 const B64 = [
-  "const A64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';",
-  "const CODES = []; for (let i = 0; i < 64; i++) CODES.push(A64.charCodeAt(i));",
   "function b64(u) {",
+  "  if (typeof pixso.base64Encode === 'function') return pixso.base64Encode(u);",
+  "  const A64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';",
+  "  const CODES = []; for (let i = 0; i < 64; i++) CODES.push(A64.charCodeAt(i));",
   "  const out = [], block = []; const n = u.length;",
   "  for (let i = 0; i < n; i += 3) {",
   "    const a = u[i], b = i + 1 < n ? u[i+1] : undefined, c = i + 2 < n ? u[i+2] : undefined;",
@@ -42,7 +43,8 @@ const B64 = [
   "  }",
   "  if (block.length) out.push(String.fromCharCode.apply(null, block));",
   "  return out.join('');",
-  "}"].join("\n");
+  "}",
+].join("\n");
 
 function run(src) {
   writeFileSync("_img.js", src, "utf8");
@@ -58,26 +60,32 @@ function extOf(b) {
   return "bin";
 }
 
-const CHUNK = Number(process.env.PX_IMG_CHUNK || 600000);
+// Every chunk request re-fetched the whole image and encoded one slice of it, so a large image
+// cost a process start plus a full fetch per 600 KB. A 16-million-character response was measured
+// arriving intact, so an image up to about 11 MB travels whole in one call and only what exceeds
+// that is sliced.
+const WHOLE = Number(process.env.PX_IMG_WHOLE || 11 * 1024 * 1024);
+const CHUNK = Number(process.env.PX_IMG_CHUNK || 8 * 1024 * 1024);
 const manifest = [];
 const unresolved = [];
 let ok = 0;
 
 for (const h of hashes) {
   const probe = run([
-    "await pixso.loadAllPagesAsync();",
+    "await pixso.loadAllPagesAsync();", B64,
     "const im = pixso.getImageByHash(" + JSON.stringify(h) + ");",
     "if (!im) return { missing: true };",
     "const by = await im.getBytesAsync();",
+    "if (by.length <= " + WHOLE + ") return { n: by.length, d: b64(by) };",
     "return { n: by.length };"
   ].join("\n"));
   if (probe.__err) { console.log("  FAIL " + h.slice(0, 8) + ": " + probe.__err); unresolved.push(h); continue; }
   if (probe.missing) { console.log("  unresolved " + h.slice(0, 8) + " (remote library, no local bytes)"); unresolved.push(h); continue; }
-
   const total = probe.n;
   const parts = [];
   let bad = false;
-  for (let off = 0; off < total; off += CHUNK) {
+  if (probe.d) parts.push(Buffer.from(probe.d, "base64"));
+  else for (let off = 0; off < total; off += CHUNK) {
     const len = Math.min(CHUNK, total - off);
     const r = run([
       "await pixso.loadAllPagesAsync();", B64,
