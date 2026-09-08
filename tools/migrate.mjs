@@ -56,7 +56,13 @@ stepFile("textruns", "px-textruns.mjs", [f("ir.json"), ROOT_ID, f("textruns.json
 step("images");
 stepFile("images", "px-images.mjs", [f("ir.json"), ROOT_ID, f("img")], f("img/manifest.json"));
 
+// After the images, because it appends its renders to the same manifest: an image paint whose
+// filter Figma has no field for is rendered by Pixso and travels as pixels instead.
+step("paint filters Figma cannot express");
+stepFile("paintsub", "px-paintsub.mjs", [f("ir.json"), f("abs.json"), ROOT_ID, f("img"), f("paintsub.json")], f("paintsub.json"));
+
 process.env.PX_TEXTRUNS = f("textruns.json");
+process.env.PX_PAINTSUB = f("paintsub.json");
 
 function pack(out, textsvg) {
   const args = [f("ir.json"), ROOT_ID, f("svg.json"), f("bounds.json"), f("abs.json"), out, f("textink.json")];

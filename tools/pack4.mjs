@@ -12,6 +12,28 @@ const ABS = JSON.parse(readFileSync(ABS_PATH, "utf8"));
 const TEXTINK = TEXTINK_PATH ? JSON.parse(readFileSync(TEXTINK_PATH, "utf8")) : {};
 const TEXTSVG = TEXTSVG_PATH ? JSON.parse(readFileSync(TEXTSVG_PATH, "utf8")) : {};
 
+// Image paints carrying a filter Figma has no field for (Hue) were rendered by Pixso instead, and
+// the render is swapped in here so everything downstream sees an ordinary image paint. Doing it on
+// the tree rather than in the encoder keeps the substitution in one place.
+const PAINTSUB = process.env.PX_PAINTSUB ? JSON.parse(readFileSync(process.env.PX_PAINTSUB, "utf8")).sub || {} : {};
+let paintsSubbed = 0;
+if (Object.keys(PAINTSUB).length) {
+  (function walk(n, path) {
+    const s = PAINTSUB[path.join(".")];
+    if (s && Array.isArray(n.fills) && n.fills[s.i]) {
+      const old = n.fills[s.i];
+      // The render is exactly the node's box, so it fills it with no transform and no filters.
+      n.fills = n.fills.slice();
+      n.fills[s.i] = { type: "IMAGE", scaleMode: "FILL", imageHash: s.hash,
+        imageTransform: [[1, 0, 0], [0, 1, 0]], rotation: 0,
+        blendMode: old.blendMode || "NORMAL", opacity: old.opacity === undefined ? 1 : old.opacity,
+        visible: old.visible !== false };
+      paintsSubbed++;
+    }
+    (n.children || []).forEach((c, i) => walk(c, path.concat(i)));
+  })(ir.tree, []);
+}
+
 let target = null;
 (function w(n) { if (n.id === ROOT_ID) { target = n; return; } if (n.children) n.children.forEach(w); })(ir.tree);
 if (!target) { console.error("not found: " + ROOT_ID); process.exit(1); }
@@ -255,7 +277,14 @@ function encode(n, path, parentIdx, parentAbs, parentNode) {
     const rt = mul(inv(parentAbs), abs);
     // Figma ignores rotation on auto-layout flow children; Pixso does not. For the quarter-turn
     // cases that actually occur, bake the turn into the size instead of losing it.
-    if (parentAL && o.M !== "ABSOLUTE" && Math.abs(Math.abs(rt[1]) - 1) < 1e-3 &&
+    // Baking the quarter turn into the size is right for a LEAF — a 24x1 divider rotated 90
+    // degrees is a 1x24 divider, and it looks identical. It is wrong for a node with children:
+    // they are placed in its own frame of reference, so flattening its matrix turns every one of
+    // them by 90 degrees. A sideways toolbar is built exactly that way — the panel is rotated and
+    // its rows counter-rotated to stand upright — and it arrived with every icon on its side.
+    // Those keep their rotation, and the builder takes them out of the flow so Figma honours it.
+    const isLeaf = !(n.children && n.children.length);
+    if (parentAL && isLeaf && o.M !== "ABSOLUTE" && Math.abs(Math.abs(rt[1]) - 1) < 1e-3 &&
         o.j !== undefined && o.k !== undefined) {
       // Bake the quarter turn into the size AND flatten the matrix, so stored size and stored
       // transform keep describing the same box.
@@ -337,6 +366,7 @@ console.log("root:        " + target.type + " " + JSON.stringify(target.name));
 console.log("nodes:       " + flat.length + "  (svg " + svgNodes + ", dict " + dict.length + ", svg assets " + svgList.length + ")");
 console.log("missing:     svg " + missingSvg + ", abs " + missingAbs + (degenerate ? "   (" + degenerate + " degenerate vectors placed from their transform)" : ""));
 console.log("text runs:   " + textRuns + " nodes with per-range fills recovered");
+if (paintsSubbed) console.log("paints:      " + paintsSubbed + " image paints replaced by a render, because Figma has no field for their filter");
 if (effectsCleaned) console.log("effects:     " + effectsCleaned + " had keys Figma rejects, stripped");
 console.log("strokes:     " + sideStrokes + " nodes with per-side stroke weights, " + arcs + " ellipse arcs/donuts");
 console.log("images:      " + Object.keys(IMAGEMAP).length + " hashes remapped in " + imageRemapped + " paints");

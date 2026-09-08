@@ -186,12 +186,25 @@ for (var j = 0; j < F.length; j++) {
   var pd = F[r2.p].d;
   if (pd.y && pd.y !== "NONE") {
     if (d2.M !== undefined) tryset(n2, "layoutPositioning", d2.M, id2);
-    if (d2.M !== "ABSOLUTE") {
+    // Figma will not rotate a child that sits in an auto-layout flow: the rotation is dropped
+    // without an error and the child ends up carrying its parent's. Pixso allows it, and a
+    // rotated container whose children are counter-rotated to stand upright is an ordinary way
+    // to build a sideways panel — the counter-rotation is exactly what disappears, so a toolbar
+    // built that way arrives with every icon on its side. A rotated child leaves the flow: the
+    // flow cannot express its placement anyway.
+    var mm = d2["7"];
+    var rotated = mm && (Math.abs(mm[1]) > 1e-6 || Math.abs(mm[3]) > 1e-6);
+    if (d2.M !== "ABSOLUTE" && !rotated) {
       if (!PINNED[j]) {
         if (d2.K !== undefined) tryset(n2, "layoutAlign", d2.K, id2);
         if (d2.L !== undefined) tryset(n2, "layoutGrow", d2.L, id2);
       }
       continue;
+    }
+    if (rotated && d2.M !== "ABSOLUTE") {
+      tryset(n2, "layoutPositioning", "ABSOLUTE", id2);
+      PINNED[j] = 1;
+      REPORT.rotPinned = (REPORT.rotPinned || 0) + 1;
     }
   }
   if (d2.Q !== undefined) tryset(n2, "constraints", dv(d2, "Q"), id2);
@@ -490,6 +503,68 @@ await flowFixPass(true); phase("flow2");
 await repairPass(true); phase("repair3");
 await placePass(); phase("place3");
 
+// Where a line height differs from the font's natural one, the two engines put the first line in
+// different places: Pixso centres the glyphs inside the line box, Figma hangs them from the
+// ascender. On a 140 px heading with the line height set to 140 that is 23 px — plainly visible,
+// and completely invisible to a geometry check, because every box is exactly where it belongs.
+// The gap is half the difference between the set line height and the natural one, so it is
+// computed rather than guessed: measure the natural height with the same scratch node the width
+// probe uses, and move the node by half the difference along its own vertical axis.
+//
+// The shift is stored on the node. The verifier reads it and corrects its expectation by the same
+// amount, so this stays visible in the acceptance report instead of hiding inside it.
+REPORT.textLineShift = 0; REPORT.textLineShiftSkipped = 0;
+var lineCache = {};
+for (var t2 = 0; t2 < F.length; t2++) {
+  if (t2 % YIELD_EVERY === 0 && t2 > 0) await settle();
+  var d3 = F[t2].d;
+  if (d3.b !== "TEXT" || d3["1"] === undefined || d3.T === undefined) continue;
+  var lh = dv(d3, "1");
+  if (!lh || lh.unit === "AUTO" || typeof lh.value !== "number") continue;
+  var setLH = lh.unit === "PIXELS" ? lh.value : (lh.value / 100) * d3.T;
+  var lfn = dv(d3, "U");
+  var luse = lfn && lfn.family && FONTSTATE[lfn.family + "|" + lfn.style] ? { family: lfn.family, style: lfn.style } : FB;
+  var lkey = luse.family + "|" + luse.style + "|" + d3.T;
+  var nat = lineCache[lkey];
+  try {
+    if (nat === undefined) {
+      if (!probe) {
+        probe = figma.createText();
+        probe.name = "pix-to-fig measurement";
+        figma.currentPage.appendChild(probe);
+      }
+      probe.fontName = luse;
+      probe.textAutoResize = "WIDTH_AND_HEIGHT";
+      probe.lineHeight = { unit: "AUTO" };
+      probe.letterSpacing = { unit: "PIXELS", value: 0 };
+      probe.textCase = "ORIGINAL";
+      probe.characters = "A";
+      probe.fontSize = d3.T;
+      nat = probe.height;
+      lineCache[lkey] = nat;
+    }
+    var shift = (setLH - nat) / 2;
+    if (REPORT.lineProbe === undefined) REPORT.lineProbe = [];
+    if (REPORT.lineProbe.length < 12) REPORT.lineProbe.push({ f: luse.family + " " + luse.style, size: d3.T,
+      set: Math.round(setLH * 100) / 100, nat: Math.round(nat * 100) / 100, shift: Math.round(shift * 100) / 100 });
+    if (Math.abs(shift) < 0.5) continue;
+    var tn = built[t2], tp = F[t2].p >= 0 ? F[F[t2].p].d : null;
+    // A child in the flow has no transform of its own to move, so it leaves the flow — the same
+    // trade the rotated children make, and for the same reason: the flow cannot place it correctly.
+    if (tp && tp.y && tp.y !== "NONE" && tn.layoutPositioning !== "ABSOLUTE") {
+      try { tn.layoutPositioning = "ABSOLUTE"; PINNED[t2] = 1; }
+      catch (eA) { REPORT.textLineShiftSkipped++; continue; }
+    }
+    var trt = tn.relativeTransform;
+    tn.relativeTransform = [[trt[0][0], trt[0][1], trt[0][2] + trt[0][1] * shift],
+                            [trt[1][0], trt[1][1], trt[1][2] + trt[1][1] * shift]];
+    tn.setPluginData("pxLineShift", String(shift));
+    REPORT.textLineShift++;
+  } catch (eL) { REPORT.textLineShiftSkipped++; }
+}
+phase("textLine");
+if (probe) { try { probe.remove(); } catch (eP) {} probe = null; }
+
 const root = built[0];
 // Migrating a whole page section by section only reproduces the page if each section lands where
 // the source had it. PAY.XY carries the source's own absolute position for that; without it the
@@ -541,6 +616,14 @@ else {
     if (i % VYIELD === 0 && i > 0) await vsettle();
     const d = F[i].d, p = F[i].p;
     if (i > 0) { const m = d["7"] || [1,0,0,0,1,0]; exp[i] = mul(exp[p], m); shown[i] = shown[p] && d.c !== false; }
+    // A text node the build moved to line its glyphs up with the source carries the amount it was
+    // moved by. Correct the expectation by the same amount rather than reporting it as an error,
+    // and count them, so a run that leans on this cannot look like a run that did not need it.
+    if (d.b === "TEXT") {
+      var ls = 0;
+      try { ls = parseFloat(flatN[i].getPluginData("pxLineShift")) || 0; } catch (eS) { ls = 0; }
+      if (ls) { exp[i] = mul(exp[i], [1, 0, 0, 0, 1, ls]); R.textShifted = (R.textShifted || 0) + 1; }
+    }
     if (shown[i]) R.visibleNodes++;
     const n = flatN[i];
     const e = exp[i];
