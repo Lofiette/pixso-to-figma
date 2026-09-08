@@ -228,8 +228,14 @@ for (var j = 0; j < F.length; j++) {
     // to build a sideways panel — the counter-rotation is exactly what disappears, so a toolbar
     // built that way arrives with every icon on its side. A rotated child leaves the flow: the
     // flow cannot express its placement anyway.
+    // The flow can express one thing: where a child sits. Anything else in the child's own
+    // matrix — a turn, a mirror, or both — is simply dropped, and a design that stands a label
+    // upright by flipping the parent and flipping the child back arrives with the child's flip
+    // gone and the parent's still there. That is a label written backwards. 671 nodes in one file
+    // carry a mirror, so the test is not "is it rotated" but "is its linear part the identity".
     var mm = d2["7"];
-    var rotated = mm && (Math.abs(mm[1]) > 1e-6 || Math.abs(mm[3]) > 1e-6);
+    var rotated = mm && (Math.abs(mm[0] - 1) > 1e-6 || Math.abs(mm[1]) > 1e-6 ||
+                         Math.abs(mm[3]) > 1e-6 || Math.abs(mm[4] - 1) > 1e-6);
     if (d2.M !== "ABSOLUTE" && !rotated) {
       if (!PINNED[j]) {
         if (d2.K !== undefined) tryset(n2, "layoutAlign", d2.K, id2);
