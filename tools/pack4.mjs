@@ -52,10 +52,21 @@ const INTERN = new Set(["fills", "strokes", "effects", "constraints", "fontName"
 
 const r2 = (x) => (typeof x === "number" && isFinite(x)) ? Math.round(x * 100) / 100 : x;
 const r4 = (x) => (typeof x === "number" && isFinite(x)) ? Math.round(x * 10000) / 10000 : x;
-function round(v) {
-  if (typeof v === "number") return r2(v);
-  if (Array.isArray(v)) return v.map(round);
-  if (v && typeof v === "object") { const o = {}; for (const k of Object.keys(v)) o[k] = round(v[k]); return o; }
+const r6 = (x) => (typeof x === "number" && isFinite(x)) ? Math.round(x * 1e6) / 1e6 : x;
+// Two decimals is the right precision for geometry measured in pixels and the wrong precision for
+// anything normalised to 0..1. A colour channel rounded to 1/100 lands up to 1.3 levels of 255 away
+// from the source, and an image's crop transform rounded the same way moved the crop of a 4096 px
+// image by sixteen pixels. Those keys keep six decimals; everything else stays at two.
+const PRECISE = new Set(["color", "imageTransform", "gradientTransform", "gradientStops",
+  "filters", "opacity"]);
+function round(v, precise) {
+  if (typeof v === "number") return precise ? r6(v) : r2(v);
+  if (Array.isArray(v)) return v.map((x) => round(x, precise));
+  if (v && typeof v === "object") {
+    const o = {};
+    for (const k of Object.keys(v)) o[k] = round(v[k], precise || PRECISE.has(k));
+    return o;
+  }
   return v;
 }
 const FILTER_OK = ["exposure", "contrast", "saturation", "temperature", "tint", "highlights", "shadows"];

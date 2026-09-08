@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 
 export function startJobServer(port = 3778) {
   let pending = null;              // { id, kind, rootNodeId, cleanupRootId, images:[hash] }
+  const parts = new Map();         // job id -> report slices still being assembled
   let payload = "";                // payload text for the pending job
   let blobs = new Map();           // hash -> Buffer
   const waiting = new Map();       // id -> { resolve, reject }
@@ -60,9 +61,26 @@ export function startJobServer(port = 3778) {
         let msg; try { msg = JSON.parse(body); } catch { return; }
         const w = waiting.get(msg.id);
         if (!w) return;
+        // A report carrying a render is megabytes, and one message that size never arrived at all:
+        // the plugin latched on "busy" and kept heartbeating, so the runner saw a healthy plugin
+        // that would never take another job. Reports now arrive in slices and are joined here.
+        // The unsliced shape stays accepted so an older plugin build still reports.
+        let report;
+        if (typeof msg.d === "string") {
+          const acc = parts.get(msg.id) || [];
+          acc[msg.i || 0] = msg.d;
+          parts.set(msg.id, acc);
+          const n = msg.n || 1;
+          let have = 0;
+          for (let k = 0; k < n; k++) if (typeof acc[k] === "string") have++;
+          if (have < n) return;
+          parts.delete(msg.id);
+          try { report = JSON.parse(acc.join("")); }
+          catch (e) { report = { error: "report did not parse: " + e.message }; }
+        } else report = msg.report;
         waiting.delete(msg.id);
         if (pending && pending.id === msg.id) { pending = null; payload = ""; blobs = new Map(); }
-        w.resolve(msg.report);
+        w.resolve(report);
       });
       return;
     }

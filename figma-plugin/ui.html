@@ -42,12 +42,24 @@ function send(msg) { parent.postMessage({ pluginMessage: msg }, "*"); }
 
 // While code.js is building, this frame keeps running, so it can tell the runner the plugin is
 // alive. Without it the runner cannot tell a long build from a closed window.
-let beat = null;
+let beat = null, rbuf = [], watchdog = null;
 function startBeat(id) {
   stopBeat();
   beat = setInterval(() => { post("/alive", { id }).catch(() => {}); }, 5000);
+  // A job that never reports back used to latch this frame on "busy" for good while the heartbeat
+  // kept telling the runner all was well. After this deadline the frame gives up on the job, says
+  // so, and goes back to polling — a lost job costs one run, a latched plugin costs the session.
+  clearTimeout(watchdog);
+  watchdog = setTimeout(() => {
+    if (!busy) return;
+    stopBeat();
+    log("job " + id + " produced no report in 30 minutes — giving up on it");
+    status("job " + id + " abandoned — back to polling", "off");
+    post("/report", { id: id, i: 0, n: 1, d: JSON.stringify({ error: "no report from the plugin sandbox within 30 minutes" }) }).catch(() => {});
+    busy = false;
+  }, 30 * 60 * 1000);
 }
-function stopBeat() { if (beat) { clearInterval(beat); beat = null; } }
+function stopBeat() { if (beat) { clearInterval(beat); beat = null; } clearTimeout(watchdog); watchdog = null; }
 
 async function runJob(job) {
   log("job " + job.id + " (" + job.kind + ")");
@@ -76,10 +88,19 @@ onmessage = async (e) => {
   const m = e.data.pluginMessage;
   if (!m) return;
   if (m.t === "log") { log(m.m); return; }
-  if (m.t === "report") {
+  if (m.t === "report-begin") { rbuf = []; return; }
+  if (m.t === "report-chunk") { rbuf.push(m.d); return; }
+  if (m.t === "report-end") {
     stopBeat();
-    log("report for " + m.id);
-    try { await post("/report", { id: m.id, report: m.report }); } catch (err) { log("post failed: " + err); }
+    const text = rbuf.join(""); rbuf = [];
+    log("report for " + m.id + " (" + text.length + " chars)");
+    // Sliced on the way out as well: the runner reassembles. One request per 400 000 characters.
+    try {
+      const n = Math.max(1, Math.ceil(text.length / CHUNK));
+      for (let i = 0; i < n; i++) {
+        await post("/report", { id: m.id, i: i, n: n, d: text.substr(i * CHUNK, CHUNK) });
+      }
+    } catch (err) { log("post failed: " + err); }
     busy = false;
     status("idle — waiting for the next job", "on");
   }

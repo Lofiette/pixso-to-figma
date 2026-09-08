@@ -66,6 +66,18 @@ figma.ui.onmessage = async function (msg) {
     report = { error: String((e3 && e3.message) || e3), stack: String((e3 && e3.stack) || "").slice(0, 900) };
   }
 
-  figma.ui.postMessage({ t: "report", id: job.id, report: report });
+  // The payload comes in slices because a multi-megabyte string does not survive one message.
+  // The report goes back the same way, for the same reason: a report carrying a rendered image
+  // silently never arrived, the UI frame stayed latched on "busy" and went on heartbeating, so the
+  // runner saw a live plugin that would never take another job. Slice it.
+  var text = "";
+  try { text = JSON.stringify(report); }
+  catch (e4) { text = JSON.stringify({ error: "report not serialisable: " + String((e4 && e4.message) || e4) }); }
+  var OUT = 400000;
+  figma.ui.postMessage({ t: "report-begin", id: job.id, total: text.length });
+  for (var o2 = 0; o2 < text.length; o2 += OUT) {
+    figma.ui.postMessage({ t: "report-chunk", id: job.id, d: text.substr(o2, OUT) });
+  }
+  figma.ui.postMessage({ t: "report-end", id: job.id });
   job = null;
 };
