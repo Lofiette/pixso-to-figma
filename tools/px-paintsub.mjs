@@ -25,6 +25,7 @@ const ir = JSON.parse(readFileSync(IR, "utf8"));
 const ABS = JSON.parse(readFileSync(ABS_PATH, "utf8"));
 const NL = String.fromCharCode(10);
 const SCALE = Number(process.env.PX_PAINTSUB_SCALE || 2);
+const MAXSIDE = Number(process.env.PX_IMG_MAXSIDE || 4096);
 
 // Everything Figma's ImageFilters can hold. A non-zero value under any other key is a filter that
 // cannot cross as data.
@@ -69,8 +70,12 @@ for (const j of jobs) {
     "  if (!n.children || !n.children[i]) return { e: 'path' };",
     "  n = n.children[i];",
     "}",
-    "const by = await n.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: " + SCALE + " } });",
-    "return { bytes: by.length, d: pixso.base64Encode(by) };",
+    // Capped the same way the render fallback is: past Figma's longest side the image is dropped,
+    // and a dropped image is a worse answer than a smaller one.
+    "const big = Math.max(1, n.width, n.height);",
+    "const sc = Math.min(" + SCALE + ", " + MAXSIDE + " / big);",
+    "const by = await n.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: sc } });",
+    "return { bytes: by.length, sc: sc, d: pixso.base64Encode(by) };",
   ].join(NL);
   writeFileSync("_paintsub.js", src, "utf8");
   let r;
@@ -93,7 +98,10 @@ for (const j of jobs) {
       continue;
     }
     const img = decodePNG(buf);
-    const lw = Math.max(1, Math.round(j.w * SCALE)), lh = Math.max(1, Math.round(j.h * SCALE));
+    // The export scale is capped by Figma's longest side, so the local size follows the scale
+    // that was actually used, not the one that was asked for.
+    const usedScale = typeof r.sc === "number" ? r.sc : SCALE;
+    const lw = Math.max(1, Math.round(j.w * usedScale)), lh = Math.max(1, Math.round(j.h * usedScale));
     buf = encodePNG(lw, lh, toLocalFrame(img, lin, lw, lh).rgba);
     console.log("  " + JSON.stringify(j.name) + "  render " + img.W + "x" + img.H +
       " turned back into the node's frame, " + lw + "x" + lh);

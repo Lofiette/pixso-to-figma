@@ -69,6 +69,8 @@ const CHUNK = Number(process.env.PX_IMG_CHUNK || 8 * 1024 * 1024);
 // The same photograph appears in dozens of objects and each object was pulling it out of Pixso
 // again: of the first 520 MB fetched from one file, 236 MB were repeats. The hash IS the content,
 // so a directory keyed by it turns every repeat into a file copy.
+// The longest side Figma will keep. Anything past it is dropped outright rather than scaled.
+const MAXSIDE = Number(process.env.PX_IMG_MAXSIDE || 4096);
 const CACHE = process.env.PX_IMG_CACHE || null;
 if (CACHE) mkdirSync(CACHE, { recursive: true });
 const cachePath = (h) => CACHE + "/" + h + ".bin";
@@ -142,7 +144,12 @@ for (const h of unresolved) {
     "  if (ch) for (const c of ch) scan(c);",
     "})(root);",
     "if (!best) return { e: 'no carrier node' };",
-    "const by = await best.node.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 4 } });",
+    // Four times the node's size, but never past the longest side Figma will hold: a 4096-wide
+    // node rendered at 4x became a 16384 x 9216 PNG of 76 MB, and Figma answered by dropping it —
+    // "an invalid image or thumbnail was removed" — so the fill silently had no image at all.
+    "const big = Math.max(1, best.node.width, best.node.height);",
+    "const sc = Math.min(4, " + MAXSIDE + " / big);",
+    "const by = await best.node.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: sc } });",
     "return { d: b64(by), n: by.length, nm: best.node.name, w: best.node.width, h: best.node.height };"
   ].join("\n"));
   if (r.__err || r.e || !r.d) { console.log("  RENDER FAIL " + h.slice(0, 8) + ": " + (r.__err || r.e || "no data")); continue; }
