@@ -65,10 +65,20 @@ function startBeat(id) {
   watchdog = setTimeout(() => {
     if (!busy) return;
     stopBeat();
-    log("job " + id + " produced no report in " + mins + " minutes — giving up on it");
-    status("job " + id + " abandoned — back to polling", "off");
+    log("job " + id + " produced no report in " + mins + " minutes — telling the runner, still waiting");
+    status("job " + id + " overran — waiting for the sandbox to come back", "off");
     post("/report", { id: id, i: 0, n: 1, d: JSON.stringify({ error: "no report from the plugin sandbox within " + mins + " minutes" }) }).catch(() => {});
-    busy = false;
+    // Deliberately NOT freeing the frame here. The sandbox is single-threaded: if it is still
+    // working, taking the next job now queues a second payload behind the first and the two jobs
+    // interleave — which is how one slow object turned into a second failure that had nothing
+    // wrong with it. The runner is told the job is lost; the frame waits for the sandbox to
+    // finish before it takes anything else, and only gives up on it after as long again.
+    watchdog = setTimeout(() => {
+      if (!busy) return;
+      log("sandbox never came back for " + id + " — resetting");
+      status("idle — waiting for the next job", "on");
+      busy = false;
+    }, mins * 60 * 1000);
   }, mins * 60 * 1000);
 }
 function stopBeat() { if (beat) { clearInterval(beat); beat = null; } clearTimeout(watchdog); watchdog = null; }
