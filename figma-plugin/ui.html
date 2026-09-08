@@ -45,6 +45,9 @@ function send(msg) { parent.postMessage({ pluginMessage: msg }, "*"); }
 let beat = null, rbuf = [], watchdog = null;
 // Hashes whose bytes have already crossed into the plugin this session.
 const sentImages = new Set();
+// How long a job may go without reporting before this frame stops waiting for it. A wedge costs
+// exactly this much of a run, so it is short enough to survive and long enough for a real build.
+const WATCHDOG_MIN = 8;
 function startBeat(id) {
   stopBeat();
   beat = setInterval(() => { post("/alive", { id }).catch(() => {}); }, 5000);
@@ -55,11 +58,11 @@ function startBeat(id) {
   watchdog = setTimeout(() => {
     if (!busy) return;
     stopBeat();
-    log("job " + id + " produced no report in 30 minutes — giving up on it");
+    log("job " + id + " produced no report in " + WATCHDOG_MIN + " minutes — giving up on it");
     status("job " + id + " abandoned — back to polling", "off");
-    post("/report", { id: id, i: 0, n: 1, d: JSON.stringify({ error: "no report from the plugin sandbox within 30 minutes" }) }).catch(() => {});
+    post("/report", { id: id, i: 0, n: 1, d: JSON.stringify({ error: "no report from the plugin sandbox within " + WATCHDOG_MIN + " minutes" }) }).catch(() => {});
     busy = false;
-  }, 30 * 60 * 1000);
+  }, WATCHDOG_MIN * 60 * 1000);
 }
 function stopBeat() { if (beat) { clearInterval(beat); beat = null; } clearTimeout(watchdog); watchdog = null; }
 
@@ -90,6 +93,9 @@ async function runJob(job) {
     fetched++;
     status("images " + fetched + " new of " + imgs.length, "on");
   }
+  // Said out loud because when a job stops answering, this window is the only place that knows
+  // how far it got: payload handed over, images handed over, or lost inside the sandbox.
+  log("job " + job.id + ": payload " + text.length + " chars, " + fetched + " new images of " + imgs.length);
   startBeat(job.id);
   status("building — this can take a few minutes", "on");
   send({ t: "payload-end" });

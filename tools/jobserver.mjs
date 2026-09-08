@@ -20,6 +20,7 @@ export function startJobServer(port = 3778) {
 
   const server = createServer((req, res) => {
     const url = new URL(req.url, "http://127.0.0.1");
+    if (process.env.PX_LOG_HTTP) console.log("    [http] " + req.method + " " + url.pathname + (url.search || ""));
     if (req.method === "OPTIONS") { cors(res); res.writeHead(204); return res.end(); }
 
     if (url.pathname === "/job" && req.method === "GET") {
@@ -44,6 +45,7 @@ export function startJobServer(port = 3778) {
       // numbers and the sandbox never came back — the build sat there until the watchdog freed
       // it half an hour later. Text is cheap to move and the sandbox decodes it natively, so the
       // frame asks for base64 and forwards it in the same slices the payload uses.
+      if (process.env.PX_LOG_IMG) console.log("  -> image " + im[1].slice(0, 8) + " " + b.length + " bytes" + (url.searchParams.get("b64") === "1" ? " as base64" : ""));
       if (url.searchParams.get("b64") === "1") {
         cors(res, "text/plain");
         return res.end(b.toString("base64"));
