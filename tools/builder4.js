@@ -77,7 +77,27 @@ function makeNode(d) {
 // Figma terminates a plugin that holds the thread too long, which is why the two largest
 // sections died in their final passes while everything smaller finished. Yield every so many
 // iterations inside the long loops, not just between them.
+// Two different things were being asked of one yield, and conflating them cost a run.
+//
+// settle() gives Figma a real turn so a pending relayout actually happens. Every pass that
+// measures geometry depends on it: without it the measurements are of the layout as it was, the
+// repairs act on stale numbers, and the build comes out with nodes missing and sizes hundreds of
+// pixels wrong. It is never optional and never cheap.
+//
+// breathe() exists only so Figma does not kill the plugin for holding the thread, and that does
+// not need a real turn every four hundred iterations. It matters because a timer in a window that
+// is not in front is throttled to about one a second: three passes over an object of 490 nodes
+// took exactly sixty seconds each — round numbers, because the time went on waiting, not working.
+// So breathing is rationed by the clock and is a free microtask in between.
 function settle() { return new Promise(function (r) { if (typeof setTimeout === "function") setTimeout(r, 0); else r(); }); }
+var BREATHE_MS = 1500;
+var lastBreath = Date.now();
+function breathe() {
+  var now = Date.now();
+  if (now - lastBreath < BREATHE_MS) return Promise.resolve();
+  lastBreath = now;
+  return settle();
+}
 var YIELD_EVERY = 400;
 const T0 = Date.now(); var TMARK = T0;
 REPORT.ms = {};
@@ -85,7 +105,7 @@ function phase(name) { var t = Date.now(); REPORT.ms[name] = t - TMARK; TMARK = 
 
 const built = [];
 for (var i = 0; i < F.length; i++) {
-  if (i % YIELD_EVERY === 0 && i > 0) await settle();
+  if (i % YIELD_EVERY === 0 && i > 0) await breathe();
   var rec = F[i], d = rec.d, id = "#" + i;
   var parent = rec.p < 0 ? figma.currentPage : built[rec.p];
   var node = makeNode(d);
@@ -180,7 +200,7 @@ for (var i = 0; i < F.length; i++) {
 
 async function placePass() {
 for (var j = 0; j < F.length; j++) {
-  if (j % YIELD_EVERY === 0 && j > 0) await settle();
+  if (j % YIELD_EVERY === 0 && j > 0) await breathe();
   var r2 = F[j], d2 = r2.d, n2 = built[j], id2 = "#" + j;
   if (r2.p < 0) continue;
   var pd = F[r2.p].d;
@@ -222,7 +242,7 @@ async function repairPass(countIt) {
 {
   await settle();
   for (var s1 = 0; s1 < F.length; s1++) {
-    if (s1 % YIELD_EVERY === 0 && s1 > 0) await settle();
+    if (s1 % YIELD_EVERY === 0 && s1 > 0) await breathe();
     var ds = F[s1].d, ns = built[s1];
     if (ds.j === undefined || ds.k === undefined) continue;
     if (Math.abs(ns.width - ds.j) <= 0.5 && Math.abs(ns.height - ds.k) <= 0.5) continue;
@@ -258,7 +278,7 @@ phase("create");
 var natCache = {};
 var probe = null;
 for (var tx = 0; tx < F.length; tx++) {
-  if (tx % YIELD_EVERY === 0 && tx > 0) await settle();
+  if (tx % YIELD_EVERY === 0 && tx > 0) await breathe();
   var dt = F[tx].d;
   if (dt.b !== "TEXT" || dt["8"] === undefined || !dt.S) continue;
   var ck = JSON.stringify([dt.S, dt.T, dt.U, dt["0"], dt.Y]);
@@ -323,7 +343,7 @@ async function flowDeltas() {
   var exp = [[1,0,0,0,1,0]], vis = [true], dp = [];
   var rn = built[0], rt0 = rn.absoluteTransform, ox = rt0[0][2], oy = rt0[1][2];
   for (var v = 0; v < F.length; v++) {
-    if (v % YIELD_EVERY === 0 && v > 0) await settle();
+    if (v % YIELD_EVERY === 0 && v > 0) await breathe();
     var dv2 = F[v].d, pv = F[v].p;
     if (v > 0) { exp[v] = MUL(exp[pv], dv2["7"] || [1,0,0,0,1,0]); vis[v] = vis[pv] && dv2.c !== false; }
     var e = exp[v], ew = dv2.j || 0, eh = dv2.k || 0, mnx = 1e9, mny = 1e9;
@@ -358,7 +378,7 @@ async function flowFixPass(last) {
   await settle();
   var fd = await flowDeltas(), dp = fd.dp, EXP = fd.exp, OX = fd.ox, OY = fd.oy;
   for (var g = 1; g < F.length; g++) {
-    if (g % YIELD_EVERY === 0 && g > 0) await settle();
+    if (g % YIELD_EVERY === 0 && g > 0) await breathe();
     var dg = F[g].d, ng = built[g], pi = F[g].p;
     if (!dp[g].vis || dp[g].d <= 0.5) continue;
     if (dp[pi] && dp[pi].d > 0.5) continue;
@@ -516,7 +536,7 @@ await placePass(); phase("place3");
 REPORT.textLineShift = 0; REPORT.textLineShiftSkipped = 0;
 var lineCache = {};
 for (var t2 = 0; t2 < F.length; t2++) {
-  if (t2 % YIELD_EVERY === 0 && t2 > 0) await settle();
+  if (t2 % YIELD_EVERY === 0 && t2 > 0) await breathe();
   var d3 = F[t2].d;
   if (d3.b !== "TEXT" || d3["1"] === undefined || d3.T === undefined) continue;
   var lh = dv(d3, "1");
@@ -588,7 +608,16 @@ RESULT = REPORT;
 // Verifier body. Shipped as PAY.V. Globals: figma, PAY. Set ROOT_NODE_ID before eval.
 export const VERIFIER_SRC = `
 const F = PAY.F;
+// The verifier only reads, so its yields are purely so Figma does not kill it: rationed by the
+// clock, free microtasks in between. Reading absoluteBoundingBox forces the layout itself.
 function vsettle() { return new Promise(function (r) { if (typeof setTimeout === "function") setTimeout(r, 0); else r(); }); }
+var vLastBreath = Date.now();
+function vbreathe() {
+  var now = Date.now();
+  if (now - vLastBreath < 1500) return Promise.resolve();
+  vLastBreath = now;
+  return vsettle();
+}
 var VYIELD = 400;
 const root = await figma.getNodeByIdAsync(ROOT_NODE_ID);
 const flatN = [];
@@ -613,7 +642,7 @@ else {
   const rt = root.absoluteTransform;
   const ox = rt[0][2], oy = rt[1][2];
   for (var i = 0; i < F.length; i++) {
-    if (i % VYIELD === 0 && i > 0) await vsettle();
+    if (i % VYIELD === 0 && i > 0) await vbreathe();
     const d = F[i].d, p = F[i].p;
     if (i > 0) { const m = d["7"] || [1,0,0,0,1,0]; exp[i] = mul(exp[p], m); shown[i] = shown[p] && d.c !== false; }
     // A text node the build moved to line its glyphs up with the source carries the amount it was
