@@ -585,11 +585,16 @@ for (var t2 = 0; t2 < F.length; t2++) {
       set: Math.round(setLH * 100) / 100, nat: Math.round(nat * 100) / 100, shift: Math.round(shift * 100) / 100 });
     if (Math.abs(shift) < 0.5) continue;
     var tn = built[t2], tp = F[t2].p >= 0 ? F[F[t2].p].d : null;
-    // A child in the flow has no transform of its own to move, so it leaves the flow — the same
-    // trade the rotated children make, and for the same reason: the flow cannot place it correctly.
+    // A child in the flow has no transform of its own to move, and taking it out of the flow to
+    // get one is not worth what it costs: a text that leaves the flow stops counting towards its
+    // parent's hugged size, so the parent collapses to its padding. Measured over a whole file:
+    // of the objects where this pass fired, 61 of 88 came out wrong — frames 852x190 built as
+    // 455x105 — against 7 of 202 where it did not fire. A first line 23 px low is a much smaller
+    // defect than a frame that lost half its size, so text in a flow keeps its place and is
+    // counted here instead.
     if (tp && tp.y && tp.y !== "NONE" && tn.layoutPositioning !== "ABSOLUTE") {
-      try { tn.layoutPositioning = "ABSOLUTE"; PINNED[t2] = 1; }
-      catch (eA) { REPORT.textLineShiftSkipped++; continue; }
+      REPORT.textLineShiftSkipped++;
+      continue;
     }
     var trt = tn.relativeTransform;
     tn.relativeTransform = [[trt[0][0], trt[0][1], trt[0][2] + trt[0][1] * shift],
