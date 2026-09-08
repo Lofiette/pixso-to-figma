@@ -89,7 +89,23 @@ function makeNode(d) {
 // is not in front is throttled to about one a second: three passes over an object of 490 nodes
 // took exactly sixty seconds each — round numbers, because the time went on waiting, not working.
 // So breathing is rationed by the clock and is a free microtask in between.
-function settle() { return new Promise(function (r) { if (typeof setTimeout === "function") setTimeout(r, 0); else r(); }); }
+// Neither of them may use setTimeout. Chromium throttles timers in a window that has been in the
+// background for a few minutes down to one wake-up a MINUTE, and Figma's plugin frame is such a
+// window whenever the user is not looking at it. That is not a slowdown, it is a wall: a single
+// settle cost sixty seconds, three passes over an object of 27 nodes took three minutes, and the
+// watchdog then wrote the object off as hung. The clue was that the phases came out at exactly
+// 60 s, and work does not produce round numbers.
+//
+// So a turn is taken through Figma's own scheduler instead. getNodeByIdAsync resolves on the
+// plugin host's message loop, which is not a timer and is not throttled, and reading
+// absoluteBoundingBox forces the pending layout before the turn is taken.
+var ROOT_ID_FOR_SETTLE = null;
+function settle() {
+  try { if (built[0]) void built[0].absoluteBoundingBox; } catch (e) {}
+  if (ROOT_ID_FOR_SETTLE === null && built[0]) { try { ROOT_ID_FOR_SETTLE = built[0].id; } catch (e) {} }
+  if (ROOT_ID_FOR_SETTLE) return figma.getNodeByIdAsync(ROOT_ID_FOR_SETTLE).then(function () {});
+  return Promise.resolve();
+}
 var BREATHE_MS = 1500;
 var lastBreath = Date.now();
 function breathe() {
@@ -610,7 +626,9 @@ export const VERIFIER_SRC = `
 const F = PAY.F;
 // The verifier only reads, so its yields are purely so Figma does not kill it: rationed by the
 // clock, free microtasks in between. Reading absoluteBoundingBox forces the layout itself.
-function vsettle() { return new Promise(function (r) { if (typeof setTimeout === "function") setTimeout(r, 0); else r(); }); }
+// Through Figma's scheduler, for the same reason as the builder: a timer here is throttled to one
+// wake-up a minute whenever the plugin window is not in front.
+function vsettle() { return figma.getNodeByIdAsync(ROOT_NODE_ID).then(function () {}); }
 var vLastBreath = Date.now();
 function vbreathe() {
   var now = Date.now();
