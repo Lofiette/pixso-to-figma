@@ -13,7 +13,7 @@
 //    remote library, so Pixso never materialised the bytes locally. For those the renderer is the
 //    only source: the smallest node carrying the fill is exported as PNG and recorded as a
 //    substitute, to be uploaded and remapped onto the hash after the fact.
-import { writeFileSync, readFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, readFileSync, mkdirSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 
 const [, , IR, ROOT_ID, OUTDIR = "../out/img"] = process.argv;
@@ -66,11 +66,27 @@ function extOf(b) {
 // that is sliced.
 const WHOLE = Number(process.env.PX_IMG_WHOLE || 11 * 1024 * 1024);
 const CHUNK = Number(process.env.PX_IMG_CHUNK || 8 * 1024 * 1024);
+// The same photograph appears in dozens of objects and each object was pulling it out of Pixso
+// again: of the first 520 MB fetched from one file, 236 MB were repeats. The hash IS the content,
+// so a directory keyed by it turns every repeat into a file copy.
+const CACHE = process.env.PX_IMG_CACHE || null;
+if (CACHE) mkdirSync(CACHE, { recursive: true });
+const cachePath = (h) => CACHE + "/" + h + ".bin";
+
 const manifest = [];
 const unresolved = [];
-let ok = 0;
+let ok = 0, fromCache = 0;
 
 for (const h of hashes) {
+  if (CACHE && existsSync(cachePath(h))) {
+    const buf = readFileSync(cachePath(h));
+    const ext = extOf(buf);
+    const file = OUTDIR + "/" + h + "." + ext;
+    writeFileSync(file, buf);
+    manifest.push({ hash: h, file, bytes: buf.length, ext, source: "bytes" });
+    ok++; fromCache++;
+    continue;
+  }
   const probe = run([
     "await pixso.loadAllPagesAsync();", B64,
     "const im = pixso.getImageByHash(" + JSON.stringify(h) + ");",
@@ -103,10 +119,12 @@ for (const h of hashes) {
   const file = OUTDIR + "/" + h + "." + ext;
   writeFileSync(file, buf);
   manifest.push({ hash: h, file: file, bytes: buf.length, ext: ext, source: "bytes" });
+  if (CACHE) { try { writeFileSync(cachePath(h), buf); } catch (e) {} }
   ok++;
   process.stdout.write("\r  " + ok + " fetched  ");
 }
 console.log("");
+if (fromCache) console.log("  " + fromCache + " of " + ok + " came from the shared cache");
 
 // Render fallback for hashes with no local bytes.
 for (const h of unresolved) {

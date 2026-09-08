@@ -61,7 +61,8 @@ for (let k = 0; k < jobs.length; k++) {
   try {
     execFileSync("node", [join(HERE, "migrate.mjs"), j.id, j.dir], {
       cwd: HERE, stdio: ["ignore", "pipe", "pipe"],
-      env: Object.assign({}, process.env, { PX_EXTRACT_ONLY: "1", PX_PLACE_ABS: "1" }),
+      env: Object.assign({}, process.env, { PX_EXTRACT_ONLY: "1", PX_PLACE_ABS: "1",
+        PX_IMG_CACHE: join(OUT_DIR, "imgcache") }),
     });
     extracted++;
   } catch (e) {
