@@ -82,8 +82,10 @@ async function runJob(job) {
   let fetched = 0;
   for (let i = 0; i < imgs.length; i++) {
     if (sentImages.has(imgs[i])) continue;
-    const buf = await fetchT(HOST + "/image/" + imgs[i], {}, 60000).then(r => r.arrayBuffer());
-    send({ t: "image", hash: imgs[i], bytes: Array.from(new Uint8Array(buf)) });
+    const b64 = await fetchT(HOST + "/image/" + imgs[i] + "?b64=1", {}, 120000).then(r => r.text());
+    send({ t: "image-begin", hash: imgs[i], total: b64.length });
+    for (let o = 0; o < b64.length; o += CHUNK) send({ t: "image-chunk", d: b64.slice(o, o + CHUNK) });
+    send({ t: "image-end", hash: imgs[i] });
     sentImages.add(imgs[i]);
     fetched++;
     status("images " + fetched + " new of " + imgs.length, "on");

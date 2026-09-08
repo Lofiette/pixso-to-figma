@@ -39,6 +39,15 @@ export function startJobServer(port = 3778) {
     if (im && req.method === "GET") {
       const b = blobs.get(im[1]);
       if (!b) { cors(res); res.writeHead(404); return res.end("no such image"); }
+      // Bytes used to cross into the plugin as a JS array of numbers, one element per byte. An
+      // object carrying 102 MB of photographs turned that into an array of a hundred million
+      // numbers and the sandbox never came back — the build sat there until the watchdog freed
+      // it half an hour later. Text is cheap to move and the sandbox decodes it natively, so the
+      // frame asks for base64 and forwards it in the same slices the payload uses.
+      if (url.searchParams.get("b64") === "1") {
+        cors(res, "text/plain");
+        return res.end(b.toString("base64"));
+      }
       cors(res, "application/octet-stream");
       return res.end(b);
     }

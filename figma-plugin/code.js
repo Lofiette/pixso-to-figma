@@ -5,7 +5,7 @@
 // exactly one place (tools/builder4.js) and is edited there. This is a transport and a host.
 figma.showUI(__html__, { width: 380, height: 260 });
 
-var buf = [], job = null, images = {};
+var buf = [], ibuf = [], job = null, images = {};
 
 function log(m) { figma.ui.postMessage({ t: "log", m: String(m) }); }
 
@@ -23,14 +23,20 @@ figma.ui.onmessage = async function (msg) {
   }
   if (msg.t === "payload-chunk") { buf.push(msg.d); return; }
 
-  if (msg.t === "image") {
-    // Content-addressed on both sides: identical bytes give an identical hash, so this map is
-    // usually the identity. It is not for images whose bytes Pixso never held locally, which the
-    // runner substitutes with a render.
+  // Content-addressed on both sides: identical bytes give an identical hash, so this map is
+  // usually the identity. It is not for images whose bytes Pixso never held locally, which the
+  // runner substitutes with a render.
+  //
+  // The bytes arrive as base64 in slices. They used to arrive as an array of numbers, one per
+  // byte, and an object carrying 102 MB of photographs never finished being handed over.
+  if (msg.t === "image-begin") { ibuf = []; return; }
+  if (msg.t === "image-chunk") { ibuf.push(msg.d); return; }
+  if (msg.t === "image-end") {
     try {
-      var im = figma.createImage(new Uint8Array(msg.bytes));
+      var im = figma.createImage(figma.base64Decode(ibuf.join("")));
       images[msg.hash] = im.hash;
     } catch (e) { log("image " + String(msg.hash).slice(0, 8) + " failed: " + (e.message || e)); }
+    ibuf = [];
     return;
   }
 
