@@ -695,3 +695,105 @@ Each of these cost more than any transfer bug, and each looked like a different 
 The verifier had the same shape of fault in miniature: it kept the *first* thirty offenders rather
 than the worst, so its list filled with half-pixel SVG wrappers near the top of the tree while a
 223 px error further down never appeared in it.
+
+## Fix round 8 — a second file, and three defects a geometry check cannot see
+
+The first file was migrated until the verifier said zero nodes out of place. A second file
+("Кейс Айдентика Лукоморье": 3 pages, 290 top-level objects, 25 351 nodes, heavy on photographs
+and boolean geometry) said the same thing on its cover — and the cover looked wrong. Every one of
+these moved no box at all, which is why the geometry check reported a clean run through all three.
+
+1. **Rotation is dropped on an auto-layout flow child.** Figma refuses it and says nothing. A
+   sideways toolbar is normally built by rotating the panel and counter-rotating its rows so they
+   stand upright; the counter-rotation is exactly what disappears, so every icon arrived on its
+   side — a "T" lying down, a paint bucket mirrored. Proved by reading the built file rather than
+   the render: `menu_tab` had `rot 0` where the source has −90 against a parent rotated 90, while a
+   sibling `Union` inside a plain frame kept its −90.
+
+   The packer already flattened such matrices, baking the quarter turn into the size. That is
+   right for a leaf — a 24x1 divider rotated 90 degrees is a 1x24 divider — and wrong for a node
+   with children, which carries its whole subtree round with it. Leaves keep the bake; nodes with
+   children keep the rotation and leave the flow.
+
+2. **Figma has no Hue among its image filters.** Its `ImageFilters` are exposure, contrast,
+   saturation, temperature, tint, highlights, shadows. Pixso's have Hue as well, and a cover
+   tinted pink by `hue: 0.65` arrived in the photograph's original blue. The packer's whitelist
+   was correct to drop the key — Figma rejects it — but dropping it silently lost the design.
+
+   A filter that cannot travel as data travels as pixels: Pixso renders the node with its own
+   engine and the render becomes the image, the same move already used for text whose override
+   Pixso will not disclose. Two things this needs. The render arrives in *screen* orientation, so
+   on a node rotated a quarter turn and mirrored, using it as a fill turns it a second time — the
+   first attempt produced a picture of a different part of the photograph. Pixels are put back
+   into the node's own frame first, which for a quarter turn is an exact permutation. And a render
+   carries everything else the node draws, so it is only substituted where the image paint is all
+   there is; anything else is reported, not silently flattened.
+
+3. **The first line of text sits in different places.** Where a line height differs from the
+   font's natural one the engines disagree: measured in Figma, its glyphs move by exactly half of
+   any line-height change, while Pixso puts the top of the capital almost exactly at the top of
+   the box. On a 140 px heading with line height set to 140 that is 23 px — plainly visible, and
+   invisible to a geometry check because the text box is exactly where it belongs.
+
+   Half the difference is applied and **stored on the node**; the verifier reads it and corrects
+   its expectation by the same amount, then reports how many nodes needed it. A correction that
+   hides inside a clean number is worse than the defect.
+
+Measured against the Pixso render of the same cover, 1920x1152:
+
+| | before | after |
+|---|---|---|
+| identical pixels | 76.6 % | 89.9 % |
+| mean delta | 8.51 | 1.92 |
+| differing by more than 191 | 3.32 % | 0.41 % |
+
+The last row is the one that matters: a delta above 191 means ink on one side and none on the
+other. Residual: the heading now sits 3 px high — "half the difference" is close but not the
+exact rule. The exact fix needs no model at all: render the affected text nodes from Pixso, read
+their ink box, and align to it. Only nodes whose line height is far from natural need it.
+
+### The report was the one direction that never chunked
+
+The payload travels to the plugin in slices. The report back did not, and a report carrying a
+rendered image — 1.26 million characters — never arrived at all. The UI frame stayed latched on
+`busy` and went on heartbeating, so the runner saw a healthy plugin that would never take another
+job as long as it was open. Reports now travel in slices too, and a job that produces no report
+releases the frame after thirty minutes.
+
+### Rounding is not one decision
+
+Every number in the payload was rounded to two decimals. That is right for geometry in pixels and
+wrong for anything normalised to 0..1: a colour channel lands up to 1.3 levels of 255 from the
+source, and the crop transform of a 4096 px image moved the crop by sixteen pixels. Colours,
+transforms, gradient stops, filters and opacities keep six decimals; the payload grew by 3 %.
+
+### What the geometry verifier cannot see, and what covers it
+
+Three of the four defects above passed the verifier. It compares the built tree against the
+payload, so it proves the build faithful to the payload and says nothing about either the payload
+being faithful to the source, or the two engines drawing the same payload the same way.
+
+- `coverage.mjs` covers the first: source tree against payload, splitting the difference into
+  vector subtrees collapsed on purpose and unexplained loss. On 160 objects of this file: 13 904
+  source nodes, 382 collapsed inside 3 522 vector subtrees, **unexplained loss zero**. Those 382
+  are the operands of boolean shapes — geometry exact, operand structure not preserved.
+- `visual.mjs` + `pxdiff.mjs` cover the second: the same object rendered by both engines, compared
+  by magnitude distribution rather than block count.
+
+### Extraction cost, measured twice
+
+Neither guess about where the time went survived measurement.
+
+- **Encoding, not transport.** Chunk requests re-fetched the entire image inside Pixso and encoded
+  one 600 KB slice of it, so a large image cost a process start plus a full fetch per slice. And
+  the base64 encoder was hand-rolled because the sandbox has no `btoa` — but Pixso clones Figma's
+  API, which has `base64Encode`: 135 ms/MB against 513, byte-identical output. A 16-million
+  character response was measured arriving intact, which contradicts the earlier note that one big
+  response comes back empty, so an image up to 11 MB now travels whole. Seven images: 46 s to 7.9 s.
+- **The same photograph, over and over.** Extraction is per top-level object and each object
+  fetched its images from scratch. Of the first 520 MB pulled from this file, 236 MB were repeats
+  — 160 of 337 fetches. The hash is the content, so a cache keyed by it makes a repeat a file copy.
+  Mean cost per object: 47 s to 24.5 s.
+
+What is left is Pixso's own floor: it exports one vector at a time, and a section of 933 vector
+nodes costs twenty minutes no matter what the driver does.
