@@ -43,6 +43,8 @@ function send(msg) { parent.postMessage({ pluginMessage: msg }, "*"); }
 // While code.js is building, this frame keeps running, so it can tell the runner the plugin is
 // alive. Without it the runner cannot tell a long build from a closed window.
 let beat = null, rbuf = [], watchdog = null;
+// Hashes whose bytes have already crossed into the plugin this session.
+const sentImages = new Set();
 function startBeat(id) {
   stopBeat();
   beat = setInterval(() => { post("/alive", { id }).catch(() => {}); }, 5000);
@@ -72,12 +74,19 @@ async function runJob(job) {
          page: job.page || null, pageBg: job.pageBg || null });
   for (let o = 0; o < text.length; o += CHUNK) send({ t: "payload-chunk", d: text.slice(o, o + CHUNK) });
 
-  // image bytes, one message each; the plugin turns them into Figma images and keeps the hash map
+  // Image bytes, one message each; the plugin turns them into Figma images and keeps the hash map.
+  // Migrating a file is one job per top-level object and the same photograph belongs to dozens of
+  // them, so a hash already sent this session is skipped — the other side keeps its map across
+  // jobs. On a photo-heavy file this is most of the traffic.
   const imgs = job.images || [];
+  let fetched = 0;
   for (let i = 0; i < imgs.length; i++) {
+    if (sentImages.has(imgs[i])) continue;
     const buf = await fetchT(HOST + "/image/" + imgs[i], {}, 60000).then(r => r.arrayBuffer());
     send({ t: "image", hash: imgs[i], bytes: Array.from(new Uint8Array(buf)) });
-    status("images " + (i + 1) + "/" + imgs.length, "on");
+    sentImages.add(imgs[i]);
+    fetched++;
+    status("images " + fetched + " new of " + imgs.length, "on");
   }
   startBeat(job.id);
   status("building — this can take a few minutes", "on");

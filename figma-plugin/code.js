@@ -14,7 +14,11 @@ figma.ui.onmessage = async function (msg) {
     job = { id: msg.id, kind: msg.kind, total: msg.total,
             rootNodeId: msg.rootNodeId, cleanupRootId: msg.cleanupRootId,
             page: msg.page || null, pageBg: msg.pageBg || null };
-    buf = []; images = {};
+    // The hash map is NOT cleared between jobs. Migrating a file means one job per top-level
+    // object, and the same photograph is used by dozens of them; sending its bytes again for
+    // every job was most of the transfer. The frame skips a hash it has already sent, so this
+    // side has to remember the mapping for the whole session.
+    buf = [];
     return;
   }
   if (msg.t === "payload-chunk") { buf.push(msg.d); return; }
