@@ -101,24 +101,60 @@ Three checks, not one:
 - **Verified by:** node counts per object, `coverage.mjs` over all 290 objects, and — from here on
   — `visual-all.mjs`, which is the only one of the three that sees what the owner sees.
 
-## Resume here (evening of 2026-09-08)
+## Day 2 (2026-09-09): what a second and a third file taught
 
-Everything is committed and nothing is running. To pick up:
+**Regression file — "Концепты приложений для демо в Спектре", 2 pages, 9 objects, 1611 nodes —
+migrated first time with no change to the algorithm.** 1574/1574 nodes, nothing out of position,
+no size difference, unexplained loss zero, and the only objects not marked exact were the four
+whose fonts this machine does not have. A screen of 400 nodes — poster, vector QR code, dashed
+tear line — compares at mean 3.6 against its source. Everything found on the hard file below was
+specific to complex geometry; none of it broke the simple case.
 
-1. Open the `pix-to-fig runner` plugin in Figma. **Check first that no node process is alive** —
-   `Get-Process node` — because a runner that outlived its shell keeps an established connection
-   to the plugin, and the plugin, now that it waits inside a held request, will sit on that dead
-   connection while a new runner waits for a plugin that never comes. Both sides look healthy and
-   neither can tell. That cost most of an evening.
-2. `PX_PLACE_ABS=1 node tools/build-all.mjs --clean --pages ../out/new/pages.json --dirs ../out/new/obj/dirs.txt`
-3. `node tools/visual-all.mjs ../out/new/obj/dirs.txt ../out/new/vis 700`
+### Defects found by looking, not by measuring
 
-The build has not been run since the mirror fix, so the file in Figma is from before it. All 290
-payloads are repacked and current.
+- **Frames imported from an SVG must never paint.** A group inside an SVG arrives as a nested
+  FRAME and a frame in Figma is white by default, so every petal of a diagram sat on an opaque
+  white rectangle. Nothing in the payload was white; the geometry check called the object exact.
+  Found by asking the built file which nodes paint white — 64 of them, petal-sized, called
+  "Frame". Clearing the wrapper's fill was never enough.
+- **A corner radius of zero is a value, not a default.** Pixso reports `cornerRadius` as one
+  number even when the corners differ (19.93 for 0/42.5/42.5/42.5) — the same lie it tells about
+  `strokeWeight`. The zero was dropped as "same as default", so the average stood. When the four
+  corners disagree they all travel and the average does not travel at all.
+- **The first line of text is placed with `leadingTrim: CAP_HEIGHT`, not by moving the node.**
+  Pixso puts the cap at the top of the line box; Figma centres the leading. Measured on the built
+  heading: ink top 19.6 without the trim, -3.4 with it, -3 in the source, box height unchanged.
+  Two earlier attempts moved the node instead — one collapsed hugging parents (61 of 88 objects
+  wrong), the other did nothing inside a flow.
+- **Guard a correction on position, not on size.** The trim can leave a box at exactly 22x48 and
+  still move the node 12 px, because a parent that aligns children on the baseline reflows when
+  the baseline moves. And guard in bulk: a relayout after every text meant 153 relayouts of one
+  section, fifty minutes instead of two seconds.
 
-**The next real question is the visual audit's output**, which has never been produced. The owner
-looked at the file and reported plenty of visible defects beyond the known fonts, and was right to:
-the geometry verifier reported 222 of 290 objects exact on a build that looked wrong in places.
-Two defects are known by picture — a label rendered backwards (mirror handling, fixed but not yet
-verified) and petal shapes sitting on opaque white squares with a ring outline missing (cause
-unknown; the first hypothesis, white fills in the payload, was checked and is wrong).
+### The rule that cost half a day
+
+**Rasterisation only happens in the front window.** `exportAsync` and `absoluteRenderBounds` never
+return while Figma is in the background — not slowly, never. Node lookups, property reads and
+whole builds work either way, which is why this took so long to see: the same export is 24 ms in
+front and unbounded behind. `tools/focus-figma.mjs` raises the window and the render tools call it.
+Figma MCP `get_screenshot` needs no window at all and is the better channel for pictures — but it
+renders the *saved* file, so a node built seconds ago may not be there yet.
+
+### Also fixed
+
+- The plugin's poll loop re-entered itself with nothing to await while a job ran — a spin, not a
+  poll. It took the frame's thread so the report could never be handled.
+- The runner holds a `/job` request until it has work, because a timer in a background window
+  fires once a minute and the runner was giving up after 45 seconds on a healthy plugin.
+- `build-one` took no page, so objects landed on whichever page was open. It takes `--pages` now.
+- **A runner process that outlives its shell keeps the plugin's connection.** Check
+  `Get-Process node` before believing anything about the plugin.
+
+### Open, in order
+
+1. **A few pixels of per-card offset** in "Инфографика блоки": the best alignment differs per
+   card (-8,-7 for one, -3,-5 for another), so it is not one global shift. The geometry verifier
+   cannot see it — it agrees with the payload. Largest open class by magnitude.
+2. The visual audit has still never completed over a whole file.
+3. Fonts this machine lacks: SF Pro Text/Display, Proxima Nova, Helvetica, Fact Semi Expanded,
+   Stolzl, Pragmatica. Report, do not compensate.
