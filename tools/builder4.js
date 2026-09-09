@@ -49,7 +49,17 @@ function makeNode(d) {
   if (t === "SVG") {
     REPORT.svg++;
     var n = figma.createNodeFromSvg(S[d["6"]]);
-    try { n.fills = []; } catch (e) {}
+    // Clearing the wrapper's fill is not enough. A group inside the SVG comes in as a nested
+    // FRAME, and a frame in Figma is white by default — so every petal of a flower arrived
+    // sitting on an opaque white rectangle the size of its own bounding box, while the payload
+    // carried no white fill anywhere and the geometry check reported the object exact. Frames
+    // that come out of an SVG import never paint: anything the drawing actually fills arrives as
+    // a VECTOR or a RECTANGLE, which are left alone.
+    (function clearFrames(x) {
+      if (x.type === "FRAME") { try { x.fills = []; } catch (e) {} }
+      var ch = x.children;
+      if (ch) for (var ci = 0; ci < ch.length; ci++) clearFrames(ch[ci]);
+    })(n);
     // createNodeFromSvg sizes the frame to the viewBox, which is the INKED box. d.j/d.k are the
     // layout box the source node occupied. Where they differ, d["9"] is where the ink sits inside
     // the layout box. Pin the imported children to MIN/MIN first or resizing scales them.
