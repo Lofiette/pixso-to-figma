@@ -555,18 +555,24 @@ await placePass(); phase("place3");
 //
 // The shift is stored on the node. The verifier reads it and corrects its expectation by the same
 // amount, so this stays visible in the acceptance report instead of hiding inside it.
-REPORT.textLineShift = 0; REPORT.textLineShiftSkipped = 0;
+// Where a line height differs from the font's natural one, the two engines put the first line
+// in different places: Pixso sets the top of the capital at the top of the line box, Figma
+// centres the leading. On a 140 px heading with the line height set to 140 that is 23 px.
+//
+// Figma has a field for exactly this — leadingTrim: CAP_HEIGHT — and it costs nothing else.
+// Measured on the built heading: ink top 19.6 without it, -3.4 with it, against -3 in the
+// source render, and the box height unchanged at 460. The previous attempt moved the node
+// instead, which needed it out of the auto-layout flow, which collapsed its parent to the
+// padding: 61 of 88 objects wrong in one run. Setting a property moves nothing.
+//
+// It is still reverted whenever it changes the box, because on a hugging box the trim would
+// shrink the node and the layout around it.
+REPORT.textTrimmed = 0; REPORT.textTrimReverted = 0; REPORT.textTrimSkipped = 0;
 var lineCache = {};
 for (var t2 = 0; t2 < F.length; t2++) {
   if (t2 % YIELD_EVERY === 0 && t2 > 0) await breathe();
   var d3 = F[t2].d;
   if (d3.b !== "TEXT" || d3["1"] === undefined || d3.T === undefined) continue;
-  // Only a text box with a FIXED height. When the box hugs its text, the box top follows the
-  // first line rather than the other way round, and both engines put it in the same place — so
-  // the correction has nothing to correct and simply moves the text. Measured: a heading in an
-  // auto-sized box came out with its glyphs the same size and in the same place to the pixel,
-  // and this pass then lifted it 33 px. The defect it exists for needs a fixed box to appear.
-  if (d3.X !== "NONE") { REPORT.textLineShiftSkipped++; continue; }
   var lh = dv(d3, "1");
   if (!lh || lh.unit === "AUTO" || typeof lh.value !== "number") continue;
   var setLH = lh.unit === "PIXELS" ? lh.value : (lh.value / 100) * d3.T;
@@ -591,29 +597,17 @@ for (var t2 = 0; t2 < F.length; t2++) {
       nat = probe.height;
       lineCache[lkey] = nat;
     }
-    var shift = (setLH - nat) / 2;
-    if (REPORT.lineProbe === undefined) REPORT.lineProbe = [];
-    if (REPORT.lineProbe.length < 12) REPORT.lineProbe.push({ f: luse.family + " " + luse.style, size: d3.T,
-      set: Math.round(setLH * 100) / 100, nat: Math.round(nat * 100) / 100, shift: Math.round(shift * 100) / 100 });
-    if (Math.abs(shift) < 0.5) continue;
-    var tn = built[t2], tp = F[t2].p >= 0 ? F[F[t2].p].d : null;
-    // A child in the flow has no transform of its own to move, and taking it out of the flow to
-    // get one is not worth what it costs: a text that leaves the flow stops counting towards its
-    // parent's hugged size, so the parent collapses to its padding. Measured over a whole file:
-    // of the objects where this pass fired, 61 of 88 came out wrong — frames 852x190 built as
-    // 455x105 — against 7 of 202 where it did not fire. A first line 23 px low is a much smaller
-    // defect than a frame that lost half its size, so text in a flow keeps its place and is
-    // counted here instead.
-    if (tp && tp.y && tp.y !== "NONE" && tn.layoutPositioning !== "ABSOLUTE") {
-      REPORT.textLineShiftSkipped++;
-      continue;
-    }
-    var trt = tn.relativeTransform;
-    tn.relativeTransform = [[trt[0][0], trt[0][1], trt[0][2] + trt[0][1] * shift],
-                            [trt[1][0], trt[1][1], trt[1][2] + trt[1][1] * shift]];
-    tn.setPluginData("pxLineShift", String(shift));
-    REPORT.textLineShift++;
-  } catch (eL) { REPORT.textLineShiftSkipped++; }
+    // Only where the two engines actually disagree. A line height that matches the font's own
+    // puts the first line in the same place on both sides, and trimming it would move it.
+    if (Math.abs(setLH - nat) < 1) continue;
+    var tn = built[t2];
+    var w0 = tn.width, h0 = tn.height;
+    tn.leadingTrim = "CAP_HEIGHT";
+    if (Math.abs(tn.width - w0) > 0.5 || Math.abs(tn.height - h0) > 0.5) {
+      tn.leadingTrim = "NONE";
+      REPORT.textTrimReverted++;
+    } else REPORT.textTrimmed++;
+  } catch (eL) { REPORT.textTrimSkipped++; }
 }
 phase("textLine");
 if (probe) { try { probe.remove(); } catch (eP) {} probe = null; }
@@ -680,14 +674,6 @@ else {
     if (i % VYIELD === 0 && i > 0) await vbreathe();
     const d = F[i].d, p = F[i].p;
     if (i > 0) { const m = d["7"] || [1,0,0,0,1,0]; exp[i] = mul(exp[p], m); shown[i] = shown[p] && d.c !== false; }
-    // A text node the build moved to line its glyphs up with the source carries the amount it was
-    // moved by. Correct the expectation by the same amount rather than reporting it as an error,
-    // and count them, so a run that leans on this cannot look like a run that did not need it.
-    if (d.b === "TEXT") {
-      var ls = 0;
-      try { ls = parseFloat(flatN[i].getPluginData("pxLineShift")) || 0; } catch (eS) { ls = 0; }
-      if (ls) { exp[i] = mul(exp[i], [1, 0, 0, 0, 1, ls]); R.textShifted = (R.textShifted || 0) + 1; }
-    }
     if (shown[i]) R.visibleNodes++;
     const n = flatN[i];
     const e = exp[i];
