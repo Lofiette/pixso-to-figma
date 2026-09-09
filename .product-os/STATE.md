@@ -3,158 +3,142 @@
 ## Now
 
 - **Task:** Pixso -> Figma migration, 1:1, whole files, no model in the loop.
-- **Status:** the first file migrates cleanly. A second file — "Кейс Айдентика Лукоморье", 3 pages,
-  290 top-level objects, 25 351 nodes, heavy on photographs and boolean geometry — migrates
-  structurally (every node count exact) and is still being worked on visually.
+- **Status:** four files migrated. The mechanism works and is packaged for designers to test.
+  What is not finished is the *acceptance*: one check is blind by construction, one has never run
+  to the end of a file, and one object's verification is unexplained.
+
+The transfer itself contains no model call. Every step is deterministic code: the same file gives
+the same result twice. What has needed a model is **debugging** — a new class of defect does not
+find itself.
+
+## How it is run
 
 ```
-node tools/px-pages.mjs ../out/new/pages.json                    # what pages exist
-node tools/migrate-file.mjs ../out/new/pages.json <outDir>       # extract every object, Pixso only
-node tools/repack-all.mjs <outDir>/dirs.txt                      # after any builder/packer change
-PX_PLACE_ABS=1 node tools/build-all.mjs --pages ../out/new/pages.json --dirs <outDir>/dirs.txt
-node tools/visual-all.mjs <outDir>/dirs.txt ../out/new/vis 700   # how different it LOOKS
-node tools/coverage.mjs --dirs <outDir>/dirs.txt                 # source vs payload
+start.cmd                                    # designer path: double-click, then press the button
+node tools/run.mjs <name>                    # the same thing, with a console
+node tools/run.mjs <name> --page "<page>"    # one page of a very large file
+```
+
+Or the steps separately, from `tools/`:
+
+```
+node px-pages.mjs ../out/mine/pages.json
+node migrate-file.mjs ../out/mine/pages.json ../out/mine/obj
+node repack-all.mjs ../out/mine/obj/dirs.txt        # after any builder or packer change
+PX_PLACE_ABS=1 node build-all.mjs --clean --pages ../out/mine/pages.json --dirs ../out/mine/obj/dirs.txt
+node visual-all.mjs ../out/mine/obj/dirs.txt ../out/mine/vis 700
+node coverage.mjs --dirs ../out/mine/obj/dirs.txt
 ```
 
 Extraction needs Pixso desktop with its MCP on `127.0.0.1:3667`. Building needs the
-`pix-to-fig runner` plugin open in the target Figma file — and only the plugin, because the MCP
-channel cannot see locally installed fonts at all. Figma screenshots can also come through the
-Figma MCP (`get_screenshot`), which is the cheap way to look at a result.
+`pix-to-fig runner` plugin open in the target Figma file. Figma MCP `get_screenshot` is the
+reliable way to get a picture — but it renders the **saved** file, so a node built seconds ago may
+not be there yet.
 
 ## The one thing to understand before touching anything
 
-**The geometry verifier compares the built tree against the payload.** It proves the build
-faithful to the payload. It says nothing about (a) the payload being faithful to the source, or
-(b) the two engines drawing the same payload the same way. Every defect a person actually noticed
-on this file passed it with zero nodes out of position.
-
-Three checks, not one:
+**The geometry verifier compares the built tree against the payload.** It proves the build faithful
+to the payload and nothing else. It cannot see the payload being wrong about the source, and it
+cannot see the two editors drawing the same payload differently. Every defect a person actually
+noticed passed it with zero nodes out of position.
 
 | check | what it catches | tool |
 |---|---|---|
-| build vs payload | a build that did not do what it was told | the verifier, in `build-all` |
+| build vs payload | a build that did not do what it was told | the verifier, inside `build-all` |
 | source vs payload | anything that never reached the payload | `coverage.mjs` |
-| render vs render | anything the two engines draw differently | `visual-all.mjs` |
+| render vs render | anything the two editors draw differently | `visual-all.mjs` |
 
-## Second file: what has been found and fixed
+## What four files proved
 
-- **Rotation and mirroring are dropped on auto-layout flow children.** The flow expresses where a
-  child sits and nothing else. A design that stands a label upright by flipping the parent and
-  flipping the child back arrives with the child's flip gone — a label written backwards. 671 nodes
-  in this file carry a mirror. Such children now leave the flow. The packer still bakes a quarter
-  turn into a LEAF's size, which is right for a divider and wrong for a node with children.
-- **Figma has no Hue among its image filters** (exposure, contrast, saturation, temperature, tint,
-  highlights, shadows — that is the list). A filter that cannot travel as data travels as pixels:
-  Pixso renders the node, and the render is turned back into the node's own frame first, because
-  exports come out in screen orientation.
-- **Figma drops an image whose longest side is over 4096** and says so on the canvas. The render
-  fallback was exporting a 4096-wide node at 4x — 16384 x 9216, 76 MB. Both renderers now fit.
-- **Rounding is not one decision.** Two decimals is right for pixels and wrong for anything
-  normalised to 0..1. Colours, transforms, gradient stops, filters and opacities keep six.
-- **A line height that differs from the font's natural one puts the first line 23 px low.** Half
-  the difference is applied where the node has its own transform, and the amount is stored on the
-  node so the verifier corrects its expectation by the same amount. Text inside a flow is left
-  alone and counted: taking it out of the flow to move it collapsed its parent to the padding, and
-  cost 61 of 88 objects in one run.
+| file | nodes | result |
+|---|---|---|
+| Кейс Айдентика Лукоморье | 25 351 | boolean geometry, photographs, filters — the hard one |
+| Концепты для демо в Спектре | 1 611 | migrated first time, no change to the algorithm |
+| Капасити-менеджмент | 28 190 | dense interface; every node count exact, worst error 1 px |
+| Концепты (45 objects) | 45 110 | 43 of 45 verified, worst 1.41 px; two verification failures below |
 
-## Transport, which cost more time than any of the above
+`coverage.mjs` has never reported an unexplained loss on any of them.
+
+## Defects fixed, and what each was
+
+Design-side, found by looking rather than measuring:
+
+- **Frames imported from an SVG must never paint.** A group inside an SVG becomes a nested FRAME
+  and a frame in Figma is white by default, so every petal of a diagram sat on a white rectangle.
+  Nothing in the payload was white. Found by asking the built file which nodes paint white.
+- **A corner radius of zero is a value, not a default.** Pixso reports `cornerRadius` as one number
+  even when the corners differ — the same lie it tells about `strokeWeight`. Dropping the zero as
+  "same as the default" left the average standing. The owner found this by eye.
+- **The first line of text is placed with `leadingTrim: CAP_HEIGHT`.** Pixso puts the cap at the top
+  of the line box, Figma centres the leading — 23 px on a 140 px heading. Measured: ink top 19.6
+  without the trim, -3.4 with it, -3 in the source, box height unchanged.
+- **Guard a correction on position, not on size, and in bulk.** The trim can leave a box at exactly
+  22x48 and still move the node 12 px, because a parent aligning children on the baseline reflows
+  when the baseline moves. Checking after each of 153 texts took fifty minutes; two relayouts do.
+- **Rotation and mirroring are dropped on auto-layout flow children.** The flow expresses position
+  and nothing else, so a child whose linear part is not the identity leaves the flow. 671 mirrored
+  nodes in one file; a label built by flipping the parent and flipping the child back came out
+  backwards.
+- **Figma has no Hue among its image filters**, so that filter travels as pixels: Pixso renders the
+  node, and the render is turned back into the node's own frame first.
+- **Figma drops an image whose longest side is over 4096.** Both renderers scale to fit.
+- **An image rotation of 360 degrees or more loses the whole fill** — Figma refuses the assignment
+  outright, so the node ends with no image at all. Normalised at pack time.
+- **Rounding is not one decision.** Colours, transforms, gradient stops, filters and opacities keep
+  six decimals; geometry keeps two.
+
+Transport, which cost more than all of the above:
 
 - **Never use setTimeout inside the plugin.** Chromium throttles timers in a background window to
-  one wake-up a MINUTE. A single yield cost 60 seconds; three passes over a 27-node object took
-  three minutes and the watchdog then wrote it off as hung. Turns are taken through
-  `getNodeByIdAsync`, which resolves on Figma's own message loop.
-- **Settling and breathing are different things.** `settle()` gives Figma a real turn so a pending
-  relayout happens and a measurement is of the current layout; `breathe()` only stops Figma killing
-  the plugin. Making both cheap produced 6 259 of 10 133 nodes and errors of 400 px.
-- **Everything crossing into or out of the plugin must be sliced.** The report path was the one
-  direction that was not, and a report carrying a render never arrived: the frame latched on busy
-  and kept heartbeating, so the runner saw a healthy plugin that would never take another job.
-- **Image bytes travel as base64 text**, never as an array of numbers (102 MB became an array of a
-  hundred million numbers and never came back), and each hash crosses once per session.
-- **A watchdog must scale with the work handed over**, and must not free the frame while the
-  sandbox may still be busy — a single-threaded sandbox with two jobs queued fails the second one
-  for no reason of its own.
-
-## Extraction cost, measured
-
-- Each image is fetched once per file and cached by hash: 236 MB of the first 520 MB were repeats.
-- `pixso.base64Encode` is native and 3.8x the hand-rolled loop, and a 16-million character response
-  arrives intact, so an image up to 11 MB travels in one call.
-- What remains is Pixso's own floor: it exports one vector at a time, and a section of 933 vector
-  nodes costs twenty minutes no matter what the driver does.
-
-## Open
-
-- **Fonts this machine does not have** — Fact Semi Expanded, Stolzl, Pragmatica, SF Pro Text
-  Semibold. 13 objects cannot match until they are installed. Owner's decision: report them
-  honestly, do not compensate. `build-all` counts them separately from real defects.
-- **The visual audit has not yet been run on the whole file.** Owner reports plenty of visible
-  defects beyond the fonts; two are known by picture — a mirrored label (fixed, unverified) and
-  petal shapes sitting on opaque white squares (cause not yet found; the first guess, white fills
-  in the payload, was checked and is wrong).
-- Boolean operands are collapsed into one SVG on purpose: 708 of 25 351 nodes. Geometry exact,
-  operand structure not preserved. Unexplained loss: zero.
-
-## Checkpoint
-
-- **Updated:** 2026-09-08
-- **Verified by:** node counts per object, `coverage.mjs` over all 290 objects, and — from here on
-  — `visual-all.mjs`, which is the only one of the three that sees what the owner sees.
-
-## Day 2 (2026-09-09): what a second and a third file taught
-
-**Regression file — "Концепты приложений для демо в Спектре", 2 pages, 9 objects, 1611 nodes —
-migrated first time with no change to the algorithm.** 1574/1574 nodes, nothing out of position,
-no size difference, unexplained loss zero, and the only objects not marked exact were the four
-whose fonts this machine does not have. A screen of 400 nodes — poster, vector QR code, dashed
-tear line — compares at mean 3.6 against its source. Everything found on the hard file below was
-specific to complex geometry; none of it broke the simple case.
-
-### Defects found by looking, not by measuring
-
-- **Frames imported from an SVG must never paint.** A group inside an SVG arrives as a nested
-  FRAME and a frame in Figma is white by default, so every petal of a diagram sat on an opaque
-  white rectangle. Nothing in the payload was white; the geometry check called the object exact.
-  Found by asking the built file which nodes paint white — 64 of them, petal-sized, called
-  "Frame". Clearing the wrapper's fill was never enough.
-- **A corner radius of zero is a value, not a default.** Pixso reports `cornerRadius` as one
-  number even when the corners differ (19.93 for 0/42.5/42.5/42.5) — the same lie it tells about
-  `strokeWeight`. The zero was dropped as "same as default", so the average stood. When the four
-  corners disagree they all travel and the average does not travel at all.
-- **The first line of text is placed with `leadingTrim: CAP_HEIGHT`, not by moving the node.**
-  Pixso puts the cap at the top of the line box; Figma centres the leading. Measured on the built
-  heading: ink top 19.6 without the trim, -3.4 with it, -3 in the source, box height unchanged.
-  Two earlier attempts moved the node instead — one collapsed hugging parents (61 of 88 objects
-  wrong), the other did nothing inside a flow.
-- **Guard a correction on position, not on size.** The trim can leave a box at exactly 22x48 and
-  still move the node 12 px, because a parent that aligns children on the baseline reflows when
-  the baseline moves. And guard in bulk: a relayout after every text meant 153 relayouts of one
-  section, fifty minutes instead of two seconds.
-
-### The rule that cost half a day
-
-**Rasterisation only happens in the front window.** `exportAsync` and `absoluteRenderBounds` never
-return while Figma is in the background — not slowly, never. Node lookups, property reads and
-whole builds work either way, which is why this took so long to see: the same export is 24 ms in
-front and unbounded behind. `tools/focus-figma.mjs` raises the window and the render tools call it.
-Figma MCP `get_screenshot` needs no window at all and is the better channel for pictures — but it
-renders the *saved* file, so a node built seconds ago may not be there yet.
-
-### Also fixed
-
-- The plugin's poll loop re-entered itself with nothing to await while a job ran — a spin, not a
-  poll. It took the frame's thread so the report could never be handled.
-- The runner holds a `/job` request until it has work, because a timer in a background window
-  fires once a minute and the runner was giving up after 45 seconds on a healthy plugin.
-- `build-one` took no page, so objects landed on whichever page was open. It takes `--pages` now.
+  one wake-up a MINUTE. A single yield cost 60 s. Turns go through `getNodeByIdAsync`.
+- **Settling and breathing are different.** `settle()` gives Figma a real turn so a pending relayout
+  happens; `breathe()` only stops Figma killing the plugin. Making both cheap produced 6 259 of
+  10 133 nodes and errors of 400 px.
+- **Rasterisation only happens in the front window.** `exportAsync` and `absoluteRenderBounds` never
+  return in the background. `tools/focus-figma.mjs` raises it; the render tools call it.
+- **Everything crossing the plugin boundary must be sliced**, in both directions, and image bytes
+  travel as base64 text — never as an array of numbers.
+- **The runner holds a `/job` request** until it has work, so the plugin needs no timer to poll.
+- **The poll loop must not re-enter itself while a job runs** — that is a spin, and it takes the
+  frame's only thread so the report can never be handled.
 - **A runner process that outlives its shell keeps the plugin's connection.** Check
   `Get-Process node` before believing anything about the plugin.
 
-### Open, in order
+## Packaged for designers
 
-1. **A few pixels of per-card offset** in "Инфографика блоки": the best alignment differs per
-   card (-8,-7 for one, -3,-5 for another), so it is not one global shift. The geometry verifier
-   cannot see it — it agrees with the payload. Largest open class by magnitude.
-2. The visual audit has still never completed over a whole file.
-3. Fonts this machine lacks: SF Pro Text/Display, Proxima Nova, Helvetica, Fact Semi Expanded,
-   Stolzl, Pragmatica. Report, do not compensate.
+`README.md` is written for them and leads with what the tool does **not** do. `start.cmd` starts the
+runner; the plugin has a button that asks it to begin; `tools/build-lib.mjs` holds the build loop so
+the button and the command line share one copy of it. Extraction progress is streamed as it happens.
+
+One step in the README is still marked TODO: the menu path that turns on Pixso's MCP server. The
+owner knows it; ask.
+
+## Open, in order
+
+1. **A node id that points at different nodes at different times. Start here.** The "WIP" section of
+   the fourth file (5722 nodes) verifies as 3 nodes. The section is in the file and complete — 30
+   children, 6809 nodes — but the id recorded for it was a RECTANGLE named "Resize" minutes later,
+   and a probe of that id returned a FRAME with two TEXT children. Reproducible. Until this is
+   understood, that object cannot be verified and nothing about id stability should be assumed.
+   A second object failed verification as "root not found" and then verified 20/20 on a retry,
+   which may be the same thing.
+2. **macOS.** `start.cmd` is Windows-only; `focus-figma.mjs` is PowerShell. Needs `start.command`
+   and `osascript -e 'tell application "Figma" to activate'`. Half an hour.
+3. **The plugin's UX.** "connecting…" and "runner not reachable" report an emergency when nothing is
+   wrong — the runner has simply gone off to Pixso. One coherent line of state instead.
+4. **A per-card offset of a few pixels** in "Инфографика блоки" of the Лукоморье file: the best
+   alignment differs per card, so it is not one global shift. The geometry verifier agrees with the
+   payload and cannot see it.
+5. **The visual audit has never completed over a whole file.**
+6. Fonts this machine lacks: SF Pro Text/Display, Proxima Nova, Helvetica, Fact Semi Expanded,
+   Stolzl, Pragmatica. Report, do not compensate — the owner's decision.
+7. Components arrive as frames. Deferred by the owner as a separate task. If it is taken up, the
+   cheap thing to do first is to record each instance's Pixso component id on the built node with
+   `setPluginData`: that keeps the option open and costs nothing, and without it the link is gone
+   for good.
+
+## Checkpoint
+
+- **Updated:** 2026-09-09, end of day two.
+- **Verified by:** node counts per object on four files, `coverage.mjs` over all of them, and pixel
+  comparison on individual objects. Not by a completed visual audit — that has never run to the end.
