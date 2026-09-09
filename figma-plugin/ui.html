@@ -78,6 +78,7 @@ function startBeat(id) {
       log("sandbox never came back for " + id + " — resetting");
       status("idle — waiting for the next job", "on");
       busy = false;
+      poll();
     }, mins * 60 * 1000);
   }, mins * 60 * 1000);
 }
@@ -139,6 +140,7 @@ onmessage = async (e) => {
     } catch (err) { log("post failed: " + err); }
     busy = false;
     status("idle — waiting for the next job", "on");
+    poll();
   }
 };
 
@@ -147,40 +149,61 @@ onmessage = async (e) => {
 // window to one wake-up a minute: on a timer this plugin asked for work once a minute while the
 // runner, hearing nothing for 45 seconds, decided it was not there. Held requests need no timer,
 // so a job is picked up the instant it is posted no matter which window is in front.
-let ok = false;
+// One loop, and it only runs while there is nothing to wait for. Written as a loop rather than a
+// chain of self-calls because the chain had a hole: while a job was running it re-entered itself
+// with nothing to await, which is not a poll but a spin — it took the frame's thread and the
+// report from the sandbox could never be handled. The build sat there until the runner gave up.
+//
+// While a job is running this returns and stops entirely. Whatever ends the job — the report
+// arriving, or the watchdog giving up on it — starts it again.
+let polling = false;
 async function poll() {
-  ok = false;
+  if (polling) return;
+  polling = true;
   try {
-  if (!busy) {
-    try {
-      const j = await fetchT(HOST + "/job?client=plugin", {}, 40000).then(r => r.json());
-      misses = 0;
-      ok = true;
-      if (j && j.kind && j.kind !== "noop") {
-        busy = true;
-        // Anything thrown in here used to leave busy latched and the plugin silent for good.
-        try { await runJob(j); }
-        catch (jerr) {
-          busy = false;
-          stopBeat();
-          log("job " + j.id + " failed: " + jerr);
-          status("job failed — " + jerr, "off");
-          try { await post("/report", { id: j.id, report: { error: String(jerr && jerr.message || jerr) } }); } catch (e2) {}
-        }
-      } else status("idle — waiting for the next job", "on");
-    } catch (err) {
-      misses++;
-      if (misses > 2) status("runner not reachable on " + HOST, "off");
+    while (!busy) {
+      let ok = false;
+      try {
+        // The runner holds this request until it has a job, so the wait IS the request. That
+        // matters because Chromium throttles timers in a background window to one wake-up a
+        // minute: on a timer this plugin asked for work once a minute while the runner, hearing
+        // nothing for 45 seconds, decided it was not there.
+        const j = await fetchT(HOST + "/job?client=plugin", {}, 40000).then(r => r.json());
+        misses = 0;
+        ok = true;
+        if (j && j.kind && j.kind !== "noop") {
+          busy = true;
+          // Anything thrown in here used to leave busy latched and the plugin silent for good.
+          try { await runJob(j); }
+          catch (jerr) {
+            busy = false;
+            stopBeat();
+            log("job " + j.id + " failed: " + jerr);
+            status("job failed — " + jerr, "off");
+            try { await post("/report", { id: j.id, report: { error: String(jerr && jerr.message || jerr) } }); } catch (e2) {}
+          }
+        } else status("idle — waiting for the next job", "on");
+      } catch (err) {
+        misses++;
+        if (misses > 2) status("runner not reachable on " + HOST, "off");
+      }
+      if (!ok) {
+        // The runner is not there. This is the one place a timer belongs: something has to slow
+        // the retries down, and being a minute late to notice a runner that has just started is
+        // survivable — the runner waits five minutes before drawing conclusions.
+        polling = false;
+        setTimeout(poll, 1000);
+        return;
+      }
     }
-  }
   } catch (fatal) {
     // nothing may stop the loop: a stopped loop looks exactly like a working plugin
     log("poll error: " + fatal);
-    ok = false;
+    polling = false;
+    setTimeout(poll, 1000);
+    return;
   }
-  // Straight back in when the last request behaved — the request itself is the wait. A timer is
-  // only for the failure path, where something has to slow the retries down.
-  if (ok || busy) poll(); else setTimeout(poll, 1000);
+  polling = false;
 }
 poll();
 </script>
