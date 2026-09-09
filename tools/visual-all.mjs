@@ -15,6 +15,7 @@ import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync } fr
 import { execFileSync } from "node:child_process";
 import { join, basename } from "node:path";
 import { startJobServer } from "./jobserver.mjs";
+import { focusFigma } from "./focus-figma.mjs";
 import { decodePNG } from "./pngutil.mjs";
 
 const [, , LIST, OUT = "../out/visual", MAXSIDE = "700"] = process.argv;
@@ -65,6 +66,8 @@ function compare(a, b) {
     sizeMismatch: (a.W !== b.W || a.H !== b.H) ? (a.W + "x" + a.H + " vs " + b.W + "x" + b.H) : null };
 }
 
+// Rasterisation only happens in the front window, and every render here depends on it.
+console.log("figma window: " + focusFigma());
 const srv = startJobServer(3778);
 await srv.ready;
 console.log("comparing " + dirs.length + " objects at " + W_TARGET + " px wide" + NL);
@@ -80,6 +83,7 @@ if (existsSync(DONE_FILE)) {
   }
   console.log(already.size + " already compared, skipping those" + String.fromCharCode(10));
 }
+function logErr(r) { console.log("      ! " + r.error); return r; }
 const rows = [...already.values()];
 const t0 = Date.now();
 for (let i = 0; i < dirs.length; i++) {
@@ -94,15 +98,15 @@ for (let i = 0; i < dirs.length; i++) {
   // which object it hung on.
   process.stdout.write("  [" + (i + 1) + "/" + dirs.length + "] " + name + String.fromCharCode(10));
   const px = pixsoRender(meta.rootId, W_TARGET);
-  if (px.e || !px.d) { rows.push({ name, error: "pixso: " + (px.e || "no data") }); continue; }
+  if (px.e || !px.d) { rows.push(logErr({ name, error: "pixso: " + (px.e || "no data") })); continue; }
   let fg;
   try { fg = await srv.post({ kind: "render", rootNodeId: build.rootId }, JSON.stringify({ V: figSrc(build.rootId, px.w) }), new Map(), 120000); }
-  catch (e) { rows.push({ name, error: "figma: " + e.message.slice(0, 60) }); continue; }
-  if (!fg || fg.e || !fg.d) { rows.push({ name, error: "figma: " + JSON.stringify(fg).slice(0, 60) }); continue; }
+  catch (e) { rows.push(logErr({ name, error: "figma: " + e.message.slice(0, 60) })); continue; }
+  if (!fg || fg.e || !fg.d) { rows.push(logErr({ name, error: "figma: " + JSON.stringify(fg).slice(0, 60) })); continue; }
 
   let a, b;
   try { a = decodePNG(Buffer.from(px.d, "base64")); b = decodePNG(Buffer.from(fg.d, "base64")); }
-  catch (e) { rows.push({ name, error: "decode: " + e.message.slice(0, 60) }); continue; }
+  catch (e) { rows.push(logErr({ name, error: "decode: " + e.message.slice(0, 60) })); continue; }
   const c = compare(a, b);
   rows.push({ name, ...c });
   appendFileSync(DONE_FILE, JSON.stringify({ name, ...c }) + String.fromCharCode(10), "utf8");

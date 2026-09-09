@@ -10,6 +10,7 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { startJobServer } from "./jobserver.mjs";
+import { focusFigma } from "./focus-figma.mjs";
 
 const [, , PX_ID, FIG_ID, OUT = "../out/visual", SCALE = "1"] = process.argv;
 if (!PX_ID || !FIG_ID) { console.error("usage: node visual.mjs <pixsoNodeId> <figmaNodeId> <outDir> [scale]"); process.exit(1); }
@@ -40,6 +41,8 @@ const figSrc = [
   "}",
 ].join(NL);
 
+// Rasterisation only happens in the front window, and every render here depends on it.
+console.log("figma window: " + focusFigma());
 const srv = startJobServer(3778);
 await srv.ready;
 console.log("rendering Figma " + FIG_ID + " — the runner plugin must be open…");
