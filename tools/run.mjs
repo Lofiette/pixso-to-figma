@@ -10,7 +10,7 @@
 // runner — and has no way to reach Pixso. And this process has to hold that address for the whole
 // run, extraction included, or there is nobody to report progress to during the long part. That
 // is why building is a function here rather than a separate script.
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawnSync, spawn } from "node:child_process";
 import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -99,15 +99,40 @@ try {
   say("примерно минута на тысячу узлов. Плагин пока не нужен.");
   const exArgs = [join(HERE, "migrate-file.mjs"), PAGES, DIRS];
   if (ONLY_PAGE) exArgs.push("--page", ONLY_PAGE);
-  const ex = spawnSync("node", exArgs, {
-    cwd: HERE, stdio: ["ignore", "pipe", "inherit"], encoding: "utf8",
-    env: Object.assign({}, process.env),
+  // Read the child line by line as it goes, rather than collecting everything and parsing it
+  // when it is over. Extraction is twenty minutes of silence otherwise — and the whole reason
+  // to capture the output was to be able to show it while it matters.
+  const status = await new Promise((resolve) => {
+    const p = spawn("node", exArgs, { cwd: HERE, stdio: ["ignore", "pipe", "pipe"] });
+    let buf = "";
+    const NL = String.fromCharCode(10);
+    const onData = (chunk) => {
+      buf += String(chunk);
+      let at;
+      while ((at = buf.indexOf(NL)) >= 0) {
+        const line = buf.slice(0, at).replace(String.fromCharCode(13), "");
+        buf = buf.slice(at + 1);
+        // Parsed by hand rather than by pattern: the line shape is fixed and known, and a
+        // regular expression written through three layers of shell quoting has eaten its own
+        // backslashes more than once today.
+        //   [12/34] FRAME 2161n  "Ресурсы/ Меню закрыто"   (382s elapsed)
+        if (line.charAt(0) === "[") {
+          const close = line.indexOf("]");
+          const q1 = line.indexOf(String.fromCharCode(34));
+          const q2 = line.lastIndexOf(String.fromCharCode(34));
+          const counter = close > 0 ? line.slice(1, close) : "";
+          const name = q2 > q1 ? line.slice(q1 + 1, q2) : "";
+          say("  " + counter.replace("/", " из ") + "   " + name);
+        } else if (line.indexOf("FAILED") >= 0 || line.indexOf("extracted ") >= 0) {
+          say("  " + line.trim().slice(0, 120));
+        }
+      }
+    };
+    p.stdout.on("data", onData);
+    p.stderr.on("data", onData);
+    p.on("close", (code) => resolve(code));
   });
-  // migrate-file prints one line per object; show the last of them as they land
-  for (const line of String(ex.stdout || "").split(/\r?\n/)) {
-    const m = /^\[(\d+)\/(\d+)\]\s+\S+\s+(\d+)n\s+(.+?)\s+\(/.exec(line);
-    if (m) srv.say("  " + m[1] + "/" + m[2] + "  " + m[4]);
-  }
+  const ex = { status };
   if (ex.status !== 0) say("Часть объектов извлечь не удалось — продолжаю с тем, что есть.");
 
   const list = join(DIRS, "dirs.txt");
