@@ -6,10 +6,21 @@
   #l { white-space: pre-wrap; font: 11px ui-monospace, Menlo, Consolas, monospace; color: #666;
        max-height: 180px; overflow: auto; }
   .off { color: #b00; } .on { color: #0a0; }
+  #go { display: block; width: 100%; margin: 4px 0 8px; padding: 8px; font: 600 12px inherit;
+        color: #fff; background: #0d99ff; border: 0; border-radius: 6px; cursor: pointer; }
+  #go[disabled] { background: #9dcff0; cursor: default; }
+  #p { white-space: pre-wrap; font: 11px ui-monospace, Menlo, Consolas, monospace; color: #333;
+       margin-bottom: 6px; }
 </style>
 <div id="s">connecting…</div>
+<button id="go" hidden>Перенести файл из Pixso</button>
+<div id="p"></div>
 <div id="l"></div>
 <script>
+// The button exists because a designer should not have to drive this from a terminal. It cannot
+// start the migration itself — this frame may only talk to one address and has no way to reach
+// Pixso — so it asks the runner to start, and the runner does everything and sends its progress
+// back here. The runner has to be running first; when it is not, there is nothing to press.
 const HOST = "http://localhost:3778";
 const CHUNK = 400000;
 const S = document.getElementById("s"), L = document.getElementById("l");
@@ -157,6 +168,27 @@ onmessage = async (e) => {
 // While a job is running this returns and stops entirely. Whatever ends the job — the report
 // arriving, or the watchdog giving up on it — starts it again.
 let polling = false;
+const GO = document.getElementById("go"), P = document.getElementById("p");
+GO.onclick = async () => {
+  GO.disabled = true;
+  GO.textContent = "Идёт перенос…";
+  try { await post("/start", {}); } catch (e) { log("could not start: " + e); GO.disabled = false; }
+};
+
+// What the runner is doing, in this window, because the person who pressed the button is looking
+// at Figma and not at a console.
+async function control() {
+  try {
+    const c = await fetchT(HOST + "/control", {}, 8000).then(r => r.json());
+    GO.hidden = false;
+    if (c.phase === "idle") { GO.disabled = false; GO.textContent = "Перенести файл из Pixso"; }
+    else if (c.phase === "done") { GO.disabled = true; GO.textContent = "Готово"; }
+    P.textContent = (c.lines || []).join(String.fromCharCode(10));
+  } catch (e) { GO.hidden = true; P.textContent = ""; }
+  setTimeout(control, 2000);
+}
+control();
+
 async function poll() {
   if (polling) return;
   polling = true;

@@ -54,3 +54,22 @@ out/run/
 
 # Per-section extraction directories: regenerable from Pixso
 out/s-*/
+
+# Per-file working directories: everything here is regenerable from the source file
+# by tools/migrate-file.mjs, and a single run of a large file is hundreds of megabytes.
+out/
+
+# Scratch probes written while chasing one specific defect. Kept out of the way; the
+# tools worth keeping are the ones named in the README.
+tools/probe-*.mjs
+tools/align*.mjs
+tools/gridcmp.mjs
+tools/ping*.mjs
+tools/size-probe.mjs
+tools/inkbox.mjs
+tools/lightbox.mjs
+tools/rowprof.mjs
+tools/count-pages.mjs
+tools/t-noimg.mjs
+tools/_*.js
+_pages.js

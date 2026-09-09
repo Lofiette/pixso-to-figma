@@ -5,6 +5,12 @@ import { createServer } from "node:http";
 export function startJobServer(port = 3778) {
   let pending = null;              // { id, kind, rootNodeId, cleanupRootId, images:[hash] }
   const parts = new Map();         // job id -> report slices still being assembled
+  // A run can be started from the plugin window. The plugin may only reach this address, so if
+  // there is to be a button then the whole run — extraction included — has to be driven by
+  // whoever owns this port, and progress has to come back the same way.
+  let startWanted = null, startResolve = null;
+  const progress = [];
+  let phase = "idle";
   const waiters = [];              // held /job requests, answered the moment a job is posted
   let payload = "";                // payload text for the pending job
   let blobs = new Map();           // hash -> Buffer
@@ -23,6 +29,19 @@ export function startJobServer(port = 3778) {
     const url = new URL(req.url, "http://127.0.0.1");
     if (process.env.PX_LOG_HTTP) console.log("    [http] " + req.method + " " + url.pathname + (url.search || ""));
     if (req.method === "OPTIONS") { cors(res); res.writeHead(204); return res.end(); }
+
+    if (url.pathname === "/control" && req.method === "GET") {
+      cors(res, "application/json");
+      return res.end(JSON.stringify({ phase: phase, lines: progress.slice(-14) }));
+    }
+
+    if (url.pathname === "/start" && req.method === "POST") {
+      req.resume();
+      cors(res, "application/json");
+      res.end(JSON.stringify({ ok: true }));
+      if (startResolve) { const r = startResolve; startResolve = null; r(); }
+      return;
+    }
 
     if (url.pathname === "/job" && req.method === "GET") {
       const fromPlugin = url.searchParams.get("client") === "plugin";
@@ -140,6 +159,11 @@ export function startJobServer(port = 3778) {
 
   return {
     ready,
+    // Wait until somebody presses the button in the plugin window.
+    waitForStart() { if (!startWanted) startWanted = new Promise((r) => { startResolve = r; }); return startWanted; },
+    // Say something the plugin window can show while a long step runs.
+    say(line) { progress.push(String(line)); if (progress.length > 400) progress.shift(); },
+    phase(p) { phase = String(p); },
     lastPoll: () => lastPoll,
     // Queue one job and resolve when the plugin reports back. One job at a time by construction:
     // the plugin only ever sees the job that is pending right now.
