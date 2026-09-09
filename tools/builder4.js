@@ -579,6 +579,7 @@ await placePass(); phase("place3");
 // shrink the node and the layout around it.
 REPORT.textTrimmed = 0; REPORT.textTrimReverted = 0; REPORT.textTrimSkipped = 0;
 var lineCache = {};
+var trimmed = [];
 for (var t2 = 0; t2 < F.length; t2++) {
   if (t2 % YIELD_EVERY === 0 && t2 > 0) await breathe();
   var d3 = F[t2].d;
@@ -610,15 +611,29 @@ for (var t2 = 0; t2 < F.length; t2++) {
     // Only where the two engines actually disagree. A line height that matches the font's own
     // puts the first line in the same place on both sides, and trimming it would move it.
     if (Math.abs(setLH - nat) < 1) continue;
-    var tn = built[t2];
-    var w0 = tn.width, h0 = tn.height;
+    // Remember where it is, then trim. Both the trimming and the checking happen in bulk: a
+    // relayout after every single text meant 153 full relayouts of a section and a build that ran
+    // for fifty minutes instead of three. Two relayouts are enough for any number of them.
+    var tn = built[t2], at0 = tn.absoluteTransform;
+    trimmed.push({ n: tn, x: at0[0][2], y: at0[1][2], w: tn.width, h: tn.height });
     tn.leadingTrim = "CAP_HEIGHT";
-    if (Math.abs(tn.width - w0) > 0.5 || Math.abs(tn.height - h0) > 0.5) {
-      tn.leadingTrim = "NONE";
-      REPORT.textTrimReverted++;
-    } else REPORT.textTrimmed++;
   } catch (eL) { REPORT.textTrimSkipped++; }
 }
+// Guard on where the node ends up, not on how big it is. The trim can leave the box exactly
+// 22x48 and still move the node 12 px — measured, by taking the trim off again and watching it
+// jump back — because a parent that aligns its children on the baseline reflows when the baseline
+// moves. Size said nothing about that; position says everything, and position is what this is
+// trying to preserve. The reads have to come after Figma has actually re-laid the page out.
+await settle();
+for (var tt = 0; tt < trimmed.length; tt++) {
+  if (tt % YIELD_EVERY === 0 && tt > 0) await breathe();
+  var rec2 = trimmed[tt], at1 = rec2.n.absoluteTransform;
+  if (Math.abs(at1[0][2] - rec2.x) > 0.5 || Math.abs(at1[1][2] - rec2.y) > 0.5 ||
+      Math.abs(rec2.n.width - rec2.w) > 0.5 || Math.abs(rec2.n.height - rec2.h) > 0.5) {
+    try { rec2.n.leadingTrim = "NONE"; REPORT.textTrimReverted++; } catch (e) {}
+  } else REPORT.textTrimmed++;
+}
+await settle();
 phase("textLine");
 if (probe) { try { probe.remove(); } catch (eP) {} probe = null; }
 
