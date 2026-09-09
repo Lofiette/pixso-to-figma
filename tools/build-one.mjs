@@ -12,7 +12,13 @@ import { startJobServer } from "./jobserver.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-const [, , DIR, VERIFY_ONLY] = process.argv;
+// A file is not one page. Without this the object lands on whatever page happens to be open,
+// which is how a section belonging to the work page ended up scattered across the cover.
+const argv = process.argv.slice(2);
+let PAGES = null;
+const pgi = argv.indexOf("--pages");
+if (pgi >= 0) PAGES = JSON.parse(readFileSync(argv.splice(pgi, 2)[1], "utf8"));
+const [DIR, VERIFY_ONLY] = argv;
 if (!DIR) { console.error("usage: node build-one.mjs <payloadDir> [rootNodeId]"); process.exit(1); }
 const f = (n) => join(DIR, n);
 // Always start from the first-pass payload: a payload2.json left over from an earlier run belongs
@@ -32,6 +38,19 @@ if (existsSync(f("img/manifest.json"))) {
   }
 }
 
+function pageFor(rootId) {
+  if (!PAGES) return {};
+  for (const p of PAGES.pages) for (const c of p.children) if (c.id === rootId) return { page: p.name, pageBg: p.backgrounds || null };
+  return {};
+}
+let jobPage = {};
+try {
+  const meta = JSON.parse(readFileSync(f("payload-meta.json"), "utf8"));
+  jobPage = pageFor(meta.rootId);
+  if (jobPage.page) console.log("page " + JSON.stringify(jobPage.page));
+  else if (PAGES) console.log("page: not found for this root — building on the page that is open");
+} catch (e) {}
+
 const srv = startJobServer(3778);
 await srv.ready;
 console.log("job server up — the pix-to-fig runner plugin can connect");
@@ -42,7 +61,7 @@ let rootId = VERIFY_ONLY;
 
 if (!VERIFY_ONLY) {
   console.log("\nbuilding…");
-  const r = await srv.post({ kind: "build" }, payload, images);
+  const r = await srv.post(Object.assign({ kind: "build" }, jobPage), payload, images);
   if (r.error) { console.error("build failed: " + r.error + "\n" + (r.stack || "")); srv.close(); process.exit(1); }
   rootId = r.rootId;
   console.log("  nodes " + r.nodes + ", svg " + r.svg + ", sections " + (r.sections || 0) +
@@ -69,7 +88,7 @@ if (!VERIFY_ONLY) {
       f("payload2.png"), f("textink.json"), f("textsvg.json")];
     execFileSync("node", [join(HERE, "pack4.mjs"), ...packArgs], { stdio: "inherit", cwd: HERE });
     console.log("\nrebuilding with the rendered text…");
-    const r2 = await srv.post({ kind: "build", cleanupRootId: r.rootId }, readFileSync(f("payload2.json"), "utf8"), images);
+    const r2 = await srv.post(Object.assign({ kind: "build", cleanupRootId: r.rootId }, jobPage), readFileSync(f("payload2.json"), "utf8"), images);
     if (r2.error) { console.error("rebuild failed: " + r2.error); srv.close(); process.exit(1); }
     rootId2 = r2.rootId;
     console.log("  nodes " + r2.nodes + ", svg " + r2.svg + ", failures " + (r2.failures || []).length +
@@ -82,7 +101,7 @@ if (!VERIFY_ONLY) {
 const finalRoot = rootId2 || rootId;
 const finalPayload = rootId2 ? readFileSync(f("payload2.json"), "utf8") : payload;
 console.log("\nverifying " + finalRoot + "…");
-const c = await srv.post({ kind: "verify", rootNodeId: finalRoot }, finalPayload);
+const c = await srv.post(Object.assign({ kind: "verify", rootNodeId: finalRoot }, jobPage), finalPayload);
 srv.close();
 writeFileSync(f("check-report.json"), JSON.stringify(c, null, 2), "utf8");
 
