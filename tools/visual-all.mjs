@@ -11,7 +11,7 @@
 // distribution of per-pixel difference. The number that matters is the share of pixels differing
 // by more than 191 out of 255 — that is ink on one side and none on the other, which is the
 // signature of something that did not migrate rather than something that migrated imprecisely.
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, basename } from "node:path";
 import { startJobServer } from "./jobserver.mjs";
@@ -69,7 +69,18 @@ const srv = startJobServer(3778);
 await srv.ready;
 console.log("comparing " + dirs.length + " objects at " + W_TARGET + " px wide" + NL);
 
-const rows = [];
+const DONE_FILE = join(OUT, "done.jsonl");
+// Written one line per object as it is compared. A run that stops halfway — and one will, the
+// far end is a plugin — must not cost the objects it already measured.
+const already = new Map();
+if (existsSync(DONE_FILE)) {
+  for (const line of readFileSync(DONE_FILE, "utf8").split(NL)) {
+    if (!line.trim()) continue;
+    try { const r = JSON.parse(line); if (!r.error) already.set(r.name, r); } catch (e) {}
+  }
+  console.log(already.size + " already compared, skipping those" + String.fromCharCode(10));
+}
+const rows = [...already.values()];
 const t0 = Date.now();
 for (let i = 0; i < dirs.length; i++) {
   const dir = dirs[i], name = basename(dir);
@@ -78,6 +89,10 @@ for (let i = 0; i < dirs.length; i++) {
   try { build = JSON.parse(readFileSync(join(dir, "build-report.json"), "utf8")); } catch (e) { continue; }
   if (!build.rootId) continue;
 
+  if (already.has(name)) continue;
+  // Named before the work starts: when the far end hangs, this line is the only record of
+  // which object it hung on.
+  process.stdout.write("  [" + (i + 1) + "/" + dirs.length + "] " + name + String.fromCharCode(10));
   const px = pixsoRender(meta.rootId, W_TARGET);
   if (px.e || !px.d) { rows.push({ name, error: "pixso: " + (px.e || "no data") }); continue; }
   let fg;
@@ -90,6 +105,7 @@ for (let i = 0; i < dirs.length; i++) {
   catch (e) { rows.push({ name, error: "decode: " + e.message.slice(0, 60) }); continue; }
   const c = compare(a, b);
   rows.push({ name, ...c });
+  appendFileSync(DONE_FILE, JSON.stringify({ name, ...c }) + String.fromCharCode(10), "utf8");
   // Keep the pictures for the ones worth looking at; 290 pairs would be a lot of disk otherwise.
   if (c.gross > 0.01 || c.sizeMismatch) {
     writeFileSync(join(OUT, name + ".pixso.png"), Buffer.from(px.d, "base64"));
