@@ -104,6 +104,7 @@ const IMG_OK = new Set(["type", "scaleMode", "imageHash", "imageTransform", "sca
 const EFFECT_OK = new Set(["type", "color", "offset", "radius", "spread", "visible", "blendMode",
   "showShadowBehindNode", "boundVariables"]);
 let effectsCleaned = 0;
+let paintRotationFixed = 0;
 function sanitizeEffects(v) {
   if (!Array.isArray(v)) return v;
   return v.map((e) => {
@@ -132,6 +133,13 @@ function sanitizePaints(v) {
     const o = {}; for (const k of Object.keys(p)) if (IMG_OK.has(k)) o[k] = p[k];
     if (o.imageHash && IMAGEMAP[o.imageHash]) { o.imageHash = IMAGEMAP[o.imageHash]; imageRemapped++; }
     if (o.filters) { const f = {}; for (const k of FILTER_OK) if (o.filters[k] !== undefined) f[k] = o.filters[k]; o.filters = f; }
+    // Pixso will report a paint rotated 360 degrees or more; Figma refuses it outright — "image
+    // rotation must be less than 360 degrees" — and the whole fill is lost, image and all. The
+    // same angle, named the way Figma names it.
+    if (typeof o.rotation === "number" && (o.rotation < 0 || o.rotation >= 360)) {
+      o.rotation = ((o.rotation % 360) + 360) % 360;
+      paintRotationFixed++;
+    }
     return o;
   });
 }
@@ -381,6 +389,7 @@ console.log("nodes:       " + flat.length + "  (svg " + svgNodes + ", dict " + d
 console.log("missing:     svg " + missingSvg + ", abs " + missingAbs + (degenerate ? "   (" + degenerate + " degenerate vectors placed from their transform)" : ""));
 console.log("text runs:   " + textRuns + " nodes with per-range fills recovered");
 if (paintsSubbed) console.log("paints:      " + paintsSubbed + " image paints replaced by a render, because Figma has no field for their filter");
+if (paintRotationFixed) console.log("paints:      " + paintRotationFixed + " image rotations brought under 360 degrees, which Figma refuses");
 if (effectsCleaned) console.log("effects:     " + effectsCleaned + " had keys Figma rejects, stripped");
 console.log("strokes:     " + sideStrokes + " nodes with per-side stroke weights, " + arcs + " ellipse arcs/donuts");
 console.log("images:      " + Object.keys(IMAGEMAP).length + " hashes remapped in " + imageRemapped + " paints");
