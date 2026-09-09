@@ -561,6 +561,12 @@ for (var t2 = 0; t2 < F.length; t2++) {
   if (t2 % YIELD_EVERY === 0 && t2 > 0) await breathe();
   var d3 = F[t2].d;
   if (d3.b !== "TEXT" || d3["1"] === undefined || d3.T === undefined) continue;
+  // Only a text box with a FIXED height. When the box hugs its text, the box top follows the
+  // first line rather than the other way round, and both engines put it in the same place — so
+  // the correction has nothing to correct and simply moves the text. Measured: a heading in an
+  // auto-sized box came out with its glyphs the same size and in the same place to the pixel,
+  // and this pass then lifted it 33 px. The defect it exists for needs a fixed box to appear.
+  if (d3.X !== "NONE") { REPORT.textLineShiftSkipped++; continue; }
   var lh = dv(d3, "1");
   if (!lh || lh.unit === "AUTO" || typeof lh.value !== "number") continue;
   var setLH = lh.unit === "PIXELS" ? lh.value : (lh.value / 100) * d3.T;
