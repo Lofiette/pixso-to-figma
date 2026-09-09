@@ -68,6 +68,12 @@ const DROP = { strokeCap: "NONE", strokeMiterLimit: 4, overflowDirection: "NONE"
   layoutWrap: "NO_WRAP", layoutAlign: "INHERIT", layoutGrow: 0, layoutPositioning: "AUTO", paddingLeft: 0,
   paddingRight: 0, paddingTop: 0, paddingBottom: 0, itemSpacing: 0, counterAxisSpacing: 0, paragraphIndent: 0,
   paragraphSpacing: 0, textCase: "ORIGINAL", textDecoration: "NONE", textAlignVertical: "TOP" };
+const CORNER = new Set(["topLeftRadius", "topRightRadius", "bottomLeftRadius", "bottomRightRadius"]);
+function cornersDiffer(n) {
+  const c = [n.topLeftRadius, n.topRightRadius, n.bottomLeftRadius, n.bottomRightRadius];
+  if (c.some((x) => typeof x !== "number")) return false;
+  return Math.max.apply(null, c) - Math.min.apply(null, c) > 0.01;
+}
 const STROKED = new Set(["ELLIPSE", "RECTANGLE"]);
 const INTERN = new Set(["fills", "strokes", "effects", "constraints", "fontName", "letterSpacing",
   "lineHeight", "dashPattern", "layoutGrids", "exportSettings"]);
@@ -237,7 +243,15 @@ function encode(n, path, parentIdx, parentAbs, parentNode) {
     const v = n[k];
     if (v === null || v === undefined || v === "unable") continue;
     if (v && typeof v === "object" && v.__mixed) continue;
-    if (k in DROP && JSON.stringify(v) === JSON.stringify(DROP[k])) continue;
+    // A corner whose radius is zero looks exactly like a corner nobody set, and dropping it as a
+    // default loses a square corner: Pixso reports cornerRadius as a single number even when the
+    // four corners differ — 19.93 for a shape whose corners are 0, 42.5, 42.5, 42.5 — the builder
+    // applies that average first, and with the zero omitted nothing ever squares the corner again.
+    // Same shape of lie as strokeWeight. When the corners disagree, all four travel.
+    if (k in DROP && JSON.stringify(v) === JSON.stringify(DROP[k]) && !(CORNER.has(k) && cornersDiffer(n))) continue;
+    // And the average itself does not travel when it is an average: sending 19.93 first and the
+    // four real corners after it works only while every one of the four gets through.
+    if (k === "cornerRadius" && cornersDiffer(n)) continue;
     if (k === "strokes" && Array.isArray(v) && v.length === 0 && !STROKED.has(n.type)) continue;
     if (k === "constraints" && v.horizontal === "MIN" && v.vertical === "MIN") continue;
     if (k === "fontName" && v.family) fonts.set(v.family + "|" + v.style, v.family + " " + v.style);
