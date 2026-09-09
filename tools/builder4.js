@@ -673,7 +673,16 @@ function vbreathe() {
   return vsettle();
 }
 var VYIELD = 400;
+// Figma loads pages lazily in a document of any size, and getNodeByIdAsync answers null for a
+// node on a page it has not loaded — which reads exactly like a node that was never built. One
+// object of 1912 nodes verified as "undefined/undefined nodes" for that reason while sitting
+// correctly in the file. Load them, then look.
+try { await figma.loadAllPagesAsync(); } catch (e) {}
 const root = await figma.getNodeByIdAsync(ROOT_NODE_ID);
+if (!root) {
+  RESULT = { error: "root " + ROOT_NODE_ID + " not found even after loading every page — it was " +
+    "removed, or the id belongs to another file" };
+} else {
 const flatN = [];
 (function dfs(n, i) {
   flatN.push(n);
@@ -731,5 +740,6 @@ else {
   R.maxPosVisible = Math.round(R.maxPosVisible * 100) / 100;
   R.maxSize = Math.round(R.maxSize * 100) / 100;
   RESULT = R;
+}
 }
 `;
