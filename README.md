@@ -167,6 +167,7 @@ by eye and by nothing else: the measurements said the object was perfect.
 | `tools/visual-all.mjs` | renders both sides and ranks by how different they look |
 | `tools/coverage.mjs` | source against payload |
 | `tools/selftest.mjs` | everything checkable without Pixso or Figma |
+| `tools/test-clean.mjs` | proves what `--clean` may delete, on nodes it makes itself |
 | `figma-plugin/` | the runner: transport and host, no migration logic |
 | `docs/METHOD.md` | why it is built this way |
 | `docs/FINDINGS.md` | every defect found so far, with the measurement that found it |

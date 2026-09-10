@@ -12,6 +12,35 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
+// The code that decides what --clean is allowed to delete, as a function so it can be tested against
+// nodes made for the purpose rather than trusted the first time it runs over a designer's file.
+// `want` is one entry per object about to be rebuilt: { src } the Pixso id it came from, { id } the
+// Figma id an earlier run recorded for it.
+export function cleanScript(want) {
+  return [
+    "const want = " + JSON.stringify(want) + ";",
+    "await figma.loadAllPagesAsync();",
+    "const srcs = {}; for (const w of want) if (w.src) srcs[w.src] = 1;",
+    "const stamp = function (n) { try { return n.getPluginData('pxSrc'); } catch (e) { return ''; } };",
+    "let gone = 0, spared = 0;",
+    "const doomed = [];",
+    // Everything stamped with a source this run rebuilds, wherever it sits. This also clears
+    // duplicates an interrupted run left behind, which removing one id each never could.
+    "for (const p of figma.root.children) for (const k of p.children) if (stamp(k) && srcs[stamp(k)]) doomed.push(k);",
+    "for (const w of want) {",
+    "  if (!w.id) continue;",
+    "  const n = await figma.getNodeByIdAsync(w.id);",
+    "  if (!n || n.removed || doomed.indexOf(n) >= 0) continue;",
+    "  const s = stamp(n);",
+    // Unstamped: built before stamping existed, and the id is the only handle there is. Stamped with
+    // something else: the id has gone stale and now points at another object's root. Leave it alone.
+    "  if (!s || (w.src && s === String(w.src))) doomed.push(n); else spared++;",
+    "}",
+    "for (const n of doomed) { try { if (!n.removed) { n.remove(); gone++; } } catch (e) {} }",
+    "RESULT = { removed: gone, of: want.length, spared: spared };",
+  ].join(String.fromCharCode(10));
+}
+
 export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
   const pageFor = (rootId) => {
     if (!pages) return null;
@@ -35,23 +64,7 @@ export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
       if (src || id) want.push({ src: src ? String(src) : null, id: id || null });
     }
     if (want.length) {
-      const V = [
-        "const want = " + JSON.stringify(want) + ";",
-        "const srcs = {}; for (const w of want) if (w.src) srcs[w.src] = 1;",
-        "const stamp = function (n) { try { return n.getPluginData('pxSrc'); } catch (e) { return ''; } };",
-        "let gone = 0, spared = 0;",
-        "const doomed = [];",
-        "for (const p of figma.root.children) for (const k of p.children) if (stamp(k) && srcs[stamp(k)]) doomed.push(k);",
-        "for (const w of want) {",
-        "  if (!w.id) continue;",
-        "  const n = await figma.getNodeByIdAsync(w.id);",
-        "  if (!n || n.removed || doomed.indexOf(n) >= 0) continue;",
-        "  const s = stamp(n);",
-        "  if (!s || (w.src && s === String(w.src))) doomed.push(n); else spared++;",
-        "}",
-        "for (const n of doomed) { try { if (!n.removed) { n.remove(); gone++; } } catch (e) {} }",
-        "RESULT = { removed: gone, of: want.length, spared: spared };",
-      ].join(String.fromCharCode(10));
+      const V = cleanScript(want);
       try {
         const rc = await srv.post({ kind: "render", rootNodeId: "0:0" }, JSON.stringify({ V }), new Map(), 600000);
         say("cleared " + (rc.removed || 0) + " of " + want.length + " roots this run will rebuild" +
@@ -89,6 +102,7 @@ export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
     try { r = await srv.post(Object.assign({ kind: "build" }, jobPage), payload, images, budget); }
     catch (e) { say("    " + e.message); results.push({ name, error: e.message }); continue; }
     if (r.error) { say("    build failed: " + r.error); results.push({ name, error: r.error }); continue; }
+    if (r.rootIdChanged) say("    note: the root's id changed during the build: " + r.rootIdChanged + " -> " + r.rootId);
     const subs = [...new Set(r.fontSubs || [])];
     if (subs.length) say("    fonts substituted: " + subs.join(", "));
 

@@ -137,6 +137,10 @@ for (var i = 0; i < F.length; i++) {
   var node = makeNode(d);
   parent.appendChild(node);
   built[i] = node;
+  // The root's id, read the moment it exists. Compared against the same node's id at the end of the
+  // build: if they differ, an id changes under a live node, and that is the whole mystery. If they
+  // match, whatever happens to it happens after the build, between one job and the next.
+  if (i === 0) REPORT.rootIdAtCreate = node.id;
   REPORT.nodes++;
   if (d.a !== undefined) tryset(node, "name", d.a, id);
 
@@ -660,6 +664,7 @@ if (PAY.XY) {
 phase("placeRoot");
 REPORT.msTotal = Date.now() - T0;
 REPORT.rootId = root.id;
+if (REPORT.rootIdAtCreate && REPORT.rootIdAtCreate !== root.id) REPORT.rootIdChanged = REPORT.rootIdAtCreate;
 REPORT.rootSize = { w: Math.round(root.width), h: Math.round(root.height) };
 RESULT = REPORT;
 `;

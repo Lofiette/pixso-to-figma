@@ -40,12 +40,27 @@ function pixsoRender(id, width) {
   catch (e) { return { e: String(e.message).slice(0, 120) }; }
 }
 
-const figSrc = (id, width) => [
-  "const n = await figma.getNodeByIdAsync(" + JSON.stringify(id) + ");",
+// Asked for by id, then made to prove it is the right node. A remembered id turned out to resolve
+// to something else entirely on two objects out of 45 — so photographing whatever answers to a
+// number would quietly compare the wrong pair of pictures, which is worse than failing.
+const figSrc = (id, srcId, width) => [
+  "await figma.loadAllPagesAsync();",
+  "var want = " + JSON.stringify(srcId ? String(srcId) : "") + ";",
+  "var stampOf = function (n) { try { return n.getPluginData('pxSrc'); } catch (e) { return ''; } };",
+  "var n = await figma.getNodeByIdAsync(" + JSON.stringify(id) + ");",
+  "var relocated = null;",
+  "if (want && (!n || n.removed || stampOf(n) !== want)) {",
+  "  var f = [];",
+  "  for (var pi = 0; pi < figma.root.children.length; pi++) {",
+  "    var k = figma.root.children[pi].children;",
+  "    for (var ki = 0; ki < k.length; ki++) if (stampOf(k[ki]) === want) f.push(k[ki]);",
+  "  }",
+  "  if (f.length) { n = f[f.length - 1]; relocated = n.id; }",
+  "}",
   "if (!n || n.removed) { RESULT = { e: 'not found' }; } else {",
   "  const w = " + width + ";",
   "  const by = await n.exportAsync({ format: 'PNG', constraint: { type: 'WIDTH', value: w } });",
-  "  RESULT = { w: w, bytes: by.length, d: figma.base64Encode(by) };",
+  "  RESULT = { w: w, bytes: by.length, d: figma.base64Encode(by), relocated: relocated };",
   "}",
 ].join(NL);
 
@@ -99,10 +114,22 @@ for (let i = 0; i < dirs.length; i++) {
   process.stdout.write("  [" + (i + 1) + "/" + dirs.length + "] " + name + String.fromCharCode(10));
   const px = pixsoRender(meta.rootId, W_TARGET);
   if (px.e || !px.d) { rows.push(logErr({ name, error: "pixso: " + (px.e || "no data") })); continue; }
-  let fg;
-  try { fg = await srv.post({ kind: "render", rootNodeId: build.rootId }, JSON.stringify({ V: figSrc(build.rootId, px.w) }), new Map(), 120000); }
-  catch (e) { rows.push(logErr({ name, error: "figma: " + e.message.slice(0, 60) })); continue; }
-  if (!fg || fg.e || !fg.d) { rows.push(logErr({ name, error: "figma: " + JSON.stringify(fg).slice(0, 60) })); continue; }
+  // One retry, with the window raised again first. Figma rasterises only in the front window, so
+  // the moment anything else takes focus every remaining render stops returning — and over a whole
+  // file, something eventually does. Losing the run at object 40 of 290 because of one click is why
+  // this audit has never reached the end of a file.
+  const V = { V: figSrc(build.rootId, meta.rootId, px.w) };
+  let fg = null, why = "";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt) console.log("      retrying with the Figma window raised: " + focusFigma());
+    try { fg = await srv.post({ kind: "render", rootNodeId: build.rootId }, JSON.stringify(V), new Map(), 120000); }
+    catch (e) { fg = null; why = "figma: " + e.message.slice(0, 60); }
+    if (fg && !fg.e && fg.d) break;
+    if (fg) why = "figma: " + JSON.stringify(fg).slice(0, 60);
+    fg = null;
+  }
+  if (!fg) { rows.push(logErr({ name, error: why })); continue; }
+  if (fg.relocated) console.log("      the remembered id had gone stale; photographed " + fg.relocated + ", found by its stamp");
 
   let a, b;
   try { a = decodePNG(Buffer.from(px.d, "base64")); b = decodePNG(Buffer.from(fg.d, "base64")); }
