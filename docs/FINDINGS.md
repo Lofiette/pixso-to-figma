@@ -829,3 +829,27 @@ The same distrust had to be applied to the `--clean` step, where it mattered mor
 something out of the designer's file. It now removes a node found by id only if that node is
 unstamped, or stamped with the source about to be rebuilt, and reports how many ids it declined to
 act on.
+
+### Half a pixel and a pixel are not the same finding
+
+Every file measured carries a handful of nodes out of position by exactly 0.5 px, always vertically.
+They were being added to the same total as real defects, so the verdict said "not clean" about 15 of
+34 objects in one file and 16 of 45 in another — while the one object that was genuinely wrong, 115
+nodes at 1.41 px, sat in that same total and did not stand out. A measure that fires on almost
+everything reports nothing.
+
+Counted apart now: over a pixel is a defect someone could point at, and the band below it is printed
+as "within a pixel" on its own line. Nothing is rounded away or hidden; the two numbers are simply
+not summed.
+
+What it actually is, as far as measurement goes: **not the node it is reported on.** Every reported
+one is a FRAME imported from an SVG, which is what made it look like an SVG problem — but such a
+frame's `relativeTransform` matches the payload exactly, so it is sitting where it was told to. Its
+parent is out by 0.5 as well, and `> 0.5` is false at exactly 0.5, so the parent is not counted; the
+SVG child inherits the same 0.5 and adds a few thousandths of horizontal offset of its own, which
+pushes it over the line. So the reported node is a threshold accident and the real subject is a whole
+subtree sitting half a pixel low. In one object of 774 nodes, 21 visible nodes and 410 hidden ones
+are in that band.
+
+Which ancestor introduces it, and why vertically, is not known. It is not the root: the check measures
+everything relative to the root, so any offset there cancels.

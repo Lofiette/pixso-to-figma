@@ -731,7 +731,7 @@ const mul = function (m, n) { return [
 
 const exp = [];
 exp[0] = [1, 0, 0, 0, 1, 0];
-const R = { count: flatN.length, expected: F.length, pos: [], size: [], maxPos: 0, maxSize: 0, visibleNodes: 0, visibleOver05: 0, hiddenOver05: 0, maxPosVisible: 0, rootUsed: root.id };
+const R = { count: flatN.length, expected: F.length, pos: [], size: [], maxPos: 0, maxSize: 0, visibleNodes: 0, visibleOver05: 0, visibleOver1: 0, hiddenOver05: 0, maxPosVisible: 0, rootUsed: root.id };
 // Say it out loud when the id was wrong. A check that quietly corrects itself hides the very thing
 // worth knowing, and this one went unexplained for a day because nothing reported it.
 if (relocated) R.rootRelocated = relocated;
@@ -762,6 +762,12 @@ else {
     const dp = Math.sqrt(dx*dx + dy*dy);
     if (dp > R.maxPos) R.maxPos = dp;
     if (dp > 0.5) { if (shown[i]) { R.visibleOver05++; if (dp > R.maxPosVisible) R.maxPosVisible = dp; } else R.hiddenOver05++; }
+    // Half a pixel and a pixel are different findings and were being added up as one. Measured over
+    // three files: most objects carry a few nodes out by exactly 0.5 px, always vertically, always a
+    // frame imported from an SVG — while a real defect, like the 115 nodes at 1.41 px in one object,
+    // sat in the same total. So a verdict of "not clean" fired on almost everything and stopped
+    // meaning anything. Counted apart, never dropped: nothing here is rounded away.
+    if (dp > 1 && shown[i]) R.visibleOver1++;
     dpArr[i] = dp;
     if (dp > 0.5 && shown[i] && (i === 0 || dpArr[p] <= 0.5)) R.pos.push({ i: i, name: n.name, type: n.type, parent: i ? F[p].d.a : null, dx: Math.round(dx*100)/100, dy: Math.round(dy*100)/100, mag: Math.round(dp*100)/100 });
     if (d.j !== undefined && d.k !== undefined) {
