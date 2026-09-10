@@ -344,7 +344,13 @@ encode(target, [], -1, rootAbs, null);
 // section by section comes out laid out the way it was.
 const rootAbsXY = process.env.PX_PLACE_ABS && rootAbs ? [r2(rootAbs[2]), r2(rootAbs[5])] : null;
 if (rootAbsXY) console.log("place:       root at source position " + rootAbsXY[0] + ", " + rootAbsXY[1]);
-const payloadObj = { D: dict, S: svgList, F: flat, B: BUILDER_SRC, V: VERIFIER_SRC };
+// The source's own id travels with the payload so the build can stamp it onto the root it makes.
+// A Figma node id turned out not to be a handle worth trusting across two jobs: on a run of 45
+// objects, two of them reported a rootId that pointed at a node built long before them, and the
+// check that followed dutifully measured the wrong node. A stamp cannot drift — it is carried by
+// the node itself — so the check can tell "this is the root I built" from "this is whatever now
+// answers to that number".
+const payloadObj = { D: dict, S: svgList, F: flat, B: BUILDER_SRC, V: VERIFIER_SRC, R: String(ROOT_ID) };
 if (rootAbsXY) payloadObj.XY = rootAbsXY;
 const json = Buffer.from(JSON.stringify(payloadObj), "utf8");
 const body = Buffer.alloc(4 + json.length);

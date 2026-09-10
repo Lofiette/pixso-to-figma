@@ -5,14 +5,17 @@
   #s { font-weight: 600; margin-bottom: 6px; }
   #l { white-space: pre-wrap; font: 11px ui-monospace, Menlo, Consolas, monospace; color: #666;
        max-height: 180px; overflow: auto; }
-  .off { color: #b00; } .on { color: #0a0; }
+  /* Three states worth distinguishing, and "waiting" is not one of the alarming ones: a runner
+     that has gone off to Pixso, and a runner that has finished and exited, both used to be
+     reported in red as a lost connection. */
+  .off { color: #b00; } .on { color: #0a0; } .wait { color: #666; }
   #go { display: block; width: 100%; margin: 4px 0 8px; padding: 8px; font: 600 12px inherit;
         color: #fff; background: #0d99ff; border: 0; border-radius: 6px; cursor: pointer; }
   #go[disabled] { background: #9dcff0; cursor: default; }
   #p { white-space: pre-wrap; font: 11px ui-monospace, Menlo, Consolas, monospace; color: #333;
        margin-bottom: 6px; }
 </style>
-<div id="s">connecting…</div>
+<div id="s" class="wait">Проверяю связь с раннером…</div>
 <button id="go" hidden>Перенести файл из Pixso</button>
 <div id="p"></div>
 <div id="l"></div>
@@ -27,7 +30,50 @@ const S = document.getElementById("s"), L = document.getElementById("l");
 let busy = false, misses = 0;
 
 function log(m) { L.textContent = (m + "\n" + L.textContent).slice(0, 4000); }
-function status(t, cls) { S.textContent = t; S.className = cls || ""; }
+
+// One line of state, composed in one place from everything known.
+//
+// It used to be written by two loops that knew nothing about each other: one polled the runner for
+// progress, the other polled it for jobs and reported in red whenever a request failed. So a
+// perfectly healthy run showed "connecting…" for its first seconds and "runner not reachable"
+// whenever the runner was busy in Pixso or had finished and exited — an emergency where nothing at
+// all was wrong. What the person watching needs is one sentence saying what is happening now, and
+// if something needs doing, what.
+const ST = { link: "unknown", phase: "idle", stage: null, trouble: null, sawDone: false, everJob: false };
+function paint(t, cls) { S.textContent = t; S.className = cls || ""; }
+function render() {
+  // Most specific first: this frame's own trouble, then its own work, then the runner's state.
+  if (ST.trouble) return paint(ST.trouble, "off");
+  if (ST.stage) return paint(ST.stage, "on");
+  if (ST.link === "unknown") return paint("Проверяю связь с раннером…", "wait");
+  if (ST.link === "down") {
+    // The runner closes its port when the run is over. That is the end of a successful migration,
+    // not a lost connection, and it must not read like one.
+    if (ST.sawDone) return paint("Готово. Раннер закончил работу и закрылся — результат в Figma.", "on");
+    return paint("Раннер не запущен. Откройте start.cmd (Windows) или start.command (macOS) в папке pix-to-fig.", "wait");
+  }
+  if (ST.phase === "done") return paint("Готово. Смотрите результат в Figma.", "on");
+  if (ST.phase === "stopped") return paint("Перенос остановлен — причина в сообщениях ниже.", "off");
+  if (ST.phase === "working") {
+    return paint(ST.everJob ? "Раннер готовит следующий объект…"
+      : "Идёт извлечение из Pixso — самая долгая часть. Плагин пока не нужен, окно можно не закрывать.", "wait");
+  }
+  return paint("Готов. Нажмите кнопку, чтобы начать перенос.", "on");
+}
+// "The run has finished" is derived here rather than remembered by whoever sets the phase. It was
+// set by hand in one place, and any other route to phase "done" left the flag false — after which
+// the runner closing its port read as a lost connection again, which is the whole thing being fixed.
+function state(o) {
+  Object.assign(ST, o);
+  if (ST.phase === "done") ST.sawDone = true;
+  render();
+}
+// Paint once at startup so this line has exactly one author. The markup carries the same words, and
+// two copies of a sentence are two chances for them to disagree.
+render();
+// Kept as the one-liner the job code already speaks: a message with "off" is trouble, anything
+// else is this frame reporting what it is doing.
+function status(t, cls) { state(cls === "off" ? { trouble: t } : { stage: t, trouble: null }); }
 
 // Every request needs a deadline. When the runner exits mid-request the fetch never settles: the
 // await in the poll loop then never returns, the setTimeout that schedules the next poll is never
@@ -77,7 +123,7 @@ function startBeat(id) {
     if (!busy) return;
     stopBeat();
     log("job " + id + " produced no report in " + mins + " minutes — telling the runner, still waiting");
-    status("job " + id + " overran — waiting for the sandbox to come back", "off");
+    status("Объект не собрался за " + mins + " мин — жду, пока Figma освободится.", "off");
     post("/report", { id: id, i: 0, n: 1, d: JSON.stringify({ error: "no report from the plugin sandbox within " + mins + " minutes" }) }).catch(() => {});
     // Deliberately NOT freeing the frame here. The sandbox is single-threaded: if it is still
     // working, taking the next job now queues a second payload behind the first and the two jobs
@@ -87,7 +133,7 @@ function startBeat(id) {
     watchdog = setTimeout(() => {
       if (!busy) return;
       log("sandbox never came back for " + id + " — resetting");
-      status("idle — waiting for the next job", "on");
+      state({ stage: null, trouble: null });
       busy = false;
       poll();
     }, mins * 60 * 1000);
@@ -97,7 +143,8 @@ function stopBeat() { if (beat) { clearInterval(beat); beat = null; } clearTimeo
 
 async function runJob(job) {
   log("job " + job.id + " (" + job.kind + ")");
-  status("running job " + job.id + "…", "on");
+  // First job of the run means extraction is over, which changes what the waiting line should say.
+  state({ everJob: true, trouble: null, stage: "Получаю задание от раннера…" });
 
   // payload as text, handed over in slices so a multi-megabyte string never crosses in one message
   const text = await fetchT(HOST + "/job/" + job.id + "/payload", {}, 120000).then(r => r.text());
@@ -122,13 +169,13 @@ async function runJob(job) {
     handedOver += b64.length;
     sentImages.add(imgs[i]);
     fetched++;
-    status("images " + fetched + " new of " + imgs.length, "on");
+    status("Передаю изображения: " + fetched + " новых из " + imgs.length, "on");
   }
   // Said out loud because when a job stops answering, this window is the only place that knows
   // how far it got: payload handed over, images handed over, or lost inside the sandbox.
   log("job " + job.id + ": payload " + text.length + " chars, " + fetched + " new images of " + imgs.length);
   startBeat(job.id);
-  status("building — this can take a few minutes", "on");
+  status("Собираю объект в Figma — это может занять несколько минут.", "on");
   send({ t: "payload-end" });
 }
 
@@ -150,7 +197,7 @@ onmessage = async (e) => {
       }
     } catch (err) { log("post failed: " + err); }
     busy = false;
-    status("idle — waiting for the next job", "on");
+    state({ stage: null, trouble: null });
     poll();
   }
 };
@@ -177,15 +224,31 @@ GO.onclick = async () => {
 
 // What the runner is doing, in this window, because the person who pressed the button is looking
 // at Figma and not at a console.
+//
+// Held by the runner until something changes, for the same reason the job loop is: on a two-second
+// timer this ran once a MINUTE whenever the plugin window was not in front — which is exactly when
+// someone leaves it to watch extraction and sees a frozen list of lines.
+let rev = 0;
 async function control() {
-  try {
-    const c = await fetchT(HOST + "/control", {}, 8000).then(r => r.json());
-    GO.hidden = false;
-    if (c.phase === "idle") { GO.disabled = false; GO.textContent = "Перенести файл из Pixso"; }
-    else if (c.phase === "done") { GO.disabled = true; GO.textContent = "Готово"; }
-    P.textContent = (c.lines || []).join(String.fromCharCode(10));
-  } catch (e) { GO.hidden = true; P.textContent = ""; }
-  setTimeout(control, 2000);
+  for (;;) {
+    try {
+      const c = await fetchT(HOST + "/control?rev=" + rev, {}, 40000).then(r => r.json());
+      rev = c.rev || 0;
+      GO.hidden = false;
+      state({ link: "up", phase: c.phase });
+      if (c.phase === "working") { GO.disabled = true; GO.textContent = "Идёт перенос…"; }
+      else if (c.phase === "done") { GO.disabled = true; GO.textContent = "Готово"; }
+      else if (c.phase === "stopped") { GO.disabled = false; GO.textContent = "Попробовать снова"; }
+      else { GO.disabled = false; GO.textContent = "Перенести файл из Pixso"; }
+      if (c.lines && c.lines.length) P.textContent = c.lines.join(String.fromCharCode(10));
+    } catch (e) {
+      GO.hidden = true;
+      // Whatever the runner last said stays on screen. Clearing it wiped the verdict off the window
+      // the moment the runner exited — at the end of a successful run, which is when it is read.
+      state({ link: "down" });
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
 }
 control();
 
@@ -211,13 +274,17 @@ async function poll() {
             busy = false;
             stopBeat();
             log("job " + j.id + " failed: " + jerr);
-            status("job failed — " + jerr, "off");
+            status("Объект не собрался: " + jerr, "off");
             try { await post("/report", { id: j.id, report: { error: String(jerr && jerr.message || jerr) } }); } catch (e2) {}
           }
-        } else status("idle — waiting for the next job", "on");
+        } else state({ stage: null, link: "up" });
       } catch (err) {
         misses++;
-        if (misses > 2) status("runner not reachable on " + HOST, "off");
+        // A failed poll is the fastest evidence the runner has gone, and it feeds the same single
+        // link state the progress loop feeds — it does not get to write its own alarm any more.
+        // Which matters because that loop runs on a timer, and a timer in a background window
+        // fires about once a minute.
+        if (misses > 2) state({ link: "down" });
       }
       if (!ok) {
         // The runner is not there. This is the one place a timer belongs: something has to slow

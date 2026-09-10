@@ -8,8 +8,10 @@
 //
 // Only the render steps need this. Building does not, so it does not steal focus.
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 
-export function focusFigma() {
+function focusWindows() {
   const ps = [
     "$p = Get-Process Figma -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -ne '' } | Select-Object -First 1;",
     "if (-not $p) { Write-Output 'no-figma-window'; exit 0 }",
@@ -17,13 +19,32 @@ export function focusFigma() {
     "$ok = $sh.AppActivate($p.Id);",
     "Write-Output ($(if ($ok) { 'focused' } else { 'refused' }))",
   ].join(" ");
+  return execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps],
+    { encoding: "utf8", timeout: 15000 }).trim();
+}
+
+function focusMac() {
+  // Ask whether Figma is running before asking it to come forward. "tell application to activate"
+  // would launch it, and a render step that silently starts the app it was meant to photograph is
+  // worse than one that says the window is not there.
+  try { execFileSync("pgrep", ["-x", "Figma"], { encoding: "utf8", timeout: 10000 }); }
+  catch (e) { return "no-figma-window"; }
+  // Plain "activate" needs no accessibility permission, unlike anything routed through System
+  // Events — worth keeping, because that permission is a dialog the designer has to find and grant.
+  execFileSync("osascript", ["-e", 'tell application "Figma" to activate'], { encoding: "utf8", timeout: 15000 });
+  return "focused";
+}
+
+export function focusFigma() {
   try {
-    const out = execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps],
-      { encoding: "utf8", timeout: 15000 }).trim();
-    return out;
+    if (process.platform === "win32") return focusWindows();
+    if (process.platform === "darwin") return focusMac();
+    // Nothing portable raises a window on Linux, and guessing at wmctrl would report success it
+    // cannot deliver. Say what is true: the renders will hang unless the window is in front.
+    return "unsupported-platform (" + process.platform + ") — put the Figma window in front yourself";
   } catch (e) { return "failed: " + String(e.message).slice(0, 80); }
 }
 
-if (import.meta.url === "file:///" + process.argv[1].split("\\").join("/")) {
+if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   console.log(focusFigma());
 }

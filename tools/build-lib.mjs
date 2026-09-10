@@ -20,23 +20,42 @@ export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
   };
 
   if (clean) {
-    const ids = [];
+    // What to remove is asked twice, because an id alone is not safe to delete by. A rootId
+    // recorded by an earlier run can resolve to an unrelated node — measured: two objects in a run
+    // of 45 reported ids belonging to nodes built long before them. Deleting whatever answers to a
+    // number would then take a stranger out of the designer's file. So: a node found by id is
+    // removed only if it is unstamped (an older build, where the id is all there is) or stamped
+    // with the source this run is about to rebuild; and every node carrying that stamp is removed,
+    // which also clears duplicates a previous run may have left.
+    const want = [];
     for (const d of dirs) {
-      try {
-        const rr = JSON.parse(readFileSync(join(d, "build-report.json"), "utf8"));
-        if (rr.rootId) ids.push(rr.rootId);
-      } catch (e) {}
+      let src = null, id = null;
+      try { src = JSON.parse(readFileSync(join(d, "payload-meta.json"), "utf8")).rootId; } catch (e) {}
+      try { id = JSON.parse(readFileSync(join(d, "build-report.json"), "utf8")).rootId; } catch (e) {}
+      if (src || id) want.push({ src: src ? String(src) : null, id: id || null });
     }
-    if (ids.length) {
+    if (want.length) {
       const V = [
-        "const ids = " + JSON.stringify(ids) + ";",
-        "let gone = 0;",
-        "for (const id of ids) { const n = await figma.getNodeByIdAsync(id); if (n && !n.removed) { n.remove(); gone++; } }",
-        "RESULT = { removed: gone, of: ids.length };",
+        "const want = " + JSON.stringify(want) + ";",
+        "const srcs = {}; for (const w of want) if (w.src) srcs[w.src] = 1;",
+        "const stamp = function (n) { try { return n.getPluginData('pxSrc'); } catch (e) { return ''; } };",
+        "let gone = 0, spared = 0;",
+        "const doomed = [];",
+        "for (const p of figma.root.children) for (const k of p.children) if (stamp(k) && srcs[stamp(k)]) doomed.push(k);",
+        "for (const w of want) {",
+        "  if (!w.id) continue;",
+        "  const n = await figma.getNodeByIdAsync(w.id);",
+        "  if (!n || n.removed || doomed.indexOf(n) >= 0) continue;",
+        "  const s = stamp(n);",
+        "  if (!s || (w.src && s === String(w.src))) doomed.push(n); else spared++;",
+        "}",
+        "for (const n of doomed) { try { if (!n.removed) { n.remove(); gone++; } } catch (e) {} }",
+        "RESULT = { removed: gone, of: want.length, spared: spared };",
       ].join(String.fromCharCode(10));
       try {
-        const rc = await srv.post({ kind: "render", rootNodeId: ids[0] }, JSON.stringify({ V }), new Map(), 600000);
-        say("cleared " + (rc.removed || 0) + " of " + ids.length + " roots this run will rebuild");
+        const rc = await srv.post({ kind: "render", rootNodeId: "0:0" }, JSON.stringify({ V }), new Map(), 600000);
+        say("cleared " + (rc.removed || 0) + " of " + want.length + " roots this run will rebuild" +
+          (rc.spared ? " (" + rc.spared + " id" + (rc.spared === 1 ? "" : "s") + " now belonged to something else and was left alone)" : ""));
       } catch (e) { say("could not clear previous builds: " + e.message); }
     }
   }
@@ -96,9 +115,16 @@ export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
     try { c = await srv.post(Object.assign({ kind: "verify", rootNodeId: r.rootId }, jobPage), payload, new Map(), budget); }
     catch (e) { say("    verify: " + e.message); results.push({ name, error: e.message }); continue; }
     writeFileSync(f("check-report.json"), JSON.stringify(c, null, 2), "utf8");
+    // The id the build reported is not always the node the check finds. Say so when it happens
+    // rather than letting a silently corrected lookup pass for a clean one.
+    if (c.rootRelocated) {
+      say("    note: the build reported root " + c.rootRelocated.asked + ", which is now " +
+        c.rootRelocated.was + " — checked " + c.rootRelocated.found + " instead, found by its stamp");
+    }
+    if (c.rootAmbiguous) say("    note: " + c.rootAmbiguous + " nodes carry this source stamp — checked the newest");
     say("    " + c.count + "/" + c.expected + " nodes, " + c.visibleOver05 + " out of position" +
       (c.visibleOver05 ? " (worst " + c.maxPosVisible + " px)" : ""));
-    results.push({ name, rootId: r.rootId, nodes: c.count, expected: c.expected,
+    results.push({ name, rootId: c.rootUsed || r.rootId, relocated: !!c.rootRelocated, nodes: c.count, expected: c.expected,
       posOver: c.visibleOver05, worstPos: c.maxPosVisible, maxSize: c.maxSize, sizeOver: c.sizeOver || 0,
       failures: (r.failures || []).length, fontSubs: subs });
   }
@@ -108,11 +134,12 @@ export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
 // A font this machine does not have is not a defect in the migration and must not be presented as
 // one — but it must not be hidden either, or a run reads as broken when the algorithm did its job.
 export function verdict(results, say = console.log) {
-  let exact = 0, heldByFonts = 0, wrong = 0, errored = 0;
+  let exact = 0, heldByFonts = 0, wrong = 0, errored = 0, relocated = 0;
   const fontUse = new Map();
   const bad = [];
   for (const r of results) {
     if (r.error) { errored++; bad.push(r.name + ": " + String(r.error).slice(0, 60)); continue; }
+    if (r.relocated) relocated++;
     for (const f of r.fontSubs) fontUse.set(f, (fontUse.get(f) || 0) + 1);
     const ok = r.nodes === r.expected && r.posOver === 0 && r.sizeOver === 0 && r.failures === 0;
     if (ok) exact++;
@@ -132,6 +159,9 @@ export function verdict(results, say = console.log) {
   if (heldByFonts) say("held back by fonts       " + heldByFonts + "   (not a migration defect)");
   if (wrong) say("wrong, fonts all present " + wrong + "   <- these are the real ones");
   if (errored) say("failed to build          " + errored);
+  // Not a defect in the result — the object was built and checked. It is a defect in the handle,
+  // and it stays visible until it is understood.
+  if (relocated) say("root found by stamp      " + relocated + "   (the id the build reported had gone stale)");
   for (const b of bad.slice(0, 10)) say("   " + b);
   const clean = wrong === 0 && errored === 0;
   say("");

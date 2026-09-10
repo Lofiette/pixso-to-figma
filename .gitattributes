@@ -1,0 +1,6 @@
+# A shell script checked out with CRLF fails on macOS with "bad interpreter: /bin/sh^M", and the
+# designer sees a double-click that does nothing. Pin the line endings per kind of file rather than
+# trusting whatever the checking-out machine prefers.
+*.command text eol=lf
+*.sh      text eol=lf
+start.cmd text eol=crlf

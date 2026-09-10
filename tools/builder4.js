@@ -638,6 +638,13 @@ phase("textLine");
 if (probe) { try { probe.remove(); } catch (eP) {} probe = null; }
 
 const root = built[0];
+// Stamp the root with the id of the Pixso node it came from. The check that follows this build is
+// a separate job and can only be handed a Figma node id — and an id proved not to be enough: two
+// objects out of 45 reported one that resolved to a node built long before them, so the check
+// measured a stranger and said "3 nodes of 5722" about a tree that had in fact been built whole.
+// Plugin data is carried by the node, so it cannot come to mean something else.
+try { if (PAY.R) { root.setPluginData("pxSrc", String(PAY.R)); REPORT.rootSrc = String(PAY.R); } }
+catch (eS) { REPORT.failures.push("stamp root: " + String(eS.message || eS).slice(0, 60)); }
 // Migrating a whole page section by section only reproduces the page if each section lands where
 // the source had it. PAY.XY carries the source's own absolute position for that; without it the
 // root is parked to the right of whatever is already on the canvas.
@@ -678,10 +685,31 @@ var VYIELD = 400;
 // object of 1912 nodes verified as "undefined/undefined nodes" for that reason while sitting
 // correctly in the file. Load them, then look.
 try { await figma.loadAllPagesAsync(); } catch (e) {}
-const root = await figma.getNodeByIdAsync(ROOT_NODE_ID);
+// An id is a guess; the stamp is the answer. Ask by id first — it is right almost always and costs
+// one call — then make the node prove it is the root this payload built. When it cannot, look for
+// the node that can: every built root is a top-level child of some page, so this is a walk over
+// pages and their children, not over the document.
+var relocated = null, ambiguous = 0;
+var want = PAY.R ? String(PAY.R) : null;
+var root = await figma.getNodeByIdAsync(ROOT_NODE_ID);
+var stampOf = function (n) { try { return n.getPluginData("pxSrc"); } catch (e) { return ""; } };
+if (want && (!root || stampOf(root) !== want)) {
+  var found = [];
+  for (var pi = 0; pi < figma.root.children.length; pi++) {
+    var kids = figma.root.children[pi].children;
+    for (var ki = 0; ki < kids.length; ki++) if (stampOf(kids[ki]) === want) found.push(kids[ki]);
+  }
+  if (found.length) {
+    ambiguous = found.length > 1 ? found.length : 0;
+    // Newest last: a root is appended to its page, so a leftover duplicate sits ahead of it.
+    var pick = found[found.length - 1];
+    relocated = { asked: ROOT_NODE_ID, found: pick.id, was: root ? root.type + " " + String(root.name).slice(0, 24) : "nothing" };
+    root = pick;
+  }
+}
 if (!root) {
-  RESULT = { error: "root " + ROOT_NODE_ID + " not found even after loading every page — it was " +
-    "removed, or the id belongs to another file" };
+  RESULT = { error: "root " + ROOT_NODE_ID + " not found even after loading every page, and no node " +
+    "carries the stamp " + (want || "(none sent)") + " — it was removed, or the id belongs to another file" };
 } else {
 const flatN = [];
 (function dfs(n, i) {
@@ -698,7 +726,11 @@ const mul = function (m, n) { return [
 
 const exp = [];
 exp[0] = [1, 0, 0, 0, 1, 0];
-const R = { count: flatN.length, expected: F.length, pos: [], size: [], maxPos: 0, maxSize: 0, visibleNodes: 0, visibleOver05: 0, hiddenOver05: 0, maxPosVisible: 0 };
+const R = { count: flatN.length, expected: F.length, pos: [], size: [], maxPos: 0, maxSize: 0, visibleNodes: 0, visibleOver05: 0, hiddenOver05: 0, maxPosVisible: 0, rootUsed: root.id };
+// Say it out loud when the id was wrong. A check that quietly corrects itself hides the very thing
+// worth knowing, and this one went unexplained for a day because nothing reported it.
+if (relocated) R.rootRelocated = relocated;
+if (ambiguous) R.rootAmbiguous = ambiguous;
 const dpArr = [], shown = [true];
 if (flatN.length !== F.length) { R.MISMATCH = true; RESULT = R; }
 else {

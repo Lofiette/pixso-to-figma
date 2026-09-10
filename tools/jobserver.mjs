@@ -11,6 +11,15 @@ export function startJobServer(port = 3778) {
   let startWanted = null, startResolve = null;
   const progress = [];
   let phase = "idle";
+  // Progress is long-polled, not asked for on a timer, so the plugin window keeps up with a run it
+  // is not in front of. rev counts changes; a client says what it has seen and the request is held
+  // until there is more.
+  // Starts at 1, not 0: a client that has seen nothing asks with rev=0 and must be answered at
+  // once. At 0 the first request would have been held for its full 25 seconds, and the window would
+  // have sat on "checking…" — the very thing this replaced.
+  let rev = 1;
+  const ctlWaiters = [];
+  function bump() { rev++; while (ctlWaiters.length) ctlWaiters.shift()(); }
   const waiters = [];              // held /job requests, answered the moment a job is posted
   let payload = "";                // payload text for the pending job
   let blobs = new Map();           // hash -> Buffer
@@ -32,7 +41,31 @@ export function startJobServer(port = 3778) {
 
     if (url.pathname === "/control" && req.method === "GET") {
       cors(res, "application/json");
-      return res.end(JSON.stringify({ phase: phase, lines: progress.slice(-14) }));
+      const body = () => JSON.stringify({ rev: rev, phase: phase, lines: progress.slice(-14) });
+      const seen = Number(url.searchParams.get("rev") || 0);
+      if (!(seen >= rev)) return res.end(body());
+      // Nothing new. Hold the request rather than answering "same as before" and letting the plugin
+      // come back on a timer — a timer in a background window fires about once a minute, so that is
+      // how long a line took to appear in the window watching the run.
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(t);
+        const at = ctlWaiters.indexOf(done);
+        if (at >= 0) ctlWaiters.splice(at, 1);
+        try { res.end(body()); } catch (e) {}
+      };
+      const t = setTimeout(done, 25000);
+      ctlWaiters.push(done);
+      req.on("close", () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(t);
+        const at = ctlWaiters.indexOf(done);
+        if (at >= 0) ctlWaiters.splice(at, 1);
+      });
+      return;
     }
 
     if (url.pathname === "/start" && req.method === "POST") {
@@ -162,8 +195,8 @@ export function startJobServer(port = 3778) {
     // Wait until somebody presses the button in the plugin window.
     waitForStart() { if (!startWanted) startWanted = new Promise((r) => { startResolve = r; }); return startWanted; },
     // Say something the plugin window can show while a long step runs.
-    say(line) { progress.push(String(line)); if (progress.length > 400) progress.shift(); },
-    phase(p) { phase = String(p); },
+    say(line) { progress.push(String(line)); if (progress.length > 400) progress.shift(); bump(); },
+    phase(p) { phase = String(p); bump(); },
     lastPoll: () => lastPoll,
     // Queue one job and resolve when the plugin reports back. One job at a time by construction:
     // the plugin only ever sees the job that is pending right now.

@@ -6,9 +6,10 @@ pages — and then measures what it built against the source instead of asking y
 No model in the loop. The whole transfer is deterministic code: the same file gives the same
 result twice.
 
-Three files have been migrated with it so far — one heavy on boolean geometry and photographs
-(25 351 nodes), one dense interface (28 190 nodes), one small set of app concepts. Every node
-count came out exact; the largest position error in the interface file was one pixel.
+Four files have been migrated with it so far — one heavy on boolean geometry and photographs
+(25 351 nodes), one dense interface (28 190 nodes), one of 45 separate objects across four pages
+(45 110 nodes), one small set of app concepts. Every node count came out exact; the largest
+position error in the interface file was one pixel.
 
 ---
 
@@ -66,7 +67,8 @@ node mcp.mjs info      # Pixso answers
 
 1. Open the file you want to move **in Pixso**.
 2. Create an empty file **in Figma**.
-3. **Double-click `start.cmd`** in this repository. A console window opens and stays open.
+3. Start the runner: **double-click `start.cmd`** on Windows, or **`start.command`** on macOS. A
+   console window opens and stays open.
 4. In Figma: **Plugins → Development → pix-to-fig runner**.
 5. Press **«Перенести файл из Pixso»** in the plugin window.
 
@@ -75,8 +77,11 @@ extracting from Pixso, building — and the verdict at the end. Leave both windo
 says it is done.
 
 The button cannot do this on its own: the plugin is allowed to talk to exactly one address, the
-local runner, and has no way to reach Pixso. `start.cmd` is that runner. Everything it does is
-also available as separate commands if you prefer them — see `tools/`.
+local runner, and has no way to reach Pixso. `start.cmd` / `start.command` is that runner.
+Everything it does is also available as separate commands if you prefer them — see `tools/`.
+
+> On macOS, if double-clicking `start.command` does nothing, it has lost its executable bit —
+> `chmod +x start.command` in Terminal, once.
 
 A file of 28 000 nodes takes about half an hour, and most of that is Pixso handing over vectors
 one at a time. Interrupting is safe: run it again and it skips what it already has.
@@ -116,7 +121,17 @@ operands above — and **unexplained loss**, which should always be zero.
 
 ## When something is wrong
 
-Tell us, and send:
+First, thirty seconds that need neither Pixso nor Figma:
+
+```bash
+node tools/selftest.mjs
+```
+
+It compiles the code that travels into Figma, parses the plugin window, and drives that window
+through every state a run passes through. If this fails, the problem is in the repository and not in
+your file.
+
+Then tell us, and send:
 
 - the last twenty lines of the build output (the table and the verdict);
 - `out/mine/obj/<object>/check-report.json` for the object that is wrong — it names the nodes;
@@ -129,11 +144,12 @@ by eye and by nothing else: the measurements said the object was perfect.
 
 ## If it stops
 
-- **The plugin says "runner not reachable".** Normal between steps — nothing is listening while
-  extraction runs. It reconnects on its own.
+- **The plugin says «Раннер не запущен».** Nothing is listening on the local port: start
+  `start.cmd` / `start.command` and the window picks it up by itself within a second or two.
 - **A build sits at "waiting: the plugin has not polled".** Check no runner from an earlier run is
-  still alive: `Get-Process node` on Windows. One that outlived its shell keeps the plugin's
-  connection and the new run waits forever for a plugin that is already busy talking to a corpse.
+  still alive: `Get-Process node` on Windows, `pgrep -fl node` on macOS. One that outlived its
+  shell keeps the plugin's connection, and the new run waits forever for a plugin that is already
+  busy talking to a corpse.
 - **Renders hang but builds work.** The Figma window is not in front. That is the whole cause.
 - **The plugin window is stuck on one job.** Close it and run it again from Plugins → Development.
 
@@ -150,6 +166,7 @@ by eye and by nothing else: the measurements said the object was perfect.
 | `tools/build-all.mjs` | builds and verifies a whole file in one plugin session |
 | `tools/visual-all.mjs` | renders both sides and ranks by how different they look |
 | `tools/coverage.mjs` | source against payload |
+| `tools/selftest.mjs` | everything checkable without Pixso or Figma |
 | `figma-plugin/` | the runner: transport and host, no migration logic |
 | `docs/METHOD.md` | why it is built this way |
 | `docs/FINDINGS.md` | every defect found so far, with the measurement that found it |

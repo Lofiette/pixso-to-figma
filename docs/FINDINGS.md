@@ -797,3 +797,35 @@ Neither guess about where the time went survived measurement.
 
 What is left is Pixso's own floor: it exports one vector at a time, and a section of 933 vector
 nodes costs twenty minutes no matter what the driver does.
+
+### A node id is not a handle you can carry between two jobs
+
+The build reports the id of the root it made; the check that follows is a separate job and looks
+that id up. On a run of 45 objects, two of them reported an id that resolved to something else
+entirely — and the check dutifully measured the stranger. One object of 5 722 nodes was reported as
+"3 of 5722 nodes", which reads exactly like a build that collapsed, while the build report for the
+same object said 5 722 nodes built and a root 10 032 x 5 807 px. Both were true.
+
+What that "3" was: the verifier walks the built tree in payload order and stops descending wherever
+the payload says a subtree was collapsed into one SVG. Handed a frame with two children, it counts
+the frame, both children, and stops — three. So the number was not a measurement of the object at
+all. It was a measurement of whatever now answered to that number.
+
+Figma allocates ids sequentially, which makes this checkable without reproducing it. Laid out in
+build order, every object's root id sits after the previous object's block — except those two,
+whose ids point *backwards* into a block allocated to an object built much earlier. Neither the
+builder nor the transport can be blamed: `built[0]` is assigned once at creation and never
+reassigned, the plugin passes `rootNodeId` through untouched, and the reported root size was the
+right one. The id itself stopped meaning what it meant.
+
+The mechanism is still unknown. The fix does not depend on knowing it: the build now stamps the root
+with the id of the Pixso node it came from — `setPluginData("pxSrc", ...)` — and the check, having
+looked the id up, makes the node prove it is the right one. When it cannot, the check finds the node
+that carries the stamp, uses that, and **says so in the report**. A check that silently corrects
+itself hides the one thing worth knowing.
+
+The same distrust had to be applied to the `--clean` step, where it mattered more: that step
+*removes* nodes by remembered id. A stale id there does not spoil a measurement, it deletes
+something out of the designer's file. It now removes a node found by id only if that node is
+unstamped, or stamped with the source about to be rebuilt, and reports how many ids it declined to
+act on.

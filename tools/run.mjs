@@ -54,7 +54,7 @@ try {
   } catch (e) {
     say("Pixso не отвечает на 127.0.0.1:3667.");
     say("Откройте Pixso, включите в нём MCP и откройте нужный файл.");
-    srv.phase("idle");
+    srv.phase("stopped");
     throw new Error("pixso not reachable");
   }
 
@@ -67,7 +67,7 @@ try {
     say("Не удалось прочитать файл в Pixso:");
     const why = String(pg.stderr || pg.stdout || "").split(String.fromCharCode(10)).filter(Boolean).slice(-4);
     for (const w of why) say("  " + w.slice(0, 160));
-    srv.phase("idle");
+    srv.phase("stopped");
     throw new Error("px-pages failed");
   }
   const doc = JSON.parse(readFileSync(PAGES, "utf8"));
@@ -136,7 +136,7 @@ try {
   if (ex.status !== 0) say("Часть объектов извлечь не удалось — продолжаю с тем, что есть.");
 
   const list = join(DIRS, "dirs.txt");
-  if (!existsSync(list)) { say("Извлекать оказалось нечего."); srv.phase("idle"); throw new Error("nothing extracted"); }
+  if (!existsSync(list)) { say("Извлекать оказалось нечего."); srv.phase("stopped"); throw new Error("nothing extracted"); }
   const dirs = readFileSync(list, "utf8").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
 
   // ---------- source against payload ----------
@@ -160,7 +160,7 @@ try {
   say("Готово. Смотрите результат в Figma.");
 } catch (e) {
   say("Остановлено: " + (e.message || e));
-  srv.phase("idle");
+  srv.phase("stopped");
 } finally {
   // Give the plugin a moment to pick up the last lines before the port closes.
   await new Promise((r) => setTimeout(r, 4000));
