@@ -851,5 +851,22 @@ pushes it over the line. So the reported node is a threshold accident and the re
 subtree sitting half a pixel low. In one object of 774 nodes, 21 visible nodes and 410 hidden ones
 are in that band.
 
-Which ancestor introduces it, and why vertically, is not known. It is not the root: the check measures
-everything relative to the root, so any offset there cancels.
+Which ancestor introduces it: walking the chain and printing both sides at every step put it on one
+node, and the arithmetic then explains itself. The frame is a horizontal auto-layout row, 56 px tall,
+with `counterAxisAlignItems: CENTER` and an **inside border on the top edge only** — top weight 1,
+bottom 0. Figma takes an inside border out of the content box, so the row's content area runs from
+y = 1 to y = 56, which is 55 px, and centring a 56 px child in it gives `1 + (55 - 56) / 2 = 0.5`. Its
+sibling, 16 px tall, sits at `1 + (55 - 16) / 2 = 20.5`. Both measured, to the digit. Pixso does not
+deduct the border, so it centres at 0.
+
+So this is an engine difference and not a defect in the transfer, and it has no clean fix: making the
+border stop consuming layout space means changing its alignment, which moves the drawn line by the
+same half pixel. It is 0.5 px, it is inherited by everything below the row, and the node it gets
+reported on is simply the first descendant to cross a threshold. Counted on its own line, explained,
+and left alone.
+
+Two things this ruled out along the way, both worth not re-testing: the payload is right about the
+source (Pixso's own absolute positions agree with the payload's composed transform chain to three
+decimals, so nothing is lost in extraction), and it is not the SCALE constraints that every reported
+node happened to carry — applying constraints after the last resize instead of during the place passes
+leaves the offsets identical.

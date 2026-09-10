@@ -139,11 +139,16 @@ export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
     // Two numbers, because they mean different things: what a person could see, and the half-pixel
     // band that every file carries on frames imported from an SVG.
     const sub = Math.max(0, (c.visibleOver05 || 0) - (c.visibleOver1 || 0));
+    const szV = c.sizeOverVisible || 0, szH = Math.max(0, (c.sizeOver || 0) - szV);
     say("    " + c.count + "/" + c.expected + " nodes, " + (c.visibleOver1 || 0) + " out of position" +
       (c.visibleOver1 ? " (worst " + c.maxPosVisible + " px)" : "") +
-      (sub ? ", " + sub + " within a pixel" : ""));
+      (sub ? ", " + sub + " within a pixel" : "") +
+      (szV ? ", " + szV + " wrong size (worst " + c.maxSizeVisible + " px)" : "") +
+      (szH ? ", " + szH + " wrong size but hidden" : ""));
     results.push({ name, rootId: c.rootUsed || r.rootId, relocated: !!c.rootRelocated, nodes: c.count, expected: c.expected,
-      posOver: c.visibleOver1 || 0, subPixel: sub, worstPos: c.maxPosVisible, maxSize: c.maxSize, sizeOver: c.sizeOver || 0,
+      posOver: c.visibleOver1 || 0, subPixel: sub, worstPos: c.maxPosVisible,
+      maxSize: c.maxSizeVisible || 0, sizeOver: c.sizeOverVisible || 0,
+      sizeHidden: Math.max(0, (c.sizeOver || 0) - (c.sizeOverVisible || 0)),
       failures: (r.failures || []).length, fontSubs: subs });
   }
   return results;
@@ -153,17 +158,30 @@ export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
 // one — but it must not be hidden either, or a run reads as broken when the algorithm did its job.
 export function verdict(results, say = console.log) {
   let exact = 0, heldByFonts = 0, wrong = 0, errored = 0, relocated = 0, subTotal = 0, subObjects = 0;
+  let hiddenSize = 0, hiddenSizeObjects = 0;
   const fontUse = new Map();
   const bad = [];
   for (const r of results) {
     if (r.error) { errored++; bad.push(r.name + ": " + String(r.error).slice(0, 60)); continue; }
     if (r.relocated) relocated++;
     if (r.subPixel) { subTotal += r.subPixel; subObjects++; }
+    if (r.sizeHidden) { hiddenSize += r.sizeHidden; hiddenSizeObjects++; }
     for (const f of r.fontSubs) fontUse.set(f, (fontUse.get(f) || 0) + 1);
     const ok = r.nodes === r.expected && r.posOver === 0 && r.sizeOver === 0 && r.failures === 0;
     if (ok) exact++;
     else if (r.fontSubs.length) heldByFonts++;
-    else { wrong++; bad.push(r.name + ": " + r.posOver + " out of position, worst " + r.worstPos + " px"); }
+    else {
+      // Name the thing that is actually wrong. This line reported position no matter what, so 17
+      // objects failing on node size were listed as "0 out of position, worst 0 px" — a summary
+      // that contradicts itself and sends the reader looking in the wrong place.
+      wrong++;
+      const why = [];
+      if (r.nodes !== r.expected) why.push("built " + r.nodes + " nodes of " + r.expected);
+      if (r.posOver) why.push(r.posOver + " out of position, worst " + r.worstPos + " px");
+      if (r.sizeOver) why.push(r.sizeOver + " the wrong size, worst " + r.maxSize + " px");
+      if (r.failures) why.push(r.failures + " property " + (r.failures === 1 ? "failure" : "failures"));
+      bad.push(r.name + ": " + (why.join("; ") || "no reason recorded — look at check-report.json"));
+    }
   }
   if (fontUse.size) {
     say("");
@@ -183,11 +201,19 @@ export function verdict(results, say = console.log) {
   if (relocated) say("root found by stamp      " + relocated + "   (the id the build reported had gone stale)");
   // Printed, not folded into the verdict, and not swept away either: it is a real difference from the
   // source, it is half a pixel, and its cause is not yet known.
-  if (subTotal) say("within a pixel           " + subTotal + " nodes in " + subObjects + " object" +
-    (subObjects === 1 ? "" : "s") + "   (vertical, on frames imported from SVG — unexplained)");
+  if (hiddenSize) say("wrong size but hidden    " + hiddenSize + " node" + (hiddenSize === 1 ? "" : "s") +
+    " in " + hiddenSizeObjects + " object" + (hiddenSizeObjects === 1 ? "" : "s") +
+    "   (nobody can see these — hidden in the source too)");
+  if (subTotal) say("within a pixel           " + subTotal + " node" + (subTotal === 1 ? "" : "s") +
+    " in " + subObjects + " object" + (subObjects === 1 ? "" : "s") +
+    "   (an inside border on one side of an auto-layout frame:");
+  if (subTotal) say("                         Figma takes it out of the content box and Pixso does not)");
   for (const b of bad.slice(0, 10)) say("   " + b);
-  const clean = wrong === 0 && errored === 0;
+  const clean = wrong === 0 && errored === 0 && results.length > 0;
   say("");
-  say(clean ? (heldByFonts ? "PASS apart from the missing fonts" : "PASS") : "NOT CLEAN");
+  // A run that built nothing must not report PASS. It said so, and "PASS" over an empty list is the
+  // most misleading thing this summary could print.
+  if (!results.length) say("NOTHING BUILT — there was nothing to build, or every object was skipped");
+  else say(clean ? (heldByFonts ? "PASS apart from the missing fonts" : "PASS") : "NOT CLEAN");
   return { exact, heldByFonts, wrong, errored, clean };
 }

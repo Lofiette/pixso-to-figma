@@ -146,10 +146,21 @@ by eye and by nothing else: the measurements said the object was perfect.
 
 - **The plugin says «Раннер не запущен».** Nothing is listening on the local port: start
   `start.cmd` / `start.command` and the window picks it up by itself within a second or two.
-- **A build sits at "waiting: the plugin has not polled".** Check no runner from an earlier run is
-  still alive: `Get-Process node` on Windows, `pgrep -fl node` on macOS. One that outlived its
-  shell keeps the plugin's connection, and the new run waits forever for a plugin that is already
-  busy talking to a corpse.
+- **A build sits at "waiting for the plugin" while the plugin looks fine.** A runner from an earlier
+  run has outlived its shell and still holds the plugin's connection, so the plugin is talking to a
+  corpse. It is worth identifying rather than guessing — one of these two lines will show a second
+  process on the port that is not the one listening:
+
+  ```bash
+  netstat -ano | findstr :3778
+  ```
+
+  ```bash
+  lsof -nP -iTCP:3778
+  ```
+
+  Kill that process (`taskkill /PID <n> /F`, or `kill <n>`) and the plugin reconnects within a
+  second or two on its own.
 - **Renders hang but builds work.** The Figma window is not in front. That is the whole cause.
 - **The plugin window is stuck on one job.** Close it and run it again from Plugins → Development.
 

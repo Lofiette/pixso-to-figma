@@ -263,7 +263,9 @@ for (var j = 0; j < F.length; j++) {
       REPORT.rotPinned = (REPORT.rotPinned || 0) + 1;
     }
   }
-  if (d2.Q !== undefined) tryset(n2, "constraints", dv(d2, "Q"), id2);
+  // Constraints are NOT set here. See the pass at the end of the build: a constraint governs what
+  // happens when the parent is resized, and this build resizes parents on purpose several times
+  // after this point.
   var m = d2["7"];
   if (m) { try { n2.relativeTransform = [[m[0], m[1], m[2]], [m[3], m[4], m[5]]]; } catch (e3) { REPORT.rtFail++; } }
 }
@@ -641,6 +643,37 @@ await settle();
 phase("textLine");
 if (probe) { try { probe.remove(); } catch (eP) {} probe = null; }
 
+// Constraints last, and only once every resize is behind us.
+//
+// A constraint says what should happen to a node when its parent is resized — a rule for the
+// designer's future, not for this build. Set during the place passes, as it used to be, it was in
+// force for every resize that came after: the size repairs and the line-height pass both resize
+// parents on purpose, and a child whose source says SCALE is dragged by half of any change. Nothing
+// needs that to happen mid-build, and the same lesson is already applied inside an SVG import, where
+// children are pinned to MIN/MIN before the frame is resized.
+//
+// Honest about what it did NOT fix: this was tried as the explanation for the half-pixel offsets,
+// because every reported node carried SCALE/SCALE. It is not the cause — the offsets are identical
+// with constraints applied last. Kept because it is the right order regardless, and it costs 0 ms.
+// Which nodes get them is unchanged from when this lived in placePass — only when. A child inside an
+// auto-layout flow is placed by the flow and Figma rejects constraints on it, so those are skipped
+// here exactly as they were skipped there; only the timing moved.
+phase("constraints");
+for (var qi = 0; qi < F.length; qi++) {
+  if (qi % YIELD_EVERY === 0 && qi > 0) await breathe();
+  var rq = F[qi], dq = rq.d;
+  if (dq.Q === undefined || !built[qi] || rq.p < 0) continue;
+  var pdq = F[rq.p].d;
+  if (pdq.y && pdq.y !== "NONE") {
+    var mq = dq["7"];
+    var rotq = mq && (Math.abs(mq[0] - 1) > 1e-6 || Math.abs(mq[1]) > 1e-6 ||
+                      Math.abs(mq[3]) > 1e-6 || Math.abs(mq[4] - 1) > 1e-6);
+    if (dq.M !== "ABSOLUTE" && !rotq) continue;
+  }
+  tryset(built[qi], "constraints", dv(dq, "Q"), "#" + qi);
+  REPORT.constraintsSet = (REPORT.constraintsSet || 0) + 1;
+}
+
 const root = built[0];
 // Stamp the root with the id of the Pixso node it came from. The check that follows this build is
 // a separate job and can only be handed a Figma node id — and an id proved not to be enough: two
@@ -763,10 +796,16 @@ else {
     if (dp > R.maxPos) R.maxPos = dp;
     if (dp > 0.5) { if (shown[i]) { R.visibleOver05++; if (dp > R.maxPosVisible) R.maxPosVisible = dp; } else R.hiddenOver05++; }
     // Half a pixel and a pixel are different findings and were being added up as one. Measured over
-    // three files: most objects carry a few nodes out by exactly 0.5 px, always vertically, always a
-    // frame imported from an SVG — while a real defect, like the 115 nodes at 1.41 px in one object,
-    // sat in the same total. So a verdict of "not clean" fired on almost everything and stopped
-    // meaning anything. Counted apart, never dropped: nothing here is rounded away.
+    // three files: most objects carry nodes out by exactly 0.5 px, always vertically — while a real
+    // defect, like the 115 nodes at 1.41 px in one object, sat in the same total. So a verdict of
+    // "not clean" fired on almost everything and stopped meaning anything.
+    //
+    // What the half pixel is: a frame with an INSIDE border on one side only — top 1, bottom 0 — has
+    // that border taken out of its auto-layout content box by Figma, and Pixso does not take it out.
+    // A row 56 tall with a 1 px top border centres a 56 tall child at 1 + (55 - 56) / 2 = 0.5, and a
+    // 16 tall one at 1 + (55 - 16) / 2 = 20.5. Both measured, to the digit. Every descendant inherits
+    // it, which is why it shows up on whichever child first crosses the threshold rather than on the
+    // frame that caused it. Counted apart, never dropped.
     if (dp > 1 && shown[i]) R.visibleOver1++;
     dpArr[i] = dp;
     if (dp > 0.5 && shown[i] && (i === 0 || dpArr[p] <= 0.5)) R.pos.push({ i: i, name: n.name, type: n.type, parent: i ? F[p].d.a : null, dx: Math.round(dx*100)/100, dy: Math.round(dy*100)/100, mag: Math.round(dp*100)/100 });
@@ -774,6 +813,14 @@ else {
       const ds = Math.max(Math.abs(n.width - d.j), Math.abs(n.height - d.k));
       if (ds > R.maxSize) R.maxSize = ds;
       if (ds > 0.5) R.sizeOver = (R.sizeOver || 0) + 1;
+      // Split by visibility, the way position now is. Without it, 17 objects of 69 were declared
+      // wrong over eleven hidden notification badges each, built 8x4 where the source has 4x4 — nodes
+      // the source itself does not draw. Burying the visible findings under them is how a verdict
+      // stops being read. Why 8 and not 4 is not measured yet; it is invisible, so it waits.
+      if (ds > 0.5 && shown[i]) {
+        R.sizeOverVisible = (R.sizeOverVisible || 0) + 1;
+        if (ds > (R.maxSizeVisible || 0)) R.maxSizeVisible = ds;
+      }
       if (ds > 0.5) R.size.push({ i: i, name: n.name, type: n.type, w: Math.round(n.width*100)/100, h: Math.round(n.height*100)/100, ew: d.j, eh: d.k, mag: Math.round(ds*100)/100 });
     }
   }
@@ -782,6 +829,7 @@ else {
   R.maxPos = Math.round(R.maxPos * 100) / 100;
   R.maxPosVisible = Math.round(R.maxPosVisible * 100) / 100;
   R.maxSize = Math.round(R.maxSize * 100) / 100;
+  R.maxSizeVisible = Math.round((R.maxSizeVisible || 0) * 100) / 100;
   RESULT = R;
 }
 }

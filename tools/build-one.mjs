@@ -107,9 +107,10 @@ writeFileSync(f("check-report.json"), JSON.stringify(c, null, 2), "utf8");
 
 console.log("  nodes            " + c.count + " / " + c.expected);
 console.log("  visible nodes    " + c.visibleNodes);
-// Over a pixel is a defect a person could point at; the half-pixel band below it is on every file,
-// always vertical, always a frame imported from an SVG, and its cause is still unknown. Both are
-// printed — adding them together made the verdict fire on almost every object and mean nothing.
+// Over a pixel is a defect a person could point at. The half-pixel band below it is on every file and
+// is an engine difference: Figma takes an inside border on one side of an auto-layout frame out of the
+// content box, Pixso does not, so a centred child sits half a border-width low and its whole subtree
+// with it. Both printed — adding them made the verdict fire on almost every object and mean nothing.
 console.log("  out of position  " + (c.visibleOver1 || 0) + " over 1 px (worst " + c.maxPosVisible + ")");
 console.log("  within a pixel   " + Math.max(0, (c.visibleOver05 || 0) - (c.visibleOver1 || 0)));
 console.log("  size delta       max " + c.maxSize + " px");
