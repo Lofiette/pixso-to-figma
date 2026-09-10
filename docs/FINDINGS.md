@@ -937,3 +937,15 @@ real difference survives it — something opaque on one side and not the other s
 against its colour — and the alpha channel is no longer compared on its own. Checked first that this
 was not a one-pixel shift: offsets from -3 to +3 in both axes all scored worse than zero offset, so
 the images were already aligned.
+
+### Ranking by "ink on one side" assumes ink is dark and paper is light
+
+The only genuine defect the audit has found — a heading Figma wrapped onto two lines — scored **0.00 %**
+by that measure and sorted to the bottom of the file. The design is dark blue-grey text on pale blue,
+so moving a whole word changes no channel by the 191 a "gross" pixel requires. Its mean difference was
+**36.9 against 2.3** for the next object in the file: sixteen times the runner-up, and unmissable.
+
+Ranked by mean now, and an object earns a look three ways — grossly different pixels, a mean that
+stands out, or the two renders coming out different heights at the same width, which is exactly how a
+wrapped line announces itself. On the fifth file: 69 compared, one worth looking at, and it is the
+right one.

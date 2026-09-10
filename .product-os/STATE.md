@@ -49,11 +49,19 @@ actually noticed passed it with zero nodes out of position.
 | source vs payload | anything that never reached the payload | `coverage.mjs` |
 | render vs render | anything the two editors draw differently | `visual-all.mjs` |
 
-The third one **completed over a whole file for the first time on day three**, and immediately earned
-its keep: it found a heading wrapping onto two lines in an object the geometry check called exact.
-Both renders are composited over white before comparison — under a fully transparent pixel Pixso
-stores 0,0,0 and Figma stores 255,255,255, and comparing those raw put a perfect object at the top of
-the ranking with 10.32 % "ink on one side" while every visible pixel was byte-identical.
+The third one **completed over a whole file for the first time on day three**: 69 objects compared,
+**one worth looking at**, and it is the right one. It took three corrections to get there, all of them
+in the instrument rather than the algorithm:
+
+- **Raise the Figma window before every object, not once at the start.** Rasterisation happens only in
+  the front window, and over a run this long something always takes focus. Raised once, the first
+  stolen click turns every remaining render into a two-minute timeout.
+- **Composite both renders over white before comparing.** Under a fully transparent pixel Pixso stores
+  0,0,0 and Figma stores 255,255,255 — same invisibility, opposite colour underneath. Compared raw,
+  that put a byte-perfect object at the top of the ranking with 10.32 % "ink on one side".
+- **Rank by mean difference, not by the share of grossly different pixels.** "Ink on one side" assumes
+  dark ink on light paper. The one real defect in the file is dark blue-grey text on pale blue and
+  scored 0.00 % by that measure while its mean was 36.9 against 2.3 for the next object.
 
 **2. A Figma node id is not a handle you can carry between two jobs.** Measured on a run of 45
 objects: two of them reported a root id that resolved to a node built long before them. So the build
@@ -198,7 +206,10 @@ owner knows it; ask.
 ## Checkpoint
 
 - **Updated:** 2026-09-10, day three.
-- **Verified by:** node counts per object on five files, `coverage.mjs` over all of them, pixel
-  comparison on individual objects, and `selftest.mjs` (17 checks, no editors). `test-clean.mjs`
-  proves the delete rule against nodes it makes itself. Not verified by a completed visual audit —
-  that has still never run to the end of a file.
+- **Verified by:** node counts per object on five files, `coverage.mjs` over all of them, and
+  `selftest.mjs` (17 checks, no editors). `test-clean.mjs` proves the delete rule against nodes it
+  makes itself. And, for the first time, **a visual audit that ran to the end of a file**: 69 objects,
+  one flagged, and the flagged one is a genuine defect the geometry check cannot see.
+- **The fifth file's own result:** 69 of 69 exact — every node count, zero out of position, zero wrong
+  size, zero unexplained loss. The two differences that remain are named and understood: 1074 nodes
+  half a pixel low from Figma's border accounting, and one wrapped heading.

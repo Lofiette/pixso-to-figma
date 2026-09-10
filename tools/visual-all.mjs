@@ -125,6 +125,11 @@ for (let i = 0; i < dirs.length; i++) {
   // Named before the work starts: when the far end hangs, this line is the only record of
   // which object it hung on.
   process.stdout.write("  [" + (i + 1) + "/" + dirs.length + "] " + name + String.fromCharCode(10));
+  // Raised before every object, not once at the start. Figma rasterises only in the front window, and
+  // over a run this long something always takes focus — a terminal, a notification, the person whose
+  // machine this is. Raised once, the first stolen click turned every remaining render into a
+  // two-minute timeout: 69 objects would have been two and a half hours. It costs about 200 ms.
+  focusFigma();
   const px = pixsoRender(meta.rootId, W_TARGET);
   if (px.e || !px.d) { rows.push(logErr({ name, error: "pixso: " + (px.e || "no data") })); continue; }
   // One retry, with the window raised again first. Figma rasterises only in the front window, so
@@ -151,7 +156,7 @@ for (let i = 0; i < dirs.length; i++) {
   rows.push({ name, ...c });
   appendFileSync(DONE_FILE, JSON.stringify({ name, ...c }) + String.fromCharCode(10), "utf8");
   // Keep the pictures for the ones worth looking at; 290 pairs would be a lot of disk otherwise.
-  if (c.gross > 0.01 || c.sizeMismatch) {
+  if (c.gross > 0.01 || c.mean > 5 || c.sizeMismatch) {
     writeFileSync(join(OUT, name + ".pixso.png"), Buffer.from(px.d, "base64"));
     writeFileSync(join(OUT, name + ".figma.png"), Buffer.from(fg.d, "base64"));
   }
@@ -160,7 +165,14 @@ for (let i = 0; i < dirs.length; i++) {
 srv.close();
 
 const done = rows.filter((r) => !r.error);
-done.sort((a, b) => b.gross - a.gross);
+// Ranked by mean difference, not by the share of grossly different pixels.
+//
+// "Ink on one side" assumes ink is dark and paper is light. The one real defect this audit has found
+// — a heading Figma wrapped onto two lines — is dark blue-grey text on pale blue, where moving a whole
+// word changes no channel by the 191 required to count as gross. It scored 0.00 % and sorted to the
+// bottom, while its mean was 36.9 against 2.3 for the next object in the file. The mean does not care
+// how contrasty the design is.
+done.sort((a, b) => b.mean - a.mean);
 writeFileSync(join(OUT, "report.json"), JSON.stringify(rows, null, 2), "utf8");
 
 console.log(NL + "================ how different they look ================");
@@ -170,9 +182,14 @@ for (const r of done.slice(0, 30)) {
     (r.same * 100).toFixed(1).padStart(10) + "%" + r.mean.toFixed(1).padStart(8) +
     (r.sizeMismatch ? "   size " + r.sizeMismatch : ""));
 }
-const bad = done.filter((r) => r.gross > 0.01).length;
+// Three ways to earn a look, because one number has already proved too narrow: grossly different
+// pixels, a mean that stands out from the rest of the file, or renders that came out different sizes
+// at the same width — which is how a wrapped line announces itself.
+const worth = (r) => r.gross > 0.01 || r.mean > 5 || r.sizeMismatch;
+const bad = done.filter(worth).length;
 const errs = rows.filter((r) => r.error);
-console.log(NL + done.length + " compared, " + bad + " with more than 1 % of pixels inked on one side only");
+console.log(NL + done.length + " compared, " + bad + " worth looking at" +
+  (bad ? " (gross pixels, a standout mean, or renders of different heights)" : ""));
 if (errs.length) {
   console.log(errs.length + " could not be compared:");
   for (const e of errs.slice(0, 8)) console.log("  " + e.name + ": " + e.error);
