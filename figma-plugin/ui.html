@@ -305,4 +305,12 @@ async function poll() {
   polling = false;
 }
 poll();
+
+// A last-resort nudge, because a stopped job loop looks exactly like a healthy plugin from both
+// sides: the window is open, the progress line keeps updating, and the runner waits forever for a
+// plugin that will never ask for work. That has now happened twice, and only reopening the window
+// recovered it. poll() returns immediately when it is already running, so this can restart nothing
+// except a loop that has genuinely stopped. Thirty seconds nominal — Chromium stretches it to about a
+// minute in a background window, which is the right cadence for a watchdog anyway.
+setInterval(function () { if (!polling && !busy) poll(); }, 30000);
 </script>

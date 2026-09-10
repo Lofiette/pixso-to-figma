@@ -870,3 +870,25 @@ source (Pixso's own absolute positions agree with the payload's composed transfo
 decimals, so nothing is lost in extraction), and it is not the SCALE constraints that every reported
 node happened to carry — applying constraints after the last resize instead of during the place passes
 leaves the offsets identical.
+
+### Figma will not make an auto-layout frame smaller than its own padding
+
+A notification badge, 4x4 in the source with 4 px of padding on the left and 4 on the right and no
+children at all, arrived 8x4. Eleven of them in each of 17 objects of one file; in every one of those
+objects, one of the eleven was visible, so this was a real four-pixel defect and not a curiosity.
+
+All four ways out were measured rather than argued about, on frames made for the purpose:
+
+| what is done before resizing to 4x4 | result |
+|---|---|
+| nothing — as it was built | **8 x 4** |
+| padding halved to 2/2 | 4 x 4 |
+| padding zeroed | 4 x 4 |
+| `layoutMode = NONE` | 4 x 4, **padding values kept at 4/4** |
+| padding set *after* the resize | 8 x 4 — it re-expands |
+
+The last row matters: reordering does not help, so something has to be given up. On a frame with no
+children the flow lays nothing out, which makes `layoutMode` the only property there with no
+observable effect — so that is what is surrendered, and every number the source carries survives. The
+build says so on its own line each time it does it. Restricted to childless frames: dropping the flow
+on a frame that has children would move them.

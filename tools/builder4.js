@@ -296,6 +296,30 @@ async function repairPass(countIt) {
       if (ns.layoutAlign === "STRETCH") { tryset(ns, "layoutAlign", "INHERIT", "#" + s1); PINNED[s1] = 1; }
       if (ns.layoutGrow) { tryset(ns, "layoutGrow", 0, "#" + s1); PINNED[s1] = 1; }
     }
+    // Figma will not let an auto-layout frame be smaller than the sum of its own padding on the flow
+    // axis, and Pixso will. A 4x4 notification badge with 4 px of padding on each side therefore
+    // arrives 8x4 — measured, in 17 objects of one file, one of them visible. Measured too: halving
+    // the padding fixes it, zeroing it fixes it, setting the padding after the resize does not (it
+    // re-expands), and clearing layoutMode fixes it while KEEPING the padding values.
+    //
+    // With no children there is nothing for the flow to lay out, so layoutMode is the only property
+    // here that has no observable effect — and it is the one given up. Every number the source
+    // carries survives; a frame that Figma cannot represent at the source's size gives up the enum
+    // rather than the geometry. Restricted to childless frames: dropping the flow on a frame that has
+    // children would move them.
+    try {
+      var kidsN = ns.children ? ns.children.length : 0;
+      if (!kidsN && ns.layoutMode && ns.layoutMode !== "NONE") {
+        var padSum = ns.layoutMode === "HORIZONTAL"
+          ? (ns.paddingLeft || 0) + (ns.paddingRight || 0)
+          : (ns.paddingTop || 0) + (ns.paddingBottom || 0);
+        var wanted = ns.layoutMode === "HORIZONTAL" ? ds.j : ds.k;
+        if (padSum > wanted + 0.5) {
+          tryset(ns, "layoutMode", "NONE", "#" + s1);
+          REPORT.layoutDroppedForSize = (REPORT.layoutDroppedForSize || 0) + 1;
+        }
+      }
+    } catch (ePad) {}
     // re-read before acting: a stale size would pin an axis at the wrong value
     if (Math.abs(ns.width - ds.j) <= 0.5 && Math.abs(ns.height - ds.k) <= 0.5) { REPORT.sizeRejected = (REPORT.sizeRejected || 0) + 1; continue; }
     try { ns.resize(Math.max(0.01, ds.j), Math.max(0.01, ds.k)); if (countIt) REPORT.sizeRepaired++; } catch (e5) {}

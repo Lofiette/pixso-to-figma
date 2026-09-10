@@ -3,9 +3,9 @@
 ## Now
 
 - **Task:** Pixso -> Figma migration, 1:1, whole files, no model in the loop.
-- **Status:** four files migrated. The mechanism works and is packaged for designers to test.
-  What is not finished is the *acceptance*: one check is blind by construction, one has never run
-  to the end of a file, and one object's verification is unexplained.
+- **Status:** five files migrated. Day three went into the *instrument* rather than the algorithm:
+  the verdict now distinguishes what a person could see from what only a measurement can, and the
+  one thing that was unexplained at the end of day two is explained.
 
 The transfer itself contains no model call. Every step is deterministic code: the same file gives
 the same result twice. What has needed a model is **debugging** — a new class of defect does not
@@ -14,9 +14,11 @@ find itself.
 ## How it is run
 
 ```
-start.cmd                                    # designer path: double-click, then press the button
+start.cmd            (Windows)      # designer path: double-click, then press the button
+start.command        (macOS)
 node tools/run.mjs <name>                    # the same thing, with a console
 node tools/run.mjs <name> --page "<page>"    # one page of a very large file
+node tools/selftest.mjs                      # everything checkable with neither editor open
 ```
 
 Or the steps separately, from `tools/`:
@@ -26,21 +28,20 @@ node px-pages.mjs ../out/mine/pages.json
 node migrate-file.mjs ../out/mine/pages.json ../out/mine/obj
 node repack-all.mjs ../out/mine/obj/dirs.txt        # after any builder or packer change
 PX_PLACE_ABS=1 node build-all.mjs --clean --pages ../out/mine/pages.json --dirs ../out/mine/obj/dirs.txt
-node visual-all.mjs ../out/mine/obj/dirs.txt ../out/mine/vis 700
 node coverage.mjs --dirs ../out/mine/obj/dirs.txt
+node visual-all.mjs ../out/mine/obj/dirs.txt ../out/mine/vis 700
 ```
 
 Extraction needs Pixso desktop with its MCP on `127.0.0.1:3667`. Building needs the
-`pix-to-fig runner` plugin open in the target Figma file. Figma MCP `get_screenshot` is the
-reliable way to get a picture — but it renders the **saved** file, so a node built seconds ago may
-not be there yet.
+`pix-to-fig runner` plugin open in the target Figma file. **A change to `builder4.js` or `pack4.mjs`
+reaches Figma only through `repack-all.mjs`** — both travel inside the payload.
 
-## The one thing to understand before touching anything
+## The two things to understand before touching anything
 
-**The geometry verifier compares the built tree against the payload.** It proves the build faithful
-to the payload and nothing else. It cannot see the payload being wrong about the source, and it
-cannot see the two editors drawing the same payload differently. Every defect a person actually
-noticed passed it with zero nodes out of position.
+**1. The geometry verifier compares the built tree against the payload.** It proves the build
+faithful to the payload and nothing else. It cannot see the payload being wrong about the source,
+and it cannot see the two editors drawing the same payload differently. Every defect a person
+actually noticed passed it with zero nodes out of position.
 
 | check | what it catches | tool |
 |---|---|---|
@@ -48,16 +49,51 @@ noticed passed it with zero nodes out of position.
 | source vs payload | anything that never reached the payload | `coverage.mjs` |
 | render vs render | anything the two editors draw differently | `visual-all.mjs` |
 
-## What four files proved
+**2. A Figma node id is not a handle you can carry between two jobs.** Measured on a run of 45
+objects: two of them reported a root id that resolved to a node built long before them. So the build
+stamps its root with the id of the Pixso node it came from (`setPluginData("pxSrc", ...)`), and
+everything that looks a root up afterwards — the check, the visual audit, `--clean` — makes the node
+prove itself and says in the report when the id had gone stale. Nothing may delete by remembered id
+alone; `tools/test-clean.mjs` proves what `--clean` is allowed to remove.
+
+## What the verdict means now
+
+Three numbers that used to be one, because summing them made "not clean" fire on almost every
+object and mean nothing:
+
+- **out of position / the wrong size** — over a pixel, visible, someone can point at it. This is
+  what the verdict keys on.
+- **within a pixel** — exactly 0.5 px, vertical, inherited by a whole subtree. Explained below. Not
+  a defect in the transfer.
+- **wrong size but hidden** — nodes the source does not draw.
+
+Everything is still counted and printed. Nothing is rounded away.
+
+## What five files proved
 
 | file | nodes | result |
 |---|---|---|
 | Кейс Айдентика Лукоморье | 25 351 | boolean geometry, photographs, filters — the hard one |
 | Концепты для демо в Спектре | 1 611 | migrated first time, no change to the algorithm |
 | Капасити-менеджмент | 28 190 | dense interface; every node count exact, worst error 1 px |
-| Концепты (45 objects) | 45 110 | 43 of 45 verified, worst 1.41 px; two verification failures below |
+| Концепты (45 objects) | 45 110 | 43 of 45 verified; the two failures were the stale-id bug |
+| Редизайн. Ширина статьи | 39 585 | FIFTH-FILE-RESULT |
 
 `coverage.mjs` has never reported an unexplained loss on any of them.
+
+## Engine differences, which are not defects
+
+- **An inside border on one side of an auto-layout frame.** Figma takes an inside border out of the
+  content box; Pixso does not. A row 56 px tall with a 1 px top border and a centred counter axis
+  puts a 56 px child at `1 + (55 - 56) / 2 = 0.5`, and a 16 px child at `1 + (55 - 16) / 2 = 20.5`.
+  Both measured to the digit. Every descendant inherits the half pixel, which is why it surfaces on
+  frames imported from SVG — those are just the first descendants small enough to cross a threshold.
+  No clean fix exists: stopping the border from consuming layout space means changing its alignment,
+  which moves the drawn line by the same half pixel.
+
+  Ruled out on the way, so they are not re-tested: the payload is right about the source (Pixso's own
+  absolute positions agree with the payload's composed transform chain to three decimals), and it is
+  not the SCALE constraints every reported node happened to carry.
 
 ## Defects fixed, and what each was
 
@@ -86,59 +122,72 @@ Design-side, found by looking rather than measuring:
   outright, so the node ends with no image at all. Normalised at pack time.
 - **Rounding is not one decision.** Colours, transforms, gradient stops, filters and opacities keep
   six decimals; geometry keeps two.
+- **Constraints are applied after the last resize, not during the place passes.** A constraint says
+  what happens when the parent is resized, and this build resizes parents on purpose several times.
+  Setting them on auto-layout flow children is catastrophic — a relayout each time, five minutes for
+  two objects — so the pass skips exactly the nodes the old code skipped.
 
 Transport, which cost more than all of the above:
 
 - **Never use setTimeout inside the plugin.** Chromium throttles timers in a background window to
-  one wake-up a MINUTE. A single yield cost 60 s. Turns go through `getNodeByIdAsync`.
+  one wake-up a MINUTE. A single yield cost 60 s. Turns go through `getNodeByIdAsync`. The same rule
+  is why both the job channel and the progress channel are long-polled by the runner.
 - **Settling and breathing are different.** `settle()` gives Figma a real turn so a pending relayout
   happens; `breathe()` only stops Figma killing the plugin. Making both cheap produced 6 259 of
   10 133 nodes and errors of 400 px.
 - **Rasterisation only happens in the front window.** `exportAsync` and `absoluteRenderBounds` never
-  return in the background. `tools/focus-figma.mjs` raises it; the render tools call it.
+  return in the background — not slowly, not at all. `tools/focus-figma.mjs` raises it; the render
+  tools call it, and `visual-all.mjs` retries once with the window raised.
 - **Everything crossing the plugin boundary must be sliced**, in both directions, and image bytes
   travel as base64 text — never as an array of numbers.
-- **The runner holds a `/job` request** until it has work, so the plugin needs no timer to poll.
 - **The poll loop must not re-enter itself while a job runs** — that is a spin, and it takes the
   frame's only thread so the report can never be handled.
-- **A runner process that outlives its shell keeps the plugin's connection.** Check
-  `Get-Process node` before believing anything about the plugin.
+- **A runner that outlives its shell keeps the plugin's connection**, and the new run waits forever
+  for a plugin busy talking to a corpse. This happened again on day three. Identify it rather than
+  guess: `netstat -ano | findstr :3778` shows a second process on the port that is not the one
+  listening. Kill that one and the plugin reconnects by itself.
 
 ## Packaged for designers
 
-`README.md` is written for them and leads with what the tool does **not** do. `start.cmd` starts the
+`README.md` leads with what the tool does **not** do. `start.cmd` / `start.command` starts the
 runner; the plugin has a button that asks it to begin; `tools/build-lib.mjs` holds the build loop so
-the button and the command line share one copy of it. Extraction progress is streamed as it happens.
+the button and the command line share one copy.
+
+The plugin window composes **one** line of state in one place. It used to be written by two loops
+that knew nothing about each other, so a runner busy in Pixso and a runner that had finished and
+closed its port were both reported in red as a lost connection. `selftest.mjs` drives that line
+through all ten situations a run passes through.
 
 One step in the README is still marked TODO: the menu path that turns on Pixso's MCP server. The
 owner knows it; ask.
 
 ## Open, in order
 
-1. **A node id that points at different nodes at different times. Start here.** The "WIP" section of
-   the fourth file (5722 nodes) verifies as 3 nodes. The section is in the file and complete — 30
-   children, 6809 nodes — but the id recorded for it was a RECTANGLE named "Resize" minutes later,
-   and a probe of that id returned a FRAME with two TEXT children. Reproducible. Until this is
-   understood, that object cannot be verified and nothing about id stability should be assumed.
-   A second object failed verification as "root not found" and then verified 20/20 on a retry,
-   which may be the same thing.
-2. **macOS.** `start.cmd` is Windows-only; `focus-figma.mjs` is PowerShell. Needs `start.command`
-   and `osascript -e 'tell application "Figma" to activate'`. Half an hour.
-3. **The plugin's UX.** "connecting…" and "runner not reachable" report an emergency when nothing is
-   wrong — the runner has simply gone off to Pixso. One coherent line of state instead.
-4. **A per-card offset of a few pixels** in "Инфографика блоки" of the Лукоморье file: the best
-   alignment differs per card, so it is not one global shift. The geometry verifier agrees with the
-   payload and cannot see it.
-5. **The visual audit has never completed over a whole file.**
-6. Fonts this machine lacks: SF Pro Text/Display, Proxima Nova, Helvetica, Fact Semi Expanded,
+1. **Why a node id goes stale is still unknown.** It is no longer harmful — the stamp finds the right
+   node and the report says when the id was wrong — but the mechanism is not understood. `builder4.js`
+   now records `rootIdAtCreate` and compares it with the id at the end of the build: if a run ever
+   reports `rootIdChanged`, the id moves under a live node and the answer is there. If it never does,
+   whatever happens to it happens between one job and the next.
+2. **The visual audit has never completed over a whole file.** It resolves roots by stamp now and
+   retries once with the Figma window raised, which was the likeliest reason it never finished. The
+   fifth file, at 69 objects, is the first one small enough to be a fair test.
+3. **A per-card offset of a few pixels** in "Инфографика блоки" of the Лукоморье file: the best
+   alignment differs per card, so it is not one global shift. Needs that file open in Pixso.
+4. **One visible node the wrong size by 4 px** in `0-025-1440-Просмотр` of the fifth file.
+5. **Eleven hidden badges built 8x4 where the source has 4x4**, in 17 objects of the fifth file.
+   Invisible, so it waits — but the same mechanism could hit a visible node.
+6. **macOS is written but has never been run on a Mac.** `start.command` (exec bit set in the index,
+   line endings pinned in `.gitattributes`) and `osascript` focus. Needs one real test.
+7. Fonts this machine lacks: SF Pro Text/Display, Proxima Nova, Helvetica, Fact Semi Expanded,
    Stolzl, Pragmatica. Report, do not compensate — the owner's decision.
-7. Components arrive as frames. Deferred by the owner as a separate task. If it is taken up, the
-   cheap thing to do first is to record each instance's Pixso component id on the built node with
-   `setPluginData`: that keeps the option open and costs nothing, and without it the link is gone
-   for good.
+8. Components arrive as frames. Deferred by the owner as a separate task. The groundwork is now in
+   place for free: every built root already carries its Pixso source id in plugin data, and the same
+   could be recorded per instance.
 
 ## Checkpoint
 
-- **Updated:** 2026-09-09, end of day two.
-- **Verified by:** node counts per object on four files, `coverage.mjs` over all of them, and pixel
-  comparison on individual objects. Not by a completed visual audit — that has never run to the end.
+- **Updated:** 2026-09-10, day three.
+- **Verified by:** node counts per object on five files, `coverage.mjs` over all of them, pixel
+  comparison on individual objects, and `selftest.mjs` (17 checks, no editors). `test-clean.mjs`
+  proves the delete rule against nodes it makes itself. Not verified by a completed visual audit —
+  that has still never run to the end of a file.

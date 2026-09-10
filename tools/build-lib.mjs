@@ -103,6 +103,9 @@ export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
     catch (e) { say("    " + e.message); results.push({ name, error: e.message }); continue; }
     if (r.error) { say("    build failed: " + r.error); results.push({ name, error: r.error }); continue; }
     if (r.rootIdChanged) say("    note: the root's id changed during the build: " + r.rootIdChanged + " -> " + r.rootId);
+    // A deliberate trade, so it is said out loud every time it is made.
+    if (r.layoutDroppedForSize) say("    note: " + r.layoutDroppedForSize + " empty frame(s) gave up auto-layout to keep the source's size " +
+      "(Figma will not make an auto-layout frame smaller than its own padding)");
     const subs = [...new Set(r.fontSubs || [])];
     if (subs.length) say("    fonts substituted: " + subs.join(", "));
 
