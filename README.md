@@ -1,155 +1,169 @@
 # pix-to-fig
 
-Moves a design from **Pixso to Figma** layer by layer — frames, text, vectors, images, auto-layout,
-pages — and then measures what it built against the source instead of asking you to trust it.
+Переносит макет из **Pixso в Figma** слой за слоем — фреймы, текст, векторы, изображения,
+авто-лейаут, страницы — и потом **измеряет** то, что построил, вместо того чтобы просить поверить
+на слово.
 
-No model in the loop. The whole transfer is deterministic code: the same file gives the same
-result twice.
+Никакой языковой модели внутри переноса нет. Весь перенос — детерминированный код: один и тот же
+файл даёт один и тот же результат дважды.
 
-Four files have been migrated with it so far — one heavy on boolean geometry and photographs
-(25 351 nodes), one dense interface (28 190 nodes), one of 45 separate objects across four pages
-(45 110 nodes), one small set of app concepts. Every node count came out exact; the largest
-position error in the interface file was one pixel.
-
----
-
-## What it does not do
-
-Read this before you start, so nothing surprises you.
-
-- **Components arrive as frames.** A component, a component set and an instance all become plain
-  frames. They look right and they are editable; they are not components, and they are not linked
-  to any library. Re-linking is a separate job we have not built yet.
-- **Fonts must already be installed.** Text set in a font this machine does not have is drawn in a
-  substitute, which is a different width — so the layout around it cannot match. The report says
-  which fonts were missing and counts those objects separately from real defects. Install them,
-  **restart Figma** (it scans fonts only at startup), and rebuild.
-- **Boolean shapes lose their operands.** A shape built from several paths arrives as one vector
-  with exactly the right geometry, but you can no longer take it apart. On a file full of
-  illustration this was 708 nodes of 25 351; on an interface file it was 2 of 28 190.
-- **Prototype links, comments and version history do not travel.**
+Через него прошло пять файлов: тяжёлый на булевой геометрии и фотографиях (25 351 узел), плотный
+интерфейсный (28 190), файл из 45 отдельных объектов на четырёх страницах (45 110), небольшой набор
+концептов и файл на 39 585 узлов. На последнем — **69 объектов из 69 точно**: количество узлов
+сходится везде, смещений нет, неверных размеров нет.
 
 ---
 
-## What you need
+## Чего он НЕ делает
 
-- **Node.js 20 or newer.** `node --version` to check.
-- **Pixso desktop** with its local MCP server running (see Setup).
-- **Figma desktop.** Not the browser — the runner is a development plugin, and Figma only allows
-  those in the desktop app.
-- The fonts your file uses, installed on this machine.
+Прочитайте это до запуска, чтобы ничего не стало неожиданностью.
+
+- **Компоненты приезжают фреймами.** Компонент, набор компонентов и экземпляр становятся обычными
+  фреймами. Выглядят правильно и редактируются, но это не компоненты и они ни с какой библиотекой не
+  связаны. Восстановление связи — отдельная задача, она ещё не сделана.
+- **Шрифты должны быть уже установлены.** Текст в шрифте, которого нет на этой машине, рисуется
+  подменой, а у подмены другая ширина — значит вёрстка вокруг него совпасть не может. Отчёт называет
+  недостающие шрифты и считает такие объекты отдельно от настоящих дефектов. Установите их,
+  **перезапустите Figma** (она читает шрифты только при старте) и соберите заново.
+- **Булевы фигуры теряют операнды.** Фигура, собранная из нескольких контуров, приезжает одним
+  вектором с точной геометрией, но разобрать её обратно уже нельзя. На иллюстративном файле это было
+  708 узлов из 25 351, на интерфейсном — 2 из 28 190.
+- **Прототипные связи, комментарии и история версий не переносятся.**
 
 ---
 
-## Setup, once
+## Что нужно
 
-**1. Turn on Pixso's MCP server.**
+- **Node.js 20 или новее.** Проверить: `node --version`.
+- **Десктопный Pixso** с включённым MCP.
+- **Десктопная Figma.** Не браузер: раннер — плагин разработки, а их Figma пускает только в
+  десктопном приложении.
+- Шрифты, которые использует ваш файл, установленные на этой машине.
 
-> TODO: the exact menu path. It answers on `http://127.0.0.1:3667/mcp` when it is on; check with
-> `node tools/mcp.mjs info` from the repository — you should get a JSON block back, not an error.
+---
 
-**2. Import the runner plugin into Figma.**
+## Настройка, один раз
 
-Figma desktop → menu **Plugins → Development → Import plugin from manifest…** → choose
-`figma-plugin/manifest.json` from this repository. It appears as **pix-to-fig runner** under
-Plugins → Development. You only do this once.
+**1. Включите Pixso MCP в открытом файле десктопного приложения Pixso.**
 
-**3. Check the two ends talk.**
+Проверить, что он отвечает, можно так — в ответ должен прийти блок JSON, а не ошибка:
 
 ```bash
-cd tools
-node mcp.mjs info      # Pixso answers
+node tools/mcp.mjs info
 ```
 
----
+**2. Импортируйте плагин-раннер в Figma.**
 
-## Migrating a file
-
-1. Open the file you want to move **in Pixso**.
-2. Create an empty file **in Figma**.
-3. Start the runner: **double-click `start.cmd`** on Windows, or **`start.command`** on macOS. A
-   console window opens and stays open.
-4. In Figma: **Plugins → Development → pix-to-fig runner**.
-5. Press **«Перенести файл из Pixso»** in the plugin window.
-
-That is the whole procedure. The plugin window shows what is happening — reading the file,
-extracting from Pixso, building — and the verdict at the end. Leave both windows open until it
-says it is done.
-
-The button cannot do this on its own: the plugin is allowed to talk to exactly one address, the
-local runner, and has no way to reach Pixso. `start.cmd` / `start.command` is that runner.
-Everything it does is also available as separate commands if you prefer them — see `tools/`.
-
-> On macOS, if double-clicking `start.command` does nothing, it has lost its executable bit —
-> `chmod +x start.command` in Terminal, once.
-
-A file of 28 000 nodes takes about half an hour, and most of that is Pixso handing over vectors
-one at a time. Interrupting is safe: run it again and it skips what it already has.
+Десктопная Figma → меню **Plugins → Development → Import plugin from manifest…** → выберите
+`figma-plugin/manifest.json` из этого репозитория. Он появится как **pix-to-fig runner** в разделе
+Plugins → Development. Это делается один раз.
 
 ---
 
-## Checking it looks right, not just measures right
+## Перенос файла
 
-The geometry check compares the built tree against what was sent to Figma. It therefore proves the
-build did what it was told — and it is blind to anything the two editors *draw* differently. Every
-defect that a person noticed on our test files passed it with zero nodes out of position: text
-rendered backwards, shapes sitting on white rectangles, a pill with the wrong corner rounded.
+1. Откройте нужный файл **в Pixso**.
+2. Создайте пустой файл **в Figma**.
+3. Запустите раннер: **двойной щелчок по `start.cmd`** на Windows или по **`start.command`** на
+   macOS. Откроется окно консоли — оставьте его открытым.
+4. В Figma: **Plugins → Development → pix-to-fig runner**.
+5. Нажмите **«Перенести файл из Pixso»** в окне плагина.
 
-So there is a second check, which renders both sides and compares pixels:
+Это вся процедура. Окно плагина показывает, что происходит — чтение файла, извлечение из Pixso,
+сборка — и итог в конце. Оба окна держите открытыми, пока он не скажет, что закончил.
+
+Кнопка не может сделать это сама: плагину разрешено обращаться ровно к одному адресу — к локальному
+раннеру, — и до Pixso он дотянуться не может. `start.cmd` / `start.command` и есть этот раннер. Всё
+то же самое доступно отдельными командами, если так удобнее — смотрите `tools/`.
+
+> На macOS: если двойной щелчок по `start.command` ничего не делает, у файла потерялся бит
+> исполнения. Один раз в Терминале: `chmod +x start.command`.
+
+Файл на 28 000 узлов занимает примерно полчаса, и почти всё это время Pixso отдаёт векторы по
+одному. Прерывать безопасно: запустите снова, и он пропустит уже извлечённое.
+
+---
+
+## Проверка: не только «сходится», но и «выглядит»
+
+Геометрическая проверка сравнивает построенное дерево с тем, что было отправлено в Figma. То есть она
+доказывает, что сборка сделала ровно то, что ей велели, — и **по устройству слепа ко всему, что два
+редактора просто рисуют по-разному**. Все дефекты, которые на наших файлах замечал человек, проходили
+её с нулём смещённых узлов: текст задом наперёд, фигуры на белых прямоугольниках, скруглённый не тот
+угол, заголовок, переехавший на две строки.
+
+Поэтому есть вторая проверка — она рендерит обе стороны и сравнивает пиксели:
 
 ```bash
 node visual-all.mjs ../out/mine/obj/dirs.txt ../out/mine/vis 700
 ```
 
-It ranks objects by the share of pixels that are inked on one side and blank on the other — the
-signature of something that did not arrive — and keeps both pictures for anything over 1 %.
+Она ранжирует объекты по средней разнице и отмечает те, что стоит посмотреть: грубо различающиеся
+пиксели, выделяющееся среднее или два рендера разной высоты при одной ширине — именно так о себе
+сообщает перенесённая строка. Картинки для отмеченных сохраняются рядом.
 
-**Keep the Figma window in front while this runs.** Figma only rasterises in the foreground: in a
-background window an export never returns. The tool raises the window itself, but if you click
-away it will stall.
+**Пока она работает, не отбирайте у Figma фокус.** Figma растеризует только в переднем окне: в
+фоновом экспорт не возвращается вовсе. Инструмент сам поднимает окно перед каждым объектом, но если
+активно перещёлкивать на другие окна, он будет спотыкаться.
 
-And a third check, which needs neither editor:
+И третья проверка, которой не нужен ни один из редакторов:
 
 ```bash
 node coverage.mjs --dirs ../out/mine/obj/dirs.txt
 ```
 
-Source against payload. It splits the difference between "collapsed on purpose" — the boolean
-operands above — and **unexplained loss**, which should always be zero.
+Исходник против задания. Она делит разницу на «свёрнуто намеренно» (те самые операнды булевых фигур)
+и **необъяснённые потери**, которых всегда должно быть ноль.
 
 ---
 
-## When something is wrong
+## Различия, которые мы уже знаем и объяснили
 
-First, thirty seconds that need neither Pixso nor Figma:
+Это не дефекты переноса, а разница движков. Встретите — не пугайтесь.
+
+- **Полпикселя по вертикали.** Figma вычитает внутреннюю обводку из области содержимого
+  авто-лейаута, а Pixso не вычитает. Строка высотой 56 с обводкой в 1 пиксель сверху ставит ребёнка
+  высотой 56 в позицию `1 + (55 − 56) / 2 = 0.5`. Смещение наследуется всем поддеревом. Отчёт считает
+  такие узлы отдельной строкой «within a pixel».
+- **Заголовок может перенестись на вторую строку.** Figma меряет ту же строку тем же шрифтом чуть
+  шире, чем Pixso: на замеренном примере 1324 против блока в 1323 — одного пикселя хватает, чтобы
+  последнее слово ушло вниз. Сейчас побеждает геометрия исходника: блок сохраняется, строка
+  переносится.
+- **Пустой фрейм может потерять авто-лейаут.** Figma не позволяет авто-лейауту быть уже суммы своих
+  отступов. Если в исходнике такой фрейм есть и он пуст, мы отдаём авто-лейаут, а не размер: все
+  числа, включая отступы, сохраняются. Каждый такой случай печатается в отчёте отдельной строкой.
+
+---
+
+## Если что-то не так
+
+Сначала тридцать секунд, которым не нужны ни Pixso, ни Figma:
 
 ```bash
 node tools/selftest.mjs
 ```
 
-It compiles the code that travels into Figma, parses the plugin window, and drives that window
-through every state a run passes through. If this fails, the problem is in the repository and not in
-your file.
+Она компилирует код, который уезжает в Figma, разбирает окно плагина и прогоняет его состояние через
+все положения, которые бывают за прогон. Если она падает — проблема в репозитории, а не в вашем файле.
 
-Then tell us, and send:
+Дальше напишите нам и приложите:
 
-- the last twenty lines of the build output (the table and the verdict);
-- `out/mine/obj/<object>/check-report.json` for the object that is wrong — it names the nodes;
-- a screenshot of the source next to the result, if the defect is something you can see.
+- последние двадцать строк вывода сборки (таблицу и итог);
+- `out/mine/obj/<объект>/check-report.json` для того объекта, который неверен — там перечислены узлы;
+- скриншот исходника рядом с результатом, если дефект видно глазом.
 
-That last one matters more than it sounds. Two of the defects fixed on the pilot files were found
-by eye and by nothing else: the measurements said the object was perfect.
+Последнее важнее, чем кажется. Несколько дефектов на пилотных файлах нашлись глазом и **ничем
+больше**: измерения говорили, что объект идеален.
 
 ---
 
-## If it stops
+## Если встало
 
-- **The plugin says «Раннер не запущен».** Nothing is listening on the local port: start
-  `start.cmd` / `start.command` and the window picks it up by itself within a second or two.
-- **A build sits at "waiting for the plugin" while the plugin looks fine.** A runner from an earlier
-  run has outlived its shell and still holds the plugin's connection, so the plugin is talking to a
-  corpse. It is worth identifying rather than guessing — one of these two lines will show a second
-  process on the port that is not the one listening:
+- **Плагин пишет «Раннер не запущен».** На локальном порту никто не слушает: запустите
+  `start.cmd` / `start.command`, окно подхватит его само за секунду-другую.
+- **Сборка стоит на «жду плагин», а плагин на вид жив.** Раннер от прошлого запуска пережил свою
+  консоль и всё ещё держит соединение с плагином — плагин разговаривает с мертвецом. Это стоит не
+  угадывать, а увидеть: одна из этих команд покажет на порту второй процесс, не тот, что слушает.
 
   ```bash
   netstat -ano | findstr :3778
@@ -159,26 +173,26 @@ by eye and by nothing else: the measurements said the object was perfect.
   lsof -nP -iTCP:3778
   ```
 
-  Kill that process (`taskkill /PID <n> /F`, or `kill <n>`) and the plugin reconnects within a
-  second or two on its own.
-- **Renders hang but builds work.** The Figma window is not in front. That is the whole cause.
-- **The plugin window is stuck on one job.** Close it and run it again from Plugins → Development.
+  Снимите его (`taskkill /PID <n> /F` или `kill <n>`) — плагин переподключится сам за пару секунд.
+- **Рендеры висят, а сборка идёт.** Окно Figma не на переднем плане. Причина только в этом.
+- **Окно плагина застряло на одном задании.** Закройте и откройте его заново через
+  Plugins → Development.
 
 ---
 
-## What is in here
+## Что здесь лежит
 
 | | |
 |---|---|
-| `tools/px-*.mjs` | the Pixso side: tree, vectors as SVG, transforms, text, images |
-| `tools/pack4.mjs` | builds the payload, and the builder and verifier that travel inside it |
-| `tools/builder4.js` | the algorithm — everything that decides how a node is rebuilt |
-| `tools/migrate-file.mjs` | extracts a whole file, object by object |
-| `tools/build-all.mjs` | builds and verifies a whole file in one plugin session |
-| `tools/visual-all.mjs` | renders both sides and ranks by how different they look |
-| `tools/coverage.mjs` | source against payload |
-| `tools/selftest.mjs` | everything checkable without Pixso or Figma |
-| `tools/test-clean.mjs` | proves what `--clean` may delete, on nodes it makes itself |
-| `figma-plugin/` | the runner: transport and host, no migration logic |
-| `docs/METHOD.md` | why it is built this way |
-| `docs/FINDINGS.md` | every defect found so far, with the measurement that found it |
+| `tools/px-*.mjs` | сторона Pixso: дерево, векторы через SVG, трансформации, текст, изображения |
+| `tools/pack4.mjs` | собирает задание, а внутри него — сборщик и верификатор |
+| `tools/builder4.js` | сам алгоритм: всё, что решает, как воссоздать узел |
+| `tools/migrate-file.mjs` | извлекает файл целиком, объект за объектом |
+| `tools/build-all.mjs` | собирает и проверяет весь файл за одну сессию плагина |
+| `tools/visual-all.mjs` | рендерит обе стороны и ранжирует по тому, насколько они различаются |
+| `tools/coverage.mjs` | исходник против задания |
+| `tools/selftest.mjs` | всё, что проверяется без Pixso и без Figma |
+| `tools/test-clean.mjs` | доказывает, что именно `--clean` вправе удалить, на своих же узлах |
+| `figma-plugin/` | раннер: транспорт и хост, никакой логики переноса |
+| `docs/METHOD.md` | почему это устроено именно так |
+| `docs/FINDINGS.md` | каждый найденный дефект и измерение, которым он найден |

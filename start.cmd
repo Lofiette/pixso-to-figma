@@ -1,8 +1,13 @@
 @echo off
-rem Double-click this, then press the button in the plugin window in Figma.
-rem Leave this window open until the migration says it is done.
+rem Двойной щелчок, затем нажмите кнопку в окне плагина в Figma.
+rem Не закрывайте это окно, пока перенос не скажет, что закончил.
+rem
+rem chcp 65001 обязателен: раннер печатает по-русски, а консоль Windows по умолчанию сидит в cp866
+rem и превращает такой вывод в мусор. Человек при этом видит нечитаемую кашу ровно тогда, когда
+rem пытается понять, что пошло не так.
+chcp 65001 >nul
 cd /d "%~dp0tools"
 node run.mjs %*
 echo.
-echo This window can be closed.
+echo Это окно можно закрыть.
 pause

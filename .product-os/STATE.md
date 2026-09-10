@@ -172,8 +172,10 @@ that knew nothing about each other, so a runner busy in Pixso and a runner that 
 closed its port were both reported in red as a lost connection. `selftest.mjs` drives that line
 through all ten situations a run passes through.
 
-One step in the README is still marked TODO: the menu path that turns on Pixso's MCP server. The
-owner knows it; ask.
+**`README.md` is in Russian**, on the owner's instruction: it is the document designers read, and they
+read it in Russian. `docs/METHOD.md` and `docs/FINDINGS.md` stay in English — they are engineering
+notes, not the designer's instructions. The last TODO in the README is closed: turning on Pixso's MCP
+needs no menu path, only "включите Pixso MCP в открытом файле десктопного приложения Pixso".
 
 ## Open, in order
 
