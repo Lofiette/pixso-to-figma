@@ -49,6 +49,12 @@ actually noticed passed it with zero nodes out of position.
 | source vs payload | anything that never reached the payload | `coverage.mjs` |
 | render vs render | anything the two editors draw differently | `visual-all.mjs` |
 
+The third one **completed over a whole file for the first time on day three**, and immediately earned
+its keep: it found a heading wrapping onto two lines in an object the geometry check called exact.
+Both renders are composited over white before comparison — under a fully transparent pixel Pixso
+stores 0,0,0 and Figma stores 255,255,255, and comparing those raw put a perfect object at the top of
+the ranking with 10.32 % "ink on one side" while every visible pixel was byte-identical.
+
 **2. A Figma node id is not a handle you can carry between two jobs.** Measured on a run of 45
 objects: two of them reported a root id that resolved to a node built long before them. So the build
 stamps its root with the id of the Pixso node it came from (`setPluginData("pxSrc", ...)`), and
@@ -77,7 +83,7 @@ Everything is still counted and printed. Nothing is rounded away.
 | Концепты для демо в Спектре | 1 611 | migrated first time, no change to the algorithm |
 | Капасити-менеджмент | 28 190 | dense interface; every node count exact, worst error 1 px |
 | Концепты (45 objects) | 45 110 | 43 of 45 verified; the two failures were the stale-id bug |
-| Редизайн. Ширина статьи | 39 585 | FIFTH-FILE-RESULT |
+| Редизайн. Ширина статьи | 39 585 | **69 of 69 exact** — every node count, zero out of position, zero wrong size |
 
 `coverage.mjs` has never reported an unexplained loss on any of them.
 
@@ -168,19 +174,24 @@ owner knows it; ask.
    now records `rootIdAtCreate` and compares it with the id at the end of the build: if a run ever
    reports `rootIdChanged`, the id moves under a live node and the answer is there. If it never does,
    whatever happens to it happens between one job and the next.
-2. **The visual audit has never completed over a whole file.** It resolves roots by stamp now and
-   retries once with the Figma window raised, which was the likeliest reason it never finished. The
-   fifth file, at 69 objects, is the first one small enough to be a fair test.
+2. **A heading wraps onto two lines because Figma measures the string one pixel wider. Start here.**
+   Found by the visual audit, and by nothing else — the geometry check called the object exact, and it
+   was. Box 1323, Pixso's ink 1310.3, Figma's measurement of the same string in the same Inter Semi
+   Bold 120: **1324**. One pixel past the box, and the last word goes to its own line.
+
+   The builder meets this case today and decides the other way: `textAutoResize = NONE` and the box
+   forced to the source size, because source geometry wins. That was decided without knowing this
+   consequence. The trigger is measurable — Pixso's ink fits the box while Figma's measurement does
+   not — so the nodes where the source shows one line and the build shows two can be named exactly.
+   Changing it reverses a deliberate decision and needs a rebuild plus a re-audit, so it is the
+   owner's call. Pictures: `out/day3/vis/0-044-Группа-4.{pixso,figma}.png`.
 3. **A per-card offset of a few pixels** in "Инфографика блоки" of the Лукоморье file: the best
    alignment differs per card, so it is not one global shift. Needs that file open in Pixso.
-4. **One visible node the wrong size by 4 px** in `0-025-1440-Просмотр` of the fifth file.
-5. **Eleven hidden badges built 8x4 where the source has 4x4**, in 17 objects of the fifth file.
-   Invisible, so it waits — but the same mechanism could hit a visible node.
-6. **macOS is written but has never been run on a Mac.** `start.command` (exec bit set in the index,
+4. **macOS is written but has never been run on a Mac.** `start.command` (exec bit set in the index,
    line endings pinned in `.gitattributes`) and `osascript` focus. Needs one real test.
-7. Fonts this machine lacks: SF Pro Text/Display, Proxima Nova, Helvetica, Fact Semi Expanded,
+5. Fonts this machine lacks: SF Pro Text/Display, Proxima Nova, Helvetica, Fact Semi Expanded,
    Stolzl, Pragmatica. Report, do not compensate — the owner's decision.
-8. Components arrive as frames. Deferred by the owner as a separate task. The groundwork is now in
+6. Components arrive as frames. Deferred by the owner as a separate task. The groundwork is now in
    place for free: every built root already carries its Pixso source id in plugin data, and the same
    could be recorded per instance.
 

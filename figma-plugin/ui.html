@@ -215,6 +215,12 @@ onmessage = async (e) => {
 // While a job is running this returns and stops entirely. Whatever ends the job — the report
 // arriving, or the watchdog giving up on it — starts it again.
 let polling = false;
+// A runner that outlived its shell keeps this frame's held request, and the loop then waits on a
+// process that will never answer while a live runner sits on the same port wondering where the
+// plugin went. That is not a stopped loop — `polling` stays true — so it needs its own evidence:
+// when the last answer of any kind was. Generation numbers let a replacement loop start while the
+// parked one is still technically alive, without the two of them fighting over `polling`.
+let pollGen = 0, lastPollOk = Date.now();
 const GO = document.getElementById("go"), P = document.getElementById("p");
 GO.onclick = async () => {
   GO.disabled = true;
@@ -255,8 +261,11 @@ control();
 async function poll() {
   if (polling) return;
   polling = true;
+  const gen = ++pollGen;
   try {
     while (!busy) {
+      // A previous loop, parked on a dead socket, must not carry on once a replacement has started.
+      if (gen !== pollGen) return;
       let ok = false;
       try {
         // The runner holds this request until it has a job, so the wait IS the request. That
@@ -266,6 +275,7 @@ async function poll() {
         const j = await fetchT(HOST + "/job?client=plugin", {}, 40000).then(r => r.json());
         misses = 0;
         ok = true;
+        lastPollOk = Date.now();
         if (j && j.kind && j.kind !== "noop") {
           busy = true;
           // Anything thrown in here used to leave busy latched and the plugin silent for good.
@@ -290,7 +300,7 @@ async function poll() {
         // The runner is not there. This is the one place a timer belongs: something has to slow
         // the retries down, and being a minute late to notice a runner that has just started is
         // survivable — the runner waits five minutes before drawing conclusions.
-        polling = false;
+        if (gen === pollGen) polling = false;
         setTimeout(poll, 1000);
         return;
       }
@@ -298,19 +308,33 @@ async function poll() {
   } catch (fatal) {
     // nothing may stop the loop: a stopped loop looks exactly like a working plugin
     log("poll error: " + fatal);
-    polling = false;
+    if (gen === pollGen) polling = false;
     setTimeout(poll, 1000);
     return;
   }
-  polling = false;
+  if (gen === pollGen) polling = false;
 }
 poll();
 
-// A last-resort nudge, because a stopped job loop looks exactly like a healthy plugin from both
-// sides: the window is open, the progress line keeps updating, and the runner waits forever for a
-// plugin that will never ask for work. That has now happened twice, and only reopening the window
-// recovered it. poll() returns immediately when it is already running, so this can restart nothing
-// except a loop that has genuinely stopped. Thirty seconds nominal — Chromium stretches it to about a
-// minute in a background window, which is the right cadence for a watchdog anyway.
-setInterval(function () { if (!polling && !busy) poll(); }, 30000);
+// A last-resort nudge, because a job loop that is not asking for work looks exactly like a healthy
+// plugin from both sides: the window is open, the progress line keeps updating, and the runner waits
+// forever for a plugin that will never come. It happened twice in one day, and only reopening the
+// window recovered it.
+//
+// Two different failures, so two tests. A loop that has genuinely stopped is easy. The one that
+// actually bit is harder: a runner that outlived its shell keeps this frame's held request, so the
+// loop sits in a fetch that will never settle, against a process that will never answer, while a live
+// runner on the same port wonders where the plugin went. `polling` is true throughout — the only
+// evidence is that nothing has answered in a long time. Ninety seconds is well past the runner's own
+// 25-second hold, so a healthy wait can never trip it.
+setInterval(function () {
+  if (busy) return;
+  if (!polling) { poll(); return; }
+  if (Date.now() - lastPollOk > 90000) {
+    log("no answer from the runner in 90s — restarting the job loop");
+    polling = false;
+    lastPollOk = Date.now();
+    poll();
+  }
+}, 30000);
 </script>

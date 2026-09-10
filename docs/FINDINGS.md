@@ -892,3 +892,48 @@ children the flow lays nothing out, which makes `layoutMode` the only property t
 observable effect — so that is what is surrendered, and every number the source carries survives. The
 build says so on its own line each time it does it. Restricted to childless frames: dropping the flow
 on a frame that has children would move them.
+
+### A heading breaks onto two lines because two engines measure the same string one pixel apart
+
+Found by the visual audit and by nothing else. The geometry check called the object exact, because it
+was: every node was built where the payload said, at the size the payload said. Pixso draws
+"Только дерево статей" on one line; Figma wraps it onto two and the block grows from 89 to 99 px in
+the comparison render.
+
+| | |
+|---|---|
+| the text box in the source | 1323 |
+| what Pixso inked for the string | 1310.3 |
+| what Figma measures for the same string | **1324** |
+
+Same family, same style, same size: Inter Semi Bold 120. Figma is 1.05 % wider over the string, which
+lands it exactly **one pixel** past the box — and a pixel is enough to move the last word to its own
+line.
+
+The builder already meets this case and currently resolves it the other way: when Figma's own
+measurement disagrees with the source box it sets `textAutoResize = NONE` and forces the box to the
+source size, on the principle that source geometry wins. That principle was chosen without knowing
+this consequence. The trade is now measurable — one pixel of box width against a wrapped heading — and
+the trigger is measurable too: Pixso's inked width fits the box (1310.3 <= 1323) while Figma's
+measurement does not (1324 > 1323). That pair of facts identifies exactly the nodes where the source
+shows one line and the build will show two.
+
+Not changed yet: it reverses a deliberate decision and needs a rebuild and a re-audit to confirm it
+fixes this without disturbing hugging parents.
+
+### The visual audit was scoring the colour of invisible pixels
+
+Its worst-ranked object was a dropdown menu at 10.32 % "ink on one side", and the two renders are
+indistinguishable — because every pixel anyone can see is byte-identical. Sampled: inside the card
+both are `[255,255,255,255]`, on the first row both are `[241,243,249,255]`. In the transparent margin
+around the card Pixso writes `[0,0,0,0]` and Figma writes `[255,255,255,1]`. Alpha agrees, to within a
+level nobody could see; the colour *under* the transparency is opposite in every channel.
+
+Split by channel: alpha differs by more than 191 on **0.00 %** of pixels, a colour channel on
+**10.32 %**. The whole score was transparency.
+
+Both sides are now composited over the same white before comparison, which is what a viewer sees. A
+real difference survives it — something opaque on one side and not the other still reads as white
+against its colour — and the alpha channel is no longer compared on its own. Checked first that this
+was not a one-pixel shift: offsets from -3 to +3 in both axes all scored worse than zero offset, so
+the images were already aligned.

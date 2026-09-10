@@ -65,16 +65,29 @@ const figSrc = (id, srcId, width) => [
 ].join(NL);
 
 // Ink on one side only is what matters; a whole image shifted by a pixel is not the same defect.
+//
+// Both sides are composited over the same white before anything is compared, because the raw
+// channels disagree where nobody can see. Under a fully transparent pixel Pixso stores 0,0,0 and
+// Figma stores 255,255,255: invisible in both, opposite in every channel. Compared raw, that put a
+// dropdown menu at the top of the ranking with 10.32 % "ink on one side" while every pixel anyone
+// could see was byte-identical. Compositing keeps the differences that matter — something opaque on
+// one side and not the other still comes out as white against its colour — and drops the rest.
 function compare(a, b) {
   const W = Math.min(a.W, b.W), H = Math.min(a.H, b.H);
   let same = 0, gross = 0, sum = 0, n = 0;
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const oa = (y * a.W + x) * 4, ob = (y * b.W + x) * 4;
-      const d = Math.max(Math.abs(a.rgba[oa] - b.rgba[ob]), Math.abs(a.rgba[oa + 1] - b.rgba[ob + 1]),
-                         Math.abs(a.rgba[oa + 2] - b.rgba[ob + 2]), Math.abs(a.rgba[oa + 3] - b.rgba[ob + 3]));
+      const aA = a.rgba[oa + 3] / 255, bA = b.rgba[ob + 3] / 255;
+      let d = 0;
+      for (let c = 0; c < 3; c++) {
+        const av = a.rgba[oa + c] * aA + 255 * (1 - aA);
+        const bv = b.rgba[ob + c] * bA + 255 * (1 - bA);
+        const dc = Math.abs(av - bv);
+        if (dc > d) d = dc;
+      }
       sum += d; n++;
-      if (d === 0) same++; else if (d > 191) gross++;
+      if (d < 0.5) same++; else if (d > 191) gross++;
     }
   }
   return { same: same / n, gross: gross / n, mean: sum / n,

@@ -234,7 +234,12 @@ export function startJobServer(port = 3778) {
           }
           if (quiet > 15000) {
             warned++;
-            console.log("  waiting: the plugin has not polled for " + Math.round(quiet / 1000) + "s" +
+            // lastPoll is 0 until something asks for work, and "has not polled for 1789026005s" is
+            // what subtracting from zero looks like — printed, of course, exactly when the person
+            // reading it is already worried.
+            console.log("  waiting: " + (lastPoll === 0
+              ? "nothing has asked this runner for work yet"
+              : "the plugin has not polled for " + Math.round(quiet / 1000) + "s") +
               (warned === 1 ? " — is the pix-to-fig runner still open in Figma?" : ""));
           } else if (warned || Date.now() - t0w > 60000) {
             console.log("  waiting: plugin alive, job " + id + " in progress (" + Math.round((Date.now() - t0w) / 1000) + "s)");
