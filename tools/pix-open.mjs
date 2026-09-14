@@ -156,6 +156,7 @@ for (;;) {
         type: o.type, name: o.name, visible: o.visible,
         w: o.size ? o.size.x : null, h: o.size ? o.size.y : null,
         symbol: o.symbolData && o.symbolData.symbolID ? o.symbolData.symbolID.sessionID + ":" + o.symbolData.symbolID.localID : null,
+        pos: o.parentIndex ? o.parentIndex.position : "",
         fill: (o.fillGeometry || []).map((p) => p.blobIndex),
         stroke: (o.strokeGeometry || []).map((p) => p.blobIndex),
       });
@@ -185,12 +186,57 @@ console.log("  " + Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([k, v
 
 const kidsOf = new Map();
 for (const n of nodes) { if (!kidsOf.has(n.parent)) kidsOf.set(n.parent, []); kidsOf.get(n.parent).push(n); }
+// Siblings are ordered by a fractional index string, not by the order they appear in the file.
+for (const [, list] of kidsOf) list.sort((a, b) => (a.pos < b.pos ? -1 : a.pos > b.pos ? 1 : 0));
+const byGuid = new Map(nodes.map((n) => [n.guid, n]));
+
+// An instance is stored with no children at all: its content is the symbol that symbolData points at.
+// So the tree Pixso serves is larger than the tree the file stores, and rebuilding it means walking
+// into the symbol at every instance. Counted here rather than built, because the count is what can be
+// checked against Pixso.
+//
+// Measured against Pixso over the same open file: 87 114 against 87 265 on one page, 68 against 69 on
+// another — the model is right in shape and short by 0.17 %. Ruled out by measurement, so it is not
+// re-tested: no override in this file repoints a nested instance at another symbol (0 of 22 276
+// instances that carry overrides). What is left is variant selection — symbols live as variants inside
+// state groups, and which one the runtime shows depends on the component properties assigned to the
+// instance, which this does not yet read.
+const expandedMemo = new Map();
+function expandedSize(n, depth) {
+  if (!n || depth > 60) return 1;                        // a symbol containing itself would not end
+  if (tname.get(n.type) === "INSTANCE" && n.symbol) {
+    const s = byGuid.get(n.symbol);
+    if (!s) return 1;
+    let c = 1;
+    for (const k of kidsOf.get(n.symbol) || []) c += expandedSize(k, depth + 1);
+    return c;
+  }
+  const memo = expandedMemo.get(n.guid);
+  if (memo !== undefined) return memo;
+  let c = 1;
+  for (const k of kidsOf.get(n.guid) || []) c += expandedSize(k, depth + 1);
+  expandedMemo.set(n.guid, c);
+  return c;
+}
+const authoredMemo = new Map();
+function authoredSize(n) {
+  const memo = authoredMemo.get(n.guid);
+  if (memo !== undefined) return memo;
+  let c = 1;
+  for (const k of kidsOf.get(n.guid) || []) c += authoredSize(k);
+  authoredMemo.set(n.guid, c);
+  return c;
+}
+
 const pages = nodes.filter((n) => tname.get(n.type) === "CANVAS");
 console.log("");
-console.log("  pages: " + pages.length);
+console.log("  pages: " + pages.length + "     (nodes as stored / as Pixso would serve them)");
 for (const p of pages) {
   const k = kidsOf.get(p.guid) || [];
-  console.log("    " + JSON.stringify(p.name).padEnd(36) + String(k.length).padStart(5) + " top-level");
+  let a = 0, e = 0;
+  for (const c of k) { a += authoredSize(c); e += expandedSize(c, 0); }
+  console.log("    " + JSON.stringify(p.name).slice(0, 34).padEnd(36) + String(k.length).padStart(5) + " top-level" +
+    String(a).padStart(9) + " /" + String(e).padStart(8));
 }
 
 // ---------- geometry ----------

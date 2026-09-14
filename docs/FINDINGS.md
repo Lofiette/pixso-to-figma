@@ -1028,3 +1028,36 @@ out as shapes — the first one written is a 76x144 rounded rectangle with 4 px 
 which is exactly the panel behind a dropdown.
 
 This removes the reason the migration needs Pixso to render vectors to SVG.
+
+### Expanding instances: right in shape, short by 0.17 %, and the remainder is variant selection
+
+The file stores an instance with **no children at all** — content comes from the SYMBOL that
+`symbolData.symbolID` names. So the tree Pixso serves is bigger than the tree the file stores, and
+rebuilding it means walking into the symbol at every instance, recursively, since symbols contain
+instances too. Sibling order comes from `parentIndex.position`, a fractional index string, not from
+the order nodes appear in the file.
+
+Checked against Pixso over the same open file:
+
+| page | stored | expanded | Pixso says |
+|---|---|---|---|
+| Sandbox | 33 794 | 87 114 | 87 265 |
+| Changelog | 63 | 68 | 69 |
+
+Every symbol an instance names is present — **0 instances of 23 500 point at a definition missing
+from the file**, including the ones a consumer file would inherit from a remote library. Deepest
+nesting: 13.
+
+Diffing the small tree line by line found the missing node precisely: Pixso has
+`INSTANCE "_Select Category Arrow" > INSTANCE "Icons/Fill/angle-right" > VECTOR` where the authored
+chain leads to `angle-down` and one level fewer.
+
+One hypothesis tested and **disproved**: overrides do not repoint nested instances. Of 23 500
+instances, 22 276 carry overrides, and **none** of those overrides carries a `symbolData.symbolID` of
+its own. So symbol swapping is not the mechanism and does not need re-testing.
+
+What is left: symbols live as variants inside state groups — the traced chain resolves to
+`SYMBOL "State=Disabled, Opened=Yes"` whose parent is a set — and which variant the runtime shows
+depends on the component properties assigned to the instance, carried in the overrides as
+`componentPropAssignment`. Variants of one set have different subtrees, which is why the error is
+small and runs in both directions. Reading those assignments is the next piece of work.
