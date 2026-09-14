@@ -90,7 +90,8 @@ const doc = decompressDocument(docEntry.data());
 console.log("  document decompresses to " + doc.length + " bytes");
 
 // ---------- walk it ----------
-const KEEP = new Set(["guid", "parentIndex", "type", "name", "size", "visible", "symbolData", "fillGeometry", "strokeGeometry"]);
+const KEEP = new Set(["guid", "parentIndex", "type", "name", "size", "visible", "symbolData",
+  "fillGeometry", "strokeGeometry", "derivedSymbolData"]);
 function readValue(r, type, isArray, keep) {
   if (isArray) {
     const n = r.varuint();
@@ -157,6 +158,7 @@ for (;;) {
         w: o.size ? o.size.x : null, h: o.size ? o.size.y : null,
         symbol: o.symbolData && o.symbolData.symbolID ? o.symbolData.symbolID.sessionID + ":" + o.symbolData.symbolID.localID : null,
         pos: o.parentIndex ? o.parentIndex.position : "",
+        derived: (o.derivedSymbolData || []).length,
         fill: (o.fillGeometry || []).map((p) => p.blobIndex),
         stroke: (o.strokeGeometry || []).map((p) => p.blobIndex),
       });
@@ -201,21 +203,21 @@ const byGuid = new Map(nodes.map((n) => [n.guid, n]));
 // instances that carry overrides). What is left is variant selection — symbols live as variants inside
 // state groups, and which one the runtime shows depends on the component properties assigned to the
 // instance, which this does not yet read.
-const expandedMemo = new Map();
+// The expansion does not have to be re-derived: the file already carries it. Every instance holds
+// `derivedSymbolData`, one entry per node inside it, addressed by the same guidPath the overrides use
+// and carrying that node's resolved transform, size and geometry. So an instance's expanded size is
+// itself plus its derived entries, and nothing below it needs walking — nested instances are already
+// included, because the paths run all the way down.
+//
+// Measured against Pixso over the same open file: 87 265 on one page and 69 on another, **exactly**,
+// where re-deriving the walk by hand landed 148 and 0 short. Re-deriving also has to chase variant
+// switches (`overriddenSymbolID` on an override, 2 577 of them here); the derived data has already
+// resolved them.
 function expandedSize(n, depth) {
   if (!n || depth > 60) return 1;                        // a symbol containing itself would not end
-  if (tname.get(n.type) === "INSTANCE" && n.symbol) {
-    const s = byGuid.get(n.symbol);
-    if (!s) return 1;
-    let c = 1;
-    for (const k of kidsOf.get(n.symbol) || []) c += expandedSize(k, depth + 1);
-    return c;
-  }
-  const memo = expandedMemo.get(n.guid);
-  if (memo !== undefined) return memo;
+  if (tname.get(n.type) === "INSTANCE") return 1 + (n.derived || 0);
   let c = 1;
   for (const k of kidsOf.get(n.guid) || []) c += expandedSize(k, depth + 1);
-  expandedMemo.set(n.guid, c);
   return c;
 }
 const authoredMemo = new Map();

@@ -1061,3 +1061,29 @@ What is left: symbols live as variants inside state groups — the traced chain 
 depends on the component properties assigned to the instance, carried in the overrides as
 `componentPropAssignment`. Variants of one set have different subtrees, which is why the error is
 small and runs in both directions. Reading those assignments is the next piece of work.
+
+### The expansion is already in the file, and it matches Pixso exactly
+
+Re-deriving it by hand got close and stayed wrong. Walking into each instance's symbol gave 87 114
+against Pixso's 87 265 on one page. Adding variant switches — `overriddenSymbolID` on an override,
+2 577 of them in this file, pointing a nested instance at another variant such as `State=Hover` —
+fixed the small page exactly (69 = 69) and moved the large one to 87 117. Still 148 short, and each
+further step would have been another guess.
+
+It does not need deriving. **Every instance carries `derivedSymbolData`: one entry per node inside
+it**, addressed by the same guidPath the overrides use, holding that node's resolved `transform`,
+`size`, `effects`, `fillGeometry`, `strokeGeometry` and `strokePaddingPath`. 23 491 of 23 500
+instances have it, 160 982 entries in all. Nested instances are already included — the paths run all
+the way down.
+
+So an instance's expanded size is itself plus its derived entries, and counting that way gives
+**87 265 and 69 — exactly Pixso's numbers, to the node, on a page of 87 265**.
+
+This is worth more than a count. It means the resolved geometry of everything inside every instance
+is in the file: positions, sizes and fill paths already computed against the right variant, with the
+overrides applied. Re-deriving layout for instance content — which is where a reimplementation would
+most likely diverge from Pixso — is not necessary.
+
+The earlier hypothesis that overrides repoint nested instances through `symbolData.symbolID` stays
+disproved: 0 of 63 936 overrides do that. The repointing lives in `overriddenSymbolID`, a field of its
+own, which is where it was found.
