@@ -66,3 +66,46 @@ export function parseSchema(buf) {
 }
 
 export const KIND = ["enum", "struct", "message"];
+
+// ---------- geometry blobs ----------
+//
+// A Path in a .pix carries a blobIndex into PixsoMsg.blobs, and that blob is a stream of
+// [opcode byte][float32 LE x, float32 LE y]*. The opcodes were not guessed: every assignment of 0..3
+// points to each opcode was tried, and exactly one makes all 3 716 path blobs of a 13 MB library end
+// on their own last byte — 100 %, where the hand-guessed map managed 225. Independently: decode a
+// node's fill paths, take the bounding box, and it matches the node's own `size` field within a pixel
+// for 14 007 of 14 128 nodes; the rest are vectors whose curves bulge past their control points,
+// which is the expected direction to miss in.
+export const PATH_ARITY = { 0: 0, 1: 1, 2: 1, 4: 3 };
+export const PATH_SVG = { 0: "Z", 1: "M", 2: "L", 4: "C" };
+
+// Decode one geometry blob into commands. Throws rather than guessing: a blob that does not end
+// exactly on its last byte has not been understood, and silently returning half a shape would be
+// worse than stopping.
+export function decodePath(b) {
+  const cmds = [];
+  if (!b || !b.length) return cmds;
+  const dv = new DataView(b.buffer, b.byteOffset, b.length);
+  let i = 0;
+  while (i < b.length) {
+    const op = b[i];
+    const n = PATH_ARITY[op];
+    if (n === undefined) throw new Error("unknown path opcode " + op + " at byte " + i);
+    i += 1;
+    const pts = [];
+    for (let k = 0; k < n; k++) {
+      if (i + 8 > b.length) throw new Error("path ran past the end at byte " + i);
+      pts.push([dv.getFloat32(i, true), dv.getFloat32(i + 4, true)]);
+      i += 8;
+    }
+    cmds.push({ op, pts });
+  }
+  return cmds;
+}
+
+export function pathToSVG(cmds, round = 3) {
+  const f = (v) => String(Math.round(v * 10 ** round) / 10 ** round);
+  let d = "";
+  for (const c of cmds) d += PATH_SVG[c.op] + c.pts.map((p) => f(p[0]) + "," + f(p[1])).join(" ") + " ";
+  return d.trim();
+}

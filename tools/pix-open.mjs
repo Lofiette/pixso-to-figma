@@ -20,7 +20,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import * as zlib from "node:zlib";
-import { Reader, parseSchema } from "./kiwi.mjs";
+import { Reader, parseSchema, decodePath, pathToSVG } from "./kiwi.mjs";
 
 const argv = process.argv.slice(2);
 function flag(n) { const i = argv.indexOf(n); if (i < 0) return null; return argv.splice(i, 2)[1]; }
@@ -90,7 +90,7 @@ const doc = decompressDocument(docEntry.data());
 console.log("  document decompresses to " + doc.length + " bytes");
 
 // ---------- walk it ----------
-const KEEP = new Set(["guid", "parentIndex", "type", "name", "size", "visible", "symbolData"]);
+const KEEP = new Set(["guid", "parentIndex", "type", "name", "size", "visible", "symbolData", "fillGeometry", "strokeGeometry"]);
 function readValue(r, type, isArray, keep) {
   if (isArray) {
     const n = r.varuint();
@@ -138,6 +138,7 @@ function readMessage(r, d, keep) {
 const r = new Reader(doc);
 const root = defs[byName.get("PixsoMsg")];
 const nodes = [];
+const blobData = [];
 let blobs = 0;
 const t0 = Date.now();
 for (;;) {
@@ -155,11 +156,19 @@ for (;;) {
         type: o.type, name: o.name, visible: o.visible,
         w: o.size ? o.size.x : null, h: o.size ? o.size.y : null,
         symbol: o.symbolData && o.symbolData.symbolID ? o.symbolData.symbolID.sessionID + ":" + o.symbolData.symbolID.localID : null,
+        fill: (o.fillGeometry || []).map((p) => p.blobIndex),
+        stroke: (o.strokeGeometry || []).map((p) => p.blobIndex),
       });
     }
   } else if (f.name === "blobs") {
     const n = r.varuint();
-    for (let i = 0; i < n; i++) { readValue(r, f.type, false, false); blobs++; }
+    for (let i = 0; i < n; i++) {
+      // Blob is a message with one field, bytes: byte[]. Read it directly so the bytes survive.
+      let bytes = null;
+      for (;;) { const fid = r.varuint(); if (fid === 0) break; const cnt = r.varuint(); bytes = r.bytes(cnt); }
+      blobData.push(bytes);
+      blobs++;
+    }
   } else readValue(r, f.type, f.isArray, false);
 }
 // Every byte consumed is the check that the schema was read correctly.
@@ -184,12 +193,55 @@ for (const p of pages) {
   console.log("    " + JSON.stringify(p.name).padEnd(36) + String(k.length).padStart(5) + " top-level");
 }
 
+// ---------- geometry ----------
+// Decoded here rather than described, because a path that comes out as a real shape is the only
+// convincing evidence. Every path blob must consume its own length exactly; any that does not is
+// counted and named rather than quietly skipped.
+let withGeom = 0, pathsOK = 0, pathsBad = 0, boxAgrees = 0, boxChecked = 0;
+const svgs = [];
+for (const n of nodes) {
+  const idx = (n.fill || []).concat(n.stroke || []);
+  if (!idx.length) continue;
+  withGeom++;
+  let d = "", pts = [];
+  for (const bi of idx) {
+    try {
+      const cmds = decodePath(blobData[bi]);
+      pathsOK++;
+      d += (d ? " " : "") + pathToSVG(cmds);
+      for (const c of cmds) pts.push(...c.pts);
+    } catch (e) { pathsBad++; }
+  }
+  if (pts.length && n.w && n.h) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [x, y] of pts) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    boxChecked++;
+    if (Math.abs((x1 - x0) - n.w) <= 1 && Math.abs((y1 - y0) - n.h) <= 1) boxAgrees++;
+  }
+  if (d && svgs.length < 400) svgs.push({ name: n.name, w: n.w, h: n.h, d });
+}
+console.log("");
+console.log("  geometry: " + withGeom + " nodes carry paths, " + pathsOK + " blobs decoded, " + pathsBad + " refused");
+console.log("  the path's own bounding box matches the node's size on " + boxAgrees + " of " + boxChecked +
+  " — a second field of the format agreeing with the first");
+
 if (OUT) {
   mkdirSync(OUT, { recursive: true });
   writeFileSync(join(OUT, "nodes.json"), JSON.stringify(nodes, null, 1), "utf8");
   writeFileSync(join(OUT, "schema.json"), JSON.stringify(defs, null, 1), "utf8");
   mkdirSync(join(OUT, "img"), { recursive: true });
   for (const e of images) writeFileSync(join(OUT, "img", e.name), e.data());
+  // Shapes as SVG, so the decoding can be checked by eye and not only by arithmetic.
+  mkdirSync(join(OUT, "svg"), { recursive: true });
+  let k = 0;
+  for (const s of svgs) {
+    if (!s.w || !s.h) continue;
+    const safe = String(s.name).replace(/[^\p{L}\p{N}]+/gu, "-").slice(0, 40) || "shape";
+    const doc = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + s.w + " " + s.h + '" width="' + s.w + '" height="' + s.h + '">' +
+      '<path d="' + s.d + '" fill="#333"/></svg>';
+    writeFileSync(join(OUT, "svg", String(k).padStart(3, "0") + "-" + safe + ".svg"), doc, "utf8");
+    if (++k >= 40) break;
+  }
   console.log("");
-  console.log("  written to " + OUT + ": nodes.json, schema.json, img/ (" + images.length + " images)");
+  console.log("  written to " + OUT + ": nodes.json, schema.json, img/ (" + images.length + " images), svg/ (" + k + " shapes)");
 }

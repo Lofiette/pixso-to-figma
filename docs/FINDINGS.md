@@ -995,3 +995,36 @@ What this does **not** settle, and what the work actually is:
 - **Text cannot be measured.** The migration asks Pixso what it actually inked for a string; with no
   renderer there is no answer. One heuristic degrades — the text box is simply trusted — which is
   already the default behaviour.
+
+### The geometry blobs decode, and the opcodes were measured rather than guessed
+
+`Path.blobIndex` points into `PixsoMsg.blobs`, and a path blob is a stream of
+`[opcode byte][float32 LE x][float32 LE y]*`. Guessing the opcodes from a hex dump got 225 of 3 716
+path blobs to decode exactly — the rest desynchronised, and the bytes they then mistook for opcodes
+were 62-67, which are precisely the high bytes of float32 values between 0.5 and 4. A decoder that has
+lost its place reads the middle of a number as a command.
+
+So the arities were searched for instead: every assignment of 0..3 points to each opcode, kept by the
+one measure that cannot be fooled — a correct reading consumes each blob exactly to its last byte.
+Exactly one assignment works, and it works on **all 3 716**:
+
+| opcode | points | meaning | occurrences |
+|---|---|---|---|
+| 0 | 0 | close | 19 360 |
+| 1 | 1 | move to | 19 585 |
+| 2 | 1 | line to | 78 232 |
+| 4 | 3 | cubic to | 111 229 |
+
+Every path blob in the file begins with opcode 1, which is what a move-first path stream should do.
+
+A second, independent check, because ending on the right byte proves the framing and not the meaning:
+decode a node's fill paths, take the bounding box of the points, and compare it with the node's own
+`size` — a different field written by a different part of the format. It agrees within a pixel on
+**15 764 of 15 881** nodes. The ones that miss are vectors whose curves bulge past their control
+points, which is the only direction they could miss in.
+
+Over the whole file: 15 969 nodes carry paths, 22 994 blobs decoded, **none refused**. The shapes come
+out as shapes — the first one written is a 76x144 rounded rectangle with 4 px corners drawn in cubics,
+which is exactly the panel behind a dropdown.
+
+This removes the reason the migration needs Pixso to render vectors to SVG.
