@@ -18,11 +18,12 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
 function flag(name) { const i = argv.indexOf(name); if (i < 0) return null; return argv.splice(i, 2)[1]; }
 const DO_BUILD = (() => { const i = argv.indexOf("--build"); if (i < 0) return false; argv.splice(i, 1); return true; })();
+const SELECTION = (() => { const i = argv.indexOf("--selection"); if (i < 0) return false; argv.splice(i, 1); return true; })();
 const PAGE_SEL = flag("--page");
 const ONLY = flag("--only");
 const [PAGES_FILE, OUT_DIR] = argv;
 if (!PAGES_FILE || !OUT_DIR) {
-  console.error("usage: node migrate-file.mjs <pages.json> <outDir> [--page <name|index>] [--only <n,n>] [--build]");
+  console.error("usage: node migrate-file.mjs <pages.json> <outDir> [--page <name|index>] [--selection] [--only <n,n>] [--build]");
   process.exit(1);
 }
 
@@ -34,14 +35,29 @@ mkdirSync(OUT_DIR, { recursive: true });
 const slug = (s) => (s || "").replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "x";
 
 const jobs = [];
-doc.pages.forEach((pg, pi) => {
-  if (PAGE_SEL !== null && String(pi) !== PAGE_SEL && pg.name !== PAGE_SEL) return;
-  pg.children.forEach((c, ci) => {
-    if (ONLY && !ONLY.split(",").map(Number).includes(ci)) return;
-    jobs.push({ pi, ci, page: pg.name, id: c.id, name: c.name, type: c.type, nodes: c.nodes,
-      dir: join(OUT_DIR, pi + "-" + String(ci).padStart(3, "0") + "-" + slug(c.name)) });
+if (SELECTION) {
+  // Whatever the designer had selected when the file was read. A selected node is usually not a
+  // top-level child, so its page travels with it — the build has no other way to know where it goes.
+  const sel = doc.selection || [];
+  if (!sel.length) {
+    console.error("nothing was selected in Pixso when the file was read.");
+    console.error("select what you want in Pixso and run again.");
+    process.exit(1);
+  }
+  sel.forEach((s, si) => {
+    jobs.push({ pi: "sel", ci: si, page: s.page, id: s.id, name: s.name, type: s.type, nodes: s.nodes,
+      dir: join(OUT_DIR, "sel-" + String(si).padStart(3, "0") + "-" + slug(s.name)) });
   });
-});
+} else {
+  doc.pages.forEach((pg, pi) => {
+    if (PAGE_SEL !== null && String(pi) !== PAGE_SEL && pg.name !== PAGE_SEL) return;
+    pg.children.forEach((c, ci) => {
+      if (ONLY && !ONLY.split(",").map(Number).includes(ci)) return;
+      jobs.push({ pi, ci, page: pg.name, id: c.id, name: c.name, type: c.type, nodes: c.nodes,
+        dir: join(OUT_DIR, pi + "-" + String(ci).padStart(3, "0") + "-" + slug(c.name)) });
+    });
+  });
+}
 
 const totalNodes = jobs.reduce((a, j) => a + j.nodes, 0);
 console.log("file " + JSON.stringify(doc.file));

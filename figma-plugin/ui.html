@@ -14,9 +14,20 @@
   #go[disabled] { background: #9dcff0; cursor: default; }
   #p { white-space: pre-wrap; font: 11px ui-monospace, Menlo, Consolas, monospace; color: #333;
        margin-bottom: 6px; }
+  #scoperow { display: block; margin: 8px 0 2px; color: #666; }
+  #scope { display: block; width: 100%; margin-top: 3px; padding: 5px; font: 12px inherit;
+           color: #333; background: #fff; border: 1px solid #ccc; border-radius: 5px; }
+  #scope[disabled] { color: #999; background: #f5f5f5; }
 </style>
 <div id="s" class="wait">Проверяю связь с раннером…</div>
-<button id="go" hidden>Перенести файл из Pixso</button>
+<label id="scoperow" hidden>Что переносить
+  <select id="scope">
+    <option value="file">весь файл</option>
+    <option value="page">только открытую страницу</option>
+    <option value="selection">только выделенное в Pixso</option>
+  </select>
+</label>
+<button id="go" hidden>Перенести из Pixso</button>
 <div id="p"></div>
 <div id="l"></div>
 <script>
@@ -222,10 +233,15 @@ let polling = false;
 // parked one is still technically alive, without the two of them fighting over `polling`.
 let pollGen = 0, lastPollOk = Date.now();
 const GO = document.getElementById("go"), P = document.getElementById("p");
+const SCOPE = document.getElementById("scope"), SCOPEROW = document.getElementById("scoperow");
+// The choice travels with the press. The runner cannot ask afterwards — by then it is already busy
+// in Pixso — and the page and the selection are whatever they are at the moment the button is hit.
 GO.onclick = async () => {
   GO.disabled = true;
+  SCOPE.disabled = true;
   GO.textContent = "Идёт перенос…";
-  try { await post("/start", {}); } catch (e) { log("could not start: " + e); GO.disabled = false; }
+  try { await post("/start", { scope: SCOPE.value }); }
+  catch (e) { log("could not start: " + e); GO.disabled = false; SCOPE.disabled = false; }
 };
 
 // What the runner is doing, in this window, because the person who pressed the button is looking
@@ -241,14 +257,19 @@ async function control() {
       const c = await fetchT(HOST + "/control?rev=" + rev, {}, 40000).then(r => r.json());
       rev = c.rev || 0;
       GO.hidden = false;
+      SCOPEROW.hidden = false;
       state({ link: "up", phase: c.phase });
       if (c.phase === "working") { GO.disabled = true; GO.textContent = "Идёт перенос…"; }
       else if (c.phase === "done") { GO.disabled = true; GO.textContent = "Готово"; }
       else if (c.phase === "stopped") { GO.disabled = false; GO.textContent = "Попробовать снова"; }
-      else { GO.disabled = false; GO.textContent = "Перенести файл из Pixso"; }
+      else { GO.disabled = false; GO.textContent = "Перенести из Pixso"; }
+      // The choice is only editable while nothing is running. It is re-enabled on "stopped" as well,
+      // because the reason a run stopped is often the choice itself — nothing was selected.
+      SCOPE.disabled = c.phase === "working" || c.phase === "done";
       if (c.lines && c.lines.length) P.textContent = c.lines.join(String.fromCharCode(10));
     } catch (e) {
       GO.hidden = true;
+      SCOPEROW.hidden = true;
       // Whatever the runner last said stays on screen. Clearing it wiped the verdict off the window
       // the moment the runner exited — at the end of a successful run, which is when it is read.
       state({ link: "down" });

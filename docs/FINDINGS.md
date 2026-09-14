@@ -949,3 +949,49 @@ Ranked by mean now, and an object earns a look three ways — grossly different 
 stands out, or the two renders coming out different heights at the same width, which is exactly how a
 wrapped line announces itself. On the fifth file: 69 compared, one worth looking at, and it is the
 right one.
+
+### A .pix file is readable without Pixso, and it says so itself
+
+Measured on "Components OneKIB.pix", 13 MB, the same file that was open in Pixso at the time — which
+makes every claim below checkable against a second, independent reader.
+
+    .pix            a zip: the document, every image as a PNG named by its own hash, and pixso.binary
+    pixso.binary    the Kiwi schema for the document — 243 definitions, 125 messages, 111 enums
+    the document    "pixso-kw", a version, "compress:zstd", then one zstd frame
+    inside that     one Kiwi message: PixsoMsg { pixsoNodes: PixsoNode[], blobs: Blob[], … }
+
+Kiwi is Evan Wallace's schema-driven binary format, the same one Figma's `.fig` uses — unsurprising,
+given Pixso's plugin API is a member-for-member clone of Figma's. The decisive part is that **the
+schema ships inside the file**, so nothing about the encoding has to be guessed: field names, types
+and ids are all stated. `PixsoNode` has 249 fields and they are named the way the API names them —
+`guid`, `parentIndex`, `transform`, `type`, `name`, `size`, `fillPaints`, `strokePaints`,
+`cornerRadius`, `fontName`, `fontSize`, `textData`, `symbolData`, and `fillGeometry: Path[]`.
+
+The whole document decoded in 2.2 s and **consumed every one of its 49 097 709 bytes**. That is the
+check that matters: a decoder that had misread the schema would lose sync within kilobytes, not
+finish exactly on the last byte. 86 578 nodes, 9 615 blobs.
+
+Against Pixso's own answers for the same file, page by page: Sandbox 326 top-level, Changelog 1,
+⌛ Sidebar menu 48, Guides 3, File Uploader 2, Cover 2 — all identical.
+
+Three things this settles that were open questions:
+
+- **Images need no extraction at all.** They are already PNG files in the archive, keyed by the same
+  hash the migration uses. Today's slowest step disappears for this path.
+- **The hidden component page travels with the file.** The decode finds a 49th page, `Internal Only
+  Canvas`, with 2000 top-level children — the page Pixso materialises remote component definitions
+  on. A consumer file therefore carries the definitions it uses.
+- **Vector geometry is present and decodable.** `Path.blobIndex` points into `blobs`, and a blob is a
+  command stream: an opcode byte followed by little-endian float32 pairs. Blob 0 reads 72.0, 0.0,
+  74.2, 76.0 — coordinates, not noise. The opcode-to-arity map still has to be worked out, and the
+  check for that is the same one used above: every blob must consume exactly its own length.
+
+What this does **not** settle, and what the work actually is:
+
+- **Instances are stored authored, not expanded.** Pixso's runtime count for Sandbox is 87 265 nodes;
+  the file holds 33 794. The difference is instance children, which the file does not repeat — it
+  stores `symbolData.symbolOverrides` instead. Rebuilding the expanded tree means walking symbol
+  definitions and applying overrides, which is deterministic but is the bulk of the job.
+- **Text cannot be measured.** The migration asks Pixso what it actually inked for a string; with no
+  renderer there is no answer. One heuristic degrades — the text box is simply trusted — which is
+  already the default behaviour.

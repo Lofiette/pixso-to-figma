@@ -69,10 +69,17 @@ export function startJobServer(port = 3778) {
     }
 
     if (url.pathname === "/start" && req.method === "POST") {
-      req.resume();
-      cors(res, "application/json");
-      res.end(JSON.stringify({ ok: true }));
-      if (startResolve) { const r = startResolve; startResolve = null; r(); }
+      // The button carries what the designer chose to migrate — the whole file, the page they have
+      // open, or what they have selected. Read the body rather than discarding it.
+      let sbody = "";
+      req.on("data", (c) => { sbody += c; });
+      req.on("end", () => {
+        cors(res, "application/json");
+        res.end(JSON.stringify({ ok: true }));
+        let opts = {};
+        try { opts = JSON.parse(sbody) || {}; } catch (e) {}
+        if (startResolve) { const r = startResolve; startResolve = null; r(opts); }
+      });
       return;
     }
 

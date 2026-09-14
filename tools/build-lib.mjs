@@ -45,6 +45,12 @@ export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
   const pageFor = (rootId) => {
     if (!pages) return null;
     for (const p of pages.pages) for (const c of p.children) if (c.id === rootId) return p;
+    // A node migrated because it was selected is usually not a top-level child, so it is not in that
+    // list at all. The page it came from was recorded alongside the selection; without this the
+    // object lands on whichever page happens to be open in Figma.
+    for (const s of pages.selection || []) {
+      if (s.id === rootId) { for (const p of pages.pages) if (p.name === s.page) return p; }
+    }
     return null;
   };
 

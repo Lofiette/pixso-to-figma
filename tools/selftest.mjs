@@ -43,10 +43,12 @@ catch (e) { fail("plugin window does not parse: " + String(e.stderr || e.message
 // ---------- 3. the state line ----------
 // A run passes through all of these. Two of them used to be reported in red as a lost connection
 // when nothing was wrong: the runner busy in Pixso, and the runner finished and exited.
-const el = () => ({ textContent: "", className: "", hidden: false, disabled: false, onclick: null, style: {} });
-const S = el(), byId = { s: S, l: el(), p: el(), go: el() };
+const el = () => ({ textContent: "", className: "", hidden: false, disabled: false, onclick: null, style: {}, value: "" });
+const S = el(), byId = { s: S, l: el(), p: el(), go: el(), scope: el(), scoperow: el() };
+const sent = [];
 const ctx = createContext({
-  fetch: () => new Promise(() => {}),           // both loops park; they are not under test here
+  // Records what the frame sends and never settles, so both loops park and nothing under test races.
+  fetch: (u, o) => { sent.push({ url: String(u), body: o && o.body ? String(o.body) : "" }); return new Promise(() => {}); },
   document: { getElementById: (i) => byId[i] || el() },
   parent: { postMessage() {} },
   setTimeout, clearTimeout, setInterval, clearInterval,
@@ -71,6 +73,21 @@ try {
   line("finished, runner exited", { link: "down" }, "Раннер закончил работу", "on");
   line("runner never started", { sawDone: false, phase: "idle" }, "Раннер не запущен", "wait");
   line("stopped by an error", { link: "up", phase: "stopped" }, "остановлен", "off");
+
+  // ---------- the scope the button carries ----------
+  // The runner cannot ask what to migrate after the press — by then it is already busy in Pixso —
+  // so the choice has to travel with the press or it is lost.
+  for (const want of ["file", "page", "selection"]) {
+    sent.length = 0;
+    byId.scope.value = want;
+    byId.go.onclick();
+    const start = sent.find((c) => c.url.indexOf("/start") >= 0);
+    if (!start) fail("pressing the button sent no /start for scope " + want);
+    else if (start.body.indexOf('"' + want + '"') < 0) fail("scope " + want + " did not travel: " + start.body);
+    else ok("the button carries scope " + want);
+  }
+  if (!byId.scope.disabled) fail("the scope stayed editable while a run was starting");
+  else ok("the scope locks once the run has been asked for");
 } catch (e) { fail("plugin window threw on load: " + e.message); }
 
 // ---------- 4. progress must be held, not polled ----------
@@ -106,6 +123,16 @@ try {
   const third = await p;
   if (third.phase !== "working") fail("a phase change is not reported");
   else ok("a phase change wakes it too");
+
+  // ---------- and the runner receives that choice ----------
+  const waited = srv.waitForStart();
+  await fetch("http://127.0.0.1:" + PORT + "/start", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scope: "selection" }),
+  });
+  const got = await waited;
+  if (!got || got.scope !== "selection") fail("the runner did not receive the scope: " + JSON.stringify(got));
+  else ok("the runner receives the scope the button sent");
 } catch (e) { fail("progress endpoint: " + e.message); }
 srv.close();
 
