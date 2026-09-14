@@ -5,7 +5,9 @@
 - **Task:** Pixso -> Figma migration, 1:1, whole files, no model in the loop.
 - **Status:** five files migrated. Day three went into the *instrument* rather than the algorithm:
   the verdict now distinguishes what a person could see from what only a measurement can, and the
-  one thing that was unexplained at the end of day two is explained.
+  one thing that was unexplained at the end of day two is explained. Day four added the choice of
+  what to migrate — whole file, open page, or selection — and proved that a `.pix` on disk can be
+  read without Pixso at all.
 
 The transfer itself contains no model call. Every step is deterministic code: the same file gives
 the same result twice. What has needed a model is **debugging** — a new class of defect does not
@@ -14,12 +16,20 @@ find itself.
 ## How it is run
 
 ```
-start.cmd            (Windows)      # designer path: double-click, then press the button
+start.cmd            (Windows)      # designer path: double-click, then choose a scope and press
 start.command        (macOS)
-node tools/run.mjs <name>                    # the same thing, with a console
-node tools/run.mjs <name> --page "<page>"    # one page of a very large file
+node tools/run.mjs                           # the same thing, with a console
+node tools/run.mjs --page "<page>"           # one page
+node tools/run.mjs --selection               # whatever is selected in Pixso
 node tools/selftest.mjs                      # everything checkable with neither editor open
+node tools/pix-open.mjs <file.pix>           # read a .pix from disk, without Pixso at all
 ```
+
+The plugin window now carries the choice — whole file, the page open in Pixso, or the selection — and
+it travels with the press, because the runner cannot ask afterwards: by then it is already busy in
+Pixso, and the page and the selection are whatever they were at that moment. The work goes to
+`out/<file name>`; it used to go to one shared `out/run`, where a second file's objects landed among
+the first file's and extraction skipped them as already done.
 
 Or the steps separately, from `tools/`:
 
@@ -177,6 +187,30 @@ read it in Russian. `docs/METHOD.md` and `docs/FINDINGS.md` stay in English — 
 notes, not the designer's instructions. The last TODO in the README is closed: turning on Pixso's MCP
 needs no menu path, only "включите Pixso MCP в открытом файле десктопного приложения Pixso".
 
+## Reading a .pix without Pixso
+
+Asked for on day four, and the format turned out to describe itself. `tools/pix-open.mjs` opens one:
+a .pix is a zip holding the document, every image as a PNG named by its own hash, and `pixso.binary`
+— the **Kiwi schema** for the document. The document is `pixso-kw`, a version, `compress:zstd`, then
+one zstd frame; inside is a single Kiwi message, `PixsoMsg { pixsoNodes: PixsoNode[], blobs: Blob[] }`.
+Kiwi is what Figma's `.fig` uses, which fits a plugin API that is a clone of Figma's.
+
+Measured on a 13 MB component library, the same file that was open in Pixso at the time: 86 578 nodes
+and 9 615 blobs decoded in 2.2 s, **every one of 49 097 709 bytes consumed**, and the page structure
+identical to Pixso's own answers page by page. That byte count is the check — a decoder that misread
+the schema loses sync within kilobytes rather than finishing on the last byte.
+
+Settled by it: images need no extraction (already PNGs, keyed by the hash the migration uses); the
+hidden `Internal Only Canvas` with component definitions travels inside the file; vector geometry is
+present and decodable (`Path.blobIndex` into `blobs`, each blob an opcode byte followed by
+little-endian float32 pairs).
+
+Not settled, and this is the actual work: **instances are stored authored, not expanded.** Pixso's
+runtime count for one page is 87 265 nodes where the file holds 33 794, and the difference is instance
+children, which the file does not repeat — it stores `symbolData.symbolOverrides` instead. Rebuilding
+the expanded tree from symbol definitions and overrides is the bulk of the job. And text cannot be
+measured without a renderer, which degrades one heuristic to "trust the box" — already the default.
+
 ## Open, in order
 
 1. **Why a node id goes stale is still unknown.** It is no longer harmful — the stamp finds the right
@@ -195,19 +229,26 @@ needs no menu path, only "включите Pixso MCP в открытом фай�
    not — so the nodes where the source shows one line and the build shows two can be named exactly.
    Changing it reverses a deliberate decision and needs a rebuild plus a re-audit, so it is the
    owner's call. Pictures: `out/day3/vis/0-044-Группа-4.{pixso,figma}.png`.
-3. **A per-card offset of a few pixels** in "Инфографика блоки" of the Лукоморье file: the best
+3. **Migrating from a .pix, for real.** The reading is proved (above); the work is expanding
+   instances from `symbolData` and turning geometry blobs into SVG. Days, not hours — and worth
+   starting from `tools/pix-open.mjs` and `tools/kiwi.mjs`, which are already correct.
+4. **The selection scope has never been run end to end with something actually selected.** The page
+   scope has (69 nodes out of a 48-page library, extracted in 11 s, zero loss), and the button is
+   covered by `selftest.mjs` for all three choices — but nobody has yet pressed it with a real
+   selection in Pixso.
+5. **A per-card offset of a few pixels** in "Инфографика блоки" of the Лукоморье file: the best
    alignment differs per card, so it is not one global shift. Needs that file open in Pixso.
-4. **macOS is written but has never been run on a Mac.** `start.command` (exec bit set in the index,
+6. **macOS is written but has never been run on a Mac.** `start.command` (exec bit set in the index,
    line endings pinned in `.gitattributes`) and `osascript` focus. Needs one real test.
-5. Fonts this machine lacks: SF Pro Text/Display, Proxima Nova, Helvetica, Fact Semi Expanded,
+7. Fonts this machine lacks: SF Pro Text/Display, Proxima Nova, Helvetica, Fact Semi Expanded,
    Stolzl, Pragmatica. Report, do not compensate — the owner's decision.
-6. Components arrive as frames. Deferred by the owner as a separate task. The groundwork is now in
+8. Components arrive as frames. Deferred by the owner as a separate task. The groundwork is now in
    place for free: every built root already carries its Pixso source id in plugin data, and the same
    could be recorded per instance.
 
 ## Checkpoint
 
-- **Updated:** 2026-09-10, day three.
+- **Updated:** 2026-09-14, day four.
 - **Verified by:** node counts per object on five files, `coverage.mjs` over all of them, and
   `selftest.mjs` (17 checks, no editors). `test-clean.mjs` proves the delete rule against nodes it
   makes itself. And, for the first time, **a visual audit that ran to the end of a file**: 69 objects,
