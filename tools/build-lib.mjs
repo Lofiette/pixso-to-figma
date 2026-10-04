@@ -165,7 +165,12 @@ export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
 
 // A font this machine does not have is not a defect in the migration and must not be presented as
 // one — but it must not be hidden either, or a run reads as broken when the algorithm did its job.
-export function verdict(results, say = console.log) {
+//
+// `losses` are the objects that never reached the build: their extraction failed, or the run never
+// got to them (extract-lib.mjs unextracted(states.json)). They used to be invisible here, because the
+// list of what to build names only the successes — so a run that lost 249 of 577 objects could still
+// end on PASS. Each one is a failed object now, named with the first line of its error.
+export function verdict(results, say = console.log, losses = []) {
   let exact = 0, heldByFonts = 0, wrong = 0, errored = 0, relocated = 0, subTotal = 0, subObjects = 0;
   let hiddenSize = 0, hiddenSizeObjects = 0;
   const fontUse = new Map();
@@ -200,11 +205,16 @@ export function verdict(results, say = console.log) {
     }
     say("  Install them, restart Figma (it scans fonts only at startup), and run again.");
   }
+  const failedEx = losses.filter((l) => l.state === "failed");
+  const skippedEx = losses.filter((l) => l.state !== "failed");
+  const clip = (s) => { s = String(s || ""); return s.length > 200 ? s.slice(0, 199) + "…" : s; };
   say("");
-  say("exact                    " + exact + " of " + results.length);
+  say("exact                    " + exact + " of " + (results.length + losses.length));
   if (heldByFonts) say("held back by fonts       " + heldByFonts + "   (not a migration defect)");
   if (wrong) say("wrong, fonts all present " + wrong + "   <- these are the real ones");
   if (errored) say("failed to build          " + errored);
+  if (failedEx.length) say("failed to extract        " + failedEx.length + "   (never reached Figma; full text in each extract-error.log)");
+  if (skippedEx.length) say("not extracted            " + skippedEx.length + "   (the run did not get to them)");
   // Not a defect in the result — the object was built and checked. It is a defect in the handle,
   // and it stays visible until it is understood.
   if (relocated) say("root found by stamp      " + relocated + "   (the id the build reported had gone stale)");
@@ -218,11 +228,15 @@ export function verdict(results, say = console.log) {
     "   (an inside border on one side of an auto-layout frame:");
   if (subTotal) say("                         Figma takes it out of the content box and Pixso does not)");
   for (const b of bad.slice(0, 10)) say("   " + b);
-  const clean = wrong === 0 && errored === 0 && results.length > 0;
+  // Every one named, not the first ten: these never reached Figma at all.
+  for (const l of failedEx) say("   " + l.name + ": " + clip(l.error));
+  for (const l of skippedEx) say("   " + l.name + ": " + clip(l.error));
+  const clean = wrong === 0 && errored === 0 && losses.length === 0 && results.length > 0;
   say("");
   // A run that built nothing must not report PASS. It said so, and "PASS" over an empty list is the
-  // most misleading thing this summary could print.
-  if (!results.length) say("NOTHING BUILT — there was nothing to build, or every object was skipped");
+  // most misleading thing this summary could print. Nor may a run that lost objects on the way in.
+  if (losses.length) say("NOT CLEAN" + (results.length ? "" : " — nothing was built"));
+  else if (!results.length) say("NOTHING BUILT — there was nothing to build, or every object was skipped");
   else say(clean ? (heldByFonts ? "PASS apart from the missing fonts" : "PASS") : "NOT CLEAN");
-  return { exact, heldByFonts, wrong, errored, clean };
+  return { exact, heldByFonts, wrong, errored, failedExtract: failedEx.length, notExtracted: skippedEx.length, clean };
 }

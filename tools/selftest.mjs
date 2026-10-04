@@ -140,6 +140,9 @@ try { execFileSync(process.execPath, [join(HERE, "test-pix.mjs")], { stdio: "inh
 // ---------- 5. the IR schema and the repository's data hygiene, each a script of its own ----------
 for (const t of ["test-ir.mjs", "test-hygiene.mjs"]) { try { process.stdout.write(execFileSync(process.execPath, [join(HERE, t)], { encoding: "utf8" })); } catch (e) { process.stdout.write(String(e.stdout || "")); fail(t + " failed"); } }
 
+// ---------- 5. the Pixso channel: object states, full errors, circuit breaker (tools/test-mcp.mjs) ----------
+try { execFileSync(process.execPath, [join(HERE, "test-mcp.mjs")], { stdio: "inherit" }); } catch (e) { fail("test-mcp.mjs: the Pixso channel checks failed, see above"); }
+
 console.log("");
 console.log(failed ? failed + " check" + (failed === 1 ? "" : "s") + " FAILED" : "all checks pass");
 process.exit(failed ? 1 : 0);
