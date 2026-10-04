@@ -391,8 +391,14 @@ export async function extractAll(o) {
   let queue = st.objects.filter((ob) => ob.state === "pending").map((ob) => ob.n - 1);
   let trip = null;
   let current = null;
+  // The object's processes must not outlive the loop. On POSIX they run in a process group of their
+  // own (so the breaker can kill the whole tree), which also means Ctrl+C in the terminal no longer
+  // reaches them by itself: pass it on. Without a handler, a signal ends Node without "exit".
   const onExit = () => { if (current) killTree(current); };
+  const SIGNALS = WIN ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
+  const onSignal = (sig) => { onExit(); process.exit(sig === "SIGINT" ? 130 : 143); };
   process.on("exit", onExit);
+  for (const s of SIGNALS) process.on(s, onSignal);
 
   const mcpEnv = (timeoutMs) => {
     const env = Object.assign({}, process.env, baseEnv, { MCP_TIMEOUT_MS: String(timeoutMs) });
@@ -639,6 +645,7 @@ export async function extractAll(o) {
 
   function finish(stoppedWith) {
     process.off("exit", onExit);
+    for (const s of SIGNALS) process.off(s, onSignal);
     rmQuiet(files.gate);
     if (stoppedWith === undefined) st.status = "complete";
     st.current = null;
