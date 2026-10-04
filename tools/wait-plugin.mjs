@@ -18,12 +18,15 @@ const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 const NL = String.fromCharCode(10);
 // Asked before each attempt, because an attempt rewrites figma-plugin/dist and puts it back when the
 // port is taken: done every two seconds for half an hour, that is a lot of chances for a window to be
-// opened in between and come up with a key nobody holds.
-const portFree = (port) => new Promise((r) => {
+// opened in between and come up with a key nobody holds. Both loopbacks, as the runner binds both
+// (tools/jobserver.mjs): a holder of [::1] alone keeps the port as surely as one of 127.0.0.1. A
+// machine with no IPv6 loopback at all answers EADDRNOTAVAIL or EAFNOSUPPORT there, which is free.
+const freeOn = (port, host) => new Promise((r) => {
   const s = createServer();
-  s.once("error", () => r(false));
-  s.listen(port, "127.0.0.1", () => s.close(() => r(true)));
+  s.once("error", (e) => r(host === "::1" && e && (e.code === "EADDRNOTAVAIL" || e.code === "EAFNOSUPPORT")));
+  s.listen(port, host, () => s.close(() => r(true)));
 });
+const portFree = async (port) => (await freeOn(port, "127.0.0.1")) && (await freeOn(port, "::1"));
 
 let srv = null, saidBusy = false;
 while (!srv && Date.now() < deadline) {

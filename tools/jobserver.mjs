@@ -108,7 +108,11 @@ export function startJobServer(port = 3778, opts = {}) {
   }
 
   const handler = (req, res) => {
-    const url = new URL(req.url, "http://127.0.0.1");
+    // A request target that is not a URL (`GET http://[ HTTP/1.1`) used to throw here, before any
+    // check and outside any catch: one request from any local process, key or no key, ended the run.
+    let url;
+    try { url = new URL(req.url, "http://127.0.0.1"); }
+    catch (e) { res.writeHead(400, { "Content-Type": "text/plain" }); return res.end("bad request"); }
     if (process.env.PX_LOG_HTTP) console.log("    [http] " + req.method + " " + url.pathname + (url.search || ""));
 
     const host = String(req.headers.host || "").toLowerCase();
@@ -318,6 +322,7 @@ export function startJobServer(port = 3778, opts = {}) {
         if (body === null) { res.writeHead(413); return res.end(JSON.stringify({ ok: false, error: "report slice too large" })); }
         res.end(JSON.stringify({ ok: true }));
         let msg; try { msg = JSON.parse(body); } catch { return; }
+        if (!msg || typeof msg !== "object") return;   // `null` parses, and msg.id would throw outside any catch
         const w = waiting.get(msg.id);
         if (!w) return;
         // A report carrying a render is megabytes, and one message that size never arrived at all:
@@ -349,15 +354,30 @@ export function startJobServer(port = 3778, opts = {}) {
   // The plugin fetches http://localhost:3778 because Figma's manifest validator rejects a raw
   // IP in allowedDomains -- and on Windows localhost often resolves to ::1 first, so binding only
   // 127.0.0.1 would refuse the connection. Bind both loopbacks with the same handler.
-  const server = createServer(handler);
-  const server6 = createServer(handler);
+  //
+  // Nothing a request carries may end the process: whatever the handler throws is answered 500.
+  const guarded = (req, res) => {
+    try { handler(req, res); }
+    catch (e) {
+      refused(500, req, "(any)", "the handler threw", String(e && e.message || e).slice(0, 120));
+      try { if (!res.headersSent) res.writeHead(500, { "Content-Type": "text/plain" }); res.end("internal error"); } catch (e2) {}
+    }
+  };
+  const server = createServer(guarded);
+  const server6 = createServer(guarded);
   const ready = new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", () => {
       // Port 0 asks for any free port (the tests do); the Host check needs the one actually given.
       boundPort = server.address().port;
       hosts = new Set(["localhost:" + boundPort, "127.0.0.1:" + boundPort, "[::1]:" + boundPort]);
-      server6.once("error", () => resolve());   // no IPv6 loopback here, v4 is enough
+      // A machine with no IPv6 loopback (EADDRNOTAVAIL, EAFNOSUPPORT) is fine: v4 is enough. Another
+      // process on [::1] is not. The plugin's localhost usually resolves to ::1 first, so every request
+      // it sent — the key with it — would go to that process while this runner waited for nobody.
+      server6.once("error", (e) => {
+        if (e && e.code === "EADDRINUSE") { try { server.close(); } catch (x) {} return reject(e); }
+        resolve();
+      });
       server6.listen(boundPort, "::1", () => resolve());
     });
   });

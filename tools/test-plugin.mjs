@@ -14,7 +14,8 @@
 //      or operation is refused, nothing a payload carries is ever run.
 //   4. the job server: 401 without the key on every route, 403 for any other Origin, 421 for any
 //      other Host, 409 for a window of another plugin build, the preflight without a key, /pair once
-//      and never after five wrong codes.
+//      and never after five wrong codes; a malformed request answered and survived; a port held on
+//      [::1] alone refused like one held on 127.0.0.1.
 //   5. the whole chain — runner, plugin window, plugin — with the real dist/ui.html wired to the
 //      real dist/code.js: a build and its verify, the clean rule (tools/test-clean.mjs's own
 //      scenario), a render, the probes, a window that has to ask for the pairing code, and a window
@@ -27,6 +28,7 @@ import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync, existsSync
 import { execFileSync } from "node:child_process";
 import { createContext, runInContext, Script } from "node:vm";
 import { request, createServer } from "node:http";
+import { connect } from "node:net";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -144,6 +146,27 @@ check(!existsSync(join(ROOT, "figma-plugin", "code.js")) && !existsSync(join(ROO
   blocker.close();
   check(refusedPort && readFileSync(join(d, "ui.html"), "utf8") === before,
     "a runner that finds the port taken says so and puts the live runner's plugin files back");
+}
+// The same when only [::1] is taken. localhost usually resolves to ::1 first, so a runner that started
+// on 127.0.0.1 alone would hand its key to whoever holds [::1] and wait for a plugin that never comes.
+{
+  const blocker6 = createServer(() => {});
+  let port6 = 0;
+  try { await new Promise((r, j) => { blocker6.once("error", j); blocker6.listen(0, "::1", r); }); port6 = blocker6.address().port; }
+  catch (e) { /* no IPv6 loopback on this machine */ }
+  if (!port6) console.log("skip the [::1]-only port check: this machine has no IPv6 loopback");
+  else {
+    const d = join(scratch, "dist-live6");
+    buildPlugin({ outDir: d, token: KEY });
+    const before = readFileSync(join(d, "ui.html"), "utf8");
+    let code = "";
+    try { const s = await openSession({ port: port6, distDir: d, log: () => {} }); s.close(); code = "started"; }
+    catch (e) { code = e.code || e.message; }
+    const v4free = await new Promise((r) => { const p = createServer(); p.once("error", () => r(false)); p.listen(port6, "127.0.0.1", () => p.close(() => r(true))); });
+    blocker6.close();
+    check(code === "PORT_TAKEN" && readFileSync(join(d, "ui.html"), "utf8") === before && v4free,
+      "a port taken on [::1] only is taken too: PORT_TAKEN, the plugin files put back, and 127.0.0.1 released", code + ", 127.0.0.1 free afterwards: " + v4free);
+  }
 }
 
 // tools/bootstrap.mjs used to run PAY.B and PAY.V; it now pastes the bundled sources in.
@@ -615,6 +638,21 @@ function hreq(port, method, path, headers, body) {
     "/pair trades the right code for the key once, and refuses it after", [p1.status, p2.status, p3.status].join(","));
   const pEvil = await hreq(P, "POST", "/pair", { Origin: "https://evil.example" }, JSON.stringify({ code: sec.pairCode }));
   check(pEvil.status === 403 && pEvil.body.indexOf(sec.token) < 0, "/pair from another Origin gets 403 and no key");
+
+  // Nothing a request carries ends the runner. A request target that is not a URL used to throw before
+  // any check, and a report of `null` after the key; both outside any catch, so the process died.
+  const raw = await new Promise((resolve) => {
+    const s = connect(P, "127.0.0.1", () => s.write("GET http://[ HTTP/1.1\r\nHost: 127.0.0.1:" + P + "\r\nConnection: close\r\n\r\n"));
+    let got = "";
+    s.on("data", (c) => { got += c; });
+    s.on("end", () => resolve(got));
+    s.on("error", (e) => resolve("socket error " + e.message));
+  });
+  const nullReport = await hreq(P, "POST", "/report", Object.assign({ "Content-Type": "application/json" }, good), "null");
+  const still = await hreq(P, "GET", "/control?rev=0", good);
+  check(/^HTTP\/1\.1 400/.test(raw) && nullReport.status === 200 && still.status === 200,
+    "a request target that is not a URL gets 400, a report of null is ignored, and the runner still answers",
+    raw.split("\r\n")[0] + ", " + nullReport.status + ", " + still.status);
 
   // Unknown kinds never reach the queue. A short deadline, so that a runner which queued it anyway
   // fails this check in two seconds rather than holding the test for the default twenty minutes.
