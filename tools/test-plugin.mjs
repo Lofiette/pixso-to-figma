@@ -36,7 +36,7 @@ import { tmpdir } from "node:os";
 import { performance } from "node:perf_hooks";
 import { buildPlugin, generatePlugin, forbiddenIn, DIST_DIR } from "./build-plugin.mjs";
 import { startJobServer, newSecrets, JOB_KINDS } from "./jobserver.mjs";
-import { openSession } from "./session.mjs";
+import { openSession, waitForPlugin } from "./session.mjs";
 import { cleanScenario } from "./test-clean.mjs";
 import { buildAll, verdict, staleBuildNote } from "./build-lib.mjs";
 import { BUILDER_SRC } from "./builder4.js";
@@ -123,6 +123,12 @@ const UI_SRC = readFileSync(join(ROOT, "figma-plugin", "src", "ui.html"), "utf8"
   const run = (args) => { try { execFileSync("node", [join(HERE, "build-plugin.mjs"), ...args], { stdio: "pipe" }); return 0; } catch (e) { return e.status; } };
   const s1 = run([]), s2 = run(["--out", DIST_DIR]);
   check(s1 === 2 && s2 === 2 && existsSync(DIST_DIR) === had, "build-plugin.mjs refuses to write figma-plugin/dist without --out and --force", s1 + "," + s2);
+  // Nor will serve.mjs on a port the plugin cannot reach: it would only replace a live runner's key.
+  const snap = () => ["code.js", "ui.html"].map((n) => { try { return readFileSync(join(DIST_DIR, n), "utf8"); } catch (e) { return "(none)"; } }).join("\n");
+  const before = snap();
+  let s3 = 0;
+  try { execFileSync("node", [join(HERE, "serve.mjs"), "3779"], { stdio: "pipe", timeout: 20000 }); } catch (e) { s3 = e.status; }
+  check(s3 === 2 && snap() === before, "serve.mjs refuses any port but 3778 and leaves figma-plugin/dist alone", String(s3));
 }
 try { generatePlugin({ token: "not-hex" }); fail("a malformed key was written into the plugin"); }
 catch (e) { ok("a malformed key is refused"); }
@@ -683,6 +689,25 @@ function hreq(port, method, path, headers, body) {
   check(d1.status === 200 && d1.headers["access-control-allow-origin"] === "https://diagnostics.example" && d2.status === 401,
     "PX_ALLOW_ORIGIN admits one more Origin, and still demands the key");
   srv3.close();
+}
+
+// Tools that post at once first wait for a window holding this session's key (tools/session.mjs). A
+// window still holding the last key is answered 401 and does not count; one with this key does.
+{
+  const sec = newSecrets();
+  const srv = startJobServer(0, Object.assign({ log: () => {} }, sec));
+  await srv.ready;
+  const stale = await hreq(srv.port, "GET", "/job?client=plugin", { Origin: "null", Authorization: "Bearer " + "e".repeat(64) });
+  let gaveUp = "";
+  try { await waitForPlugin(srv, 700, () => {}); } catch (e) { gaveUp = e.message; }
+  const waiting = waitForPlugin(srv, 5000, () => {});
+  const alive = await hreq(srv.port, "POST", "/alive", { Origin: "null", Authorization: "Bearer " + sec.token, "Content-Type": "application/json" }, "{}");
+  let waited = -1;
+  try { waited = await waiting; } catch (e) { gaveUp += " / then: " + e.message; }
+  srv.close();
+  check(stale.status === 401 && /^no plugin window after/.test(gaveUp) && alive.status === 200 && waited >= 0,
+    "waitForPlugin gives up on a window with the last key, and returns once one with this session's key is heard",
+    [stale.status, gaveUp, alive.status, waited].join(", "));
 }
 
 // ============================================================================================

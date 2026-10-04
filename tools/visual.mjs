@@ -9,7 +9,7 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { openSession } from "./session.mjs";
+import { openSession, waitForPlugin } from "./session.mjs";
 import { focusFigma } from "./focus-figma.mjs";
 
 const [, , PX_ID, FIG_ID, OUT = "../out/visual", SCALE = "1"] = process.argv;
@@ -38,6 +38,9 @@ const figJob = { op: "export", id: String(FIG_ID), constraint: { type: "SCALE", 
 // Rasterisation only happens in the front window, and every render here depends on it.
 console.log("figma window: " + focusFigma());
 const srv = await openSession();
+// A window left open from the last tool holds the last key and has to be given this one first.
+try { await waitForPlugin(srv); }
+catch (e) { console.error(e.message + " — figma render not attempted"); srv.close(); process.exit(1); }
 console.log("rendering Figma " + FIG_ID + " — the runner plugin must be open…");
 const r = await srv.post({ kind: "render" }, JSON.stringify(figJob), new Map(), 300000);
 srv.close();

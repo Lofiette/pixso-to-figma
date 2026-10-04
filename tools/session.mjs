@@ -1,6 +1,7 @@
 // One run's connection to the plugin: a fresh key, the plugin rebuilt to carry it, and the job server.
 //
 //   const srv = await openSession();          // instead of startJobServer(3778) + await srv.ready
+//   await waitForPlugin(srv);                 // before the first job, in a tool that posts at once
 //
 // Every tool that talks to the plugin starts here, so they all behave the same way:
 //   1. a new key (32 random bytes) and a new six-digit pairing code for this run;
@@ -63,4 +64,27 @@ export async function openSession({ port = 3778, distDir = DIST_DIR, log = conso
   log("Код для окна плагина: " + secrets.pairCode.slice(0, 3) + " " + secrets.pairCode.slice(3) +
     "  (нужен, только если плагин был открыт до запуска раннера)");
   return srv;
+}
+
+// Wait until a plugin window holding this session's key asks for work, before the first job is posted.
+//
+//   await waitForPlugin(srv);                 // right after openSession, in a tool that posts jobs
+//
+// Every session has a new key, so a window left open from the tool before — in the documented flow,
+// the run itself — is answered 401 and asks for the code. Posting at once then spends each job's own
+// timeout on a window that cannot take it: two minutes per object in the visual audit, for every
+// object, until somebody types the code. So the tools wait here, saying every 30 s what is needed,
+// and give up after `ms`, throwing. Returns how long it waited.
+export async function waitForPlugin(srv, ms = 10 * 60 * 1000, log = console.log) {
+  const t0 = Date.now();
+  let said = t0 - 25000;          // first hint after 5 s: a window opened after the start is in by then
+  while (srv.lastPoll() === 0) {
+    if (Date.now() - t0 > ms) throw new Error("no plugin window after " + Math.round(ms / 60000) + " minutes");
+    if (Date.now() - said > 30000) {
+      said = Date.now();
+      log("жду окно плагина — введите в нём код из этого окна или откройте плагин заново (Plugins → Development → pix-to-fig runner)");
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return Date.now() - t0;
 }

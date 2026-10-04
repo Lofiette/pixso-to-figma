@@ -14,7 +14,7 @@
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, basename } from "node:path";
-import { openSession } from "./session.mjs";
+import { openSession, waitForPlugin } from "./session.mjs";
 import { focusFigma } from "./focus-figma.mjs";
 import { decodePNG } from "./pngutil.mjs";
 
@@ -80,6 +80,10 @@ function compare(a, b) {
 // Rasterisation only happens in the front window, and every render here depends on it.
 console.log("figma window: " + focusFigma());
 const srv = await openSession();
+// The plugin window left open after the run holds the run's key, not this one, and asks for the code.
+// Posting at once would spend two two-minute timeouts on every object until somebody typed it.
+try { await waitForPlugin(srv); }
+catch (e) { console.error(e.message + " — nothing compared"); srv.close(); process.exit(1); }
 console.log("comparing " + dirs.length + " objects at " + W_TARGET + " px wide" + NL);
 
 const DONE_FILE = join(OUT, "done.jsonl");

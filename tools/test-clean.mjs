@@ -65,8 +65,12 @@ export async function cleanScenario(post, out = console.log) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const { openSession } = await import("./session.mjs");
+  const { openSession, waitForPlugin } = await import("./session.mjs");
   const srv = await openSession();
+  // A window left open from the last tool holds the last key; the scenario's 120 s per job would be
+  // spent on it asking for the code.
+  try { await waitForPlugin(srv); }
+  catch (e) { console.log("FAIL " + e.message + " — the delete rule was not tested"); srv.close(); process.exit(1); }
   let bad = 0;
   try { bad = await cleanScenario((job, payload) => srv.post(job, payload, new Map(), 120000)); }
   catch (e) { bad++; console.log("FAIL " + e.message); }

@@ -17,7 +17,7 @@
 import { writeFileSync } from "node:fs";
 import { dirname, resolve, relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
-import { openSession } from "./session.mjs";
+import { openSession, waitForPlugin } from "./session.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..");
@@ -37,6 +37,8 @@ if (out) {
 }
 
 const srv = await openSession();
+try { await waitForPlugin(srv); }
+catch (e) { console.error(e.message + " — nothing probed"); srv.close(); process.exit(1); }
 console.log("probing " + probes.join(", ") + (label ? " (" + label + ")" : "") + " — the runner plugin must be open in a scratch file");
 const args = { probes, label: label || undefined };
 if (n) args.n = Number(n);

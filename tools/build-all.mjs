@@ -9,7 +9,7 @@
 // whose extraction lost objects is NOT CLEAN however well the rest builds.
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { openSession } from "./session.mjs";
+import { openSession, waitForPlugin } from "./session.mjs";
 import { buildAll, verdict } from "./build-lib.mjs";
 import { readStates, unextracted } from "./extract-lib.mjs";
 
@@ -41,12 +41,10 @@ if (!dirs.length) {
 const srv = await openSession();
 console.log("job server on http://localhost:3778");
 console.log("open the pix-to-fig runner plugin in Figma — waiting for it…");
-const t0 = Date.now();
-while (srv.lastPoll() === 0) {
-  if (Date.now() - t0 > 10 * 60 * 1000) { console.error("no plugin after 10 minutes, giving up"); srv.close(); process.exit(1); }
-  await new Promise((r) => setTimeout(r, 500));
-}
-console.log("plugin connected after " + Math.round((Date.now() - t0) / 1000) + "s");
+let waited = 0;
+try { waited = await waitForPlugin(srv); }
+catch (e) { console.error(e.message + ", giving up"); srv.close(); process.exit(1); }
+console.log("plugin connected after " + Math.round(waited / 1000) + "s");
 
 const results = await buildAll({ srv, dirs, pages, clean: CLEAN });
 srv.close();
