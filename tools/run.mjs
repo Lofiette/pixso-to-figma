@@ -74,11 +74,15 @@ try {
   // ---------- is Pixso there? ----------
   say("Проверяю Pixso…");
   try {
-    execFileSync("node", [join(HERE, "mcp.mjs"), "info"], { cwd: HERE, encoding: "utf8", timeout: 30000 });
+    // mcp.mjs's own deadline is 45 s a request, and `info` makes two. Killed at 30 s, a hung Pixso left
+    // nothing on stderr but "exit code null". At 12 s a request both fit, and mcp.mjs says why itself.
+    execFileSync("node", [join(HERE, "mcp.mjs"), "info"], { cwd: HERE, encoding: "utf8", timeout: 30000,
+      env: Object.assign({}, process.env, { MCP_TIMEOUT_MS: "12000" }) });
   } catch (e) {
     say("Pixso не отвечает на 127.0.0.1:3667.");
     // mcp.mjs prints the whole failure to stderr; its first line is the cause.
-    say("  " + headline(e.stderr, "", e.status).slice(0, 160));
+    if (e.code === "ETIMEDOUT") say("  Pixso не ответил за 30 с (соединение открыто, ответа нет)");
+    else say("  " + headline(e.stderr, "", e.status).slice(0, 160));
     say("Откройте Pixso, включите в нём MCP и откройте нужный файл.");
     srv.phase("stopped");
     throw new Error("pixso not reachable");
