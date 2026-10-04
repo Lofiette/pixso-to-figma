@@ -135,6 +135,7 @@ try {
   else ok("the runner receives the scope the button sent");
 } catch (e) { fail("progress endpoint: " + e.message); }
 srv.close();
+try { execFileSync(process.execPath, [join(HERE, "test-pix.mjs")], { stdio: "inherit" }); } catch (e) { fail("the .pix reader on the synthetic fixture (tools/test-pix.mjs)"); }
 
 // ---------- 5. the IR schema and the repository's data hygiene, each a script of its own ----------
 for (const t of ["test-ir.mjs", "test-hygiene.mjs"]) { try { process.stdout.write(execFileSync(process.execPath, [join(HERE, t)], { encoding: "utf8" })); } catch (e) { process.stdout.write(String(e.stdout || "")); fail(t + " failed"); } }
