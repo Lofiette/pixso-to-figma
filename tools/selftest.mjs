@@ -142,6 +142,9 @@ try {
 srv.close();
 rmSync(distDir, { recursive: true, force: true });
 
+// ---------- 5. the plugin's fixed commands and the runner's door: tools/test-plugin.mjs ----------
+try { console.log(""); execFileSync("node", [join(HERE, "test-plugin.mjs")], { stdio: "inherit" }); } catch (e) { fail("tools/test-plugin.mjs failed (exit " + e.status + ")"); }
+
 console.log("");
 console.log(failed ? failed + " check" + (failed === 1 ? "" : "s") + " FAILED" : "all checks pass");
 process.exit(failed ? 1 : 0);
