@@ -6,7 +6,7 @@
 // openable, and it reports what is inside so the rest of the work can be planned against facts
 // rather than hopes.
 //
-// The format, measured on "Components OneKIB.pix" (13 MB):
+// The format, measured on a 13 MB component library:
 //
 //   .pix is a zip:  the document (a nested .pix), every image as a PNG named by its own hash, and
 //                   pixso.binary — the Kiwi schema for the document.
@@ -17,10 +17,14 @@
 // types and ids are all stated in pixso.binary. On that file the whole document decoded in two
 // seconds and consumed every one of its 49 097 709 bytes — a decoder that had misread the schema
 // would have lost sync within kilobytes.
+//
+// The reading itself lives in tools/pix/read.mjs, so the migration reads a .pix with the same code
+// this prints from. A damaged file stops here with a PIX_CORRUPT line and nothing else: it is
+// checked whole before anything is reported about it.
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
-import * as zlib from "node:zlib";
-import { Reader, parseSchema, decodePath, pathToSVG } from "./kiwi.mjs";
+import { decodePath, pathToSVG } from "./kiwi.mjs";
+import { readPix } from "./pix/read.mjs";
 
 const argv = process.argv.slice(2);
 function flag(n) { const i = argv.indexOf(n); if (i < 0) return null; return argv.splice(i, 2)[1]; }
@@ -28,159 +32,48 @@ const OUT = flag("--out");
 const FILE = argv[0];
 if (!FILE) { console.error("usage: node pix-open.mjs <file.pix> [--out <dir>]"); process.exit(1); }
 
-// ---------- zip, by hand ----------
-// No dependency, and none is needed: a zip's central directory is a fixed layout and the entries
-// here are stored or deflated, both of which node's zlib already does.
-function unzip(buf) {
-  const EOCD = 0x06054b50;
-  let end = buf.length - 22;
-  while (end >= 0 && buf.readUInt32LE(end) !== EOCD) end--;
-  if (end < 0) throw new Error("not a zip file");
-  const count = buf.readUInt16LE(end + 10);
-  let p = buf.readUInt32LE(end + 16);
-  const entries = [];
-  for (let i = 0; i < count; i++) {
-    if (buf.readUInt32LE(p) !== 0x02014b50) throw new Error("central directory entry " + i + " is malformed");
-    const method = buf.readUInt16LE(p + 10);
-    const compSize = buf.readUInt32LE(p + 20);
-    const size = buf.readUInt32LE(p + 24);
-    const nameLen = buf.readUInt16LE(p + 28);
-    const extraLen = buf.readUInt16LE(p + 30);
-    const commentLen = buf.readUInt16LE(p + 32);
-    const localOff = buf.readUInt32LE(p + 42);
-    const name = buf.toString("utf8", p + 46, p + 46 + nameLen);
-    // The local header repeats the name and extra field, with lengths of its own.
-    const lnLen = buf.readUInt16LE(localOff + 26), leLen = buf.readUInt16LE(localOff + 28);
-    const dataAt = localOff + 30 + lnLen + leLen;
-    const raw = buf.subarray(dataAt, dataAt + compSize);
-    entries.push({ name, size, method, data: () => (method === 0 ? raw : zlib.inflateRawSync(raw)) });
-    p += 46 + nameLen + extraLen + commentLen;
-  }
-  return entries;
+// ---------- read it ----------
+// Only the fields printed here are kept; every other field is still read and checked, then dropped.
+const KEEP = ["guid", "parentIndex", "type", "name", "size", "visible", "symbolData",
+  "fillGeometry", "strokeGeometry", "derivedSymbolData"];
+let pix;
+try { pix = readPix(readFileSync(FILE), { keep: { PixsoNode: KEEP } }); }
+catch (e) {
+  if (!/^PIX_(CORRUPT|UNSUPPORTED):/.test(e.message)) throw e;
+  console.error(e.message);
+  process.exit(1);
 }
-
-// ---------- the document ----------
-function decompressDocument(buf) {
-  const head = buf.subarray(0, 32).toString("latin1");
-  if (!head.startsWith("pixso-kw")) throw new Error("not a pixso document: " + JSON.stringify(head.slice(0, 16)));
-  const magic = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
-  const at = buf.indexOf(magic);
-  if (at < 0) throw new Error("no zstd frame in the document");
-  if (typeof zlib.zstdDecompressSync !== "function") {
-    throw new Error("this Node has no zstd (needs Node 22.15+ / 23+); node " + process.version);
-  }
-  return zlib.zstdDecompressSync(buf.subarray(at));
-}
-
-const zip = unzip(readFileSync(FILE));
-const schemaEntry = zip.find((e) => e.name === "pixso.binary");
-const docEntry = zip.find((e) => e.name.toLowerCase().endsWith(".pix"));
+const zip = pix.entries;
 const images = zip.filter((e) => /^[0-9a-f]{40}\.png$/i.test(e.name));
-if (!schemaEntry) throw new Error("no pixso.binary in the archive — cannot read it without its schema");
-if (!docEntry) throw new Error("no document inside the archive");
 
 console.log(basename(FILE));
-console.log("  entries " + zip.length + ", images " + images.length + ", document " + docEntry.size + " bytes");
+console.log("  entries " + zip.length + ", images " + images.length + ", document " + pix.document.size + " bytes");
 
-const defs = parseSchema(schemaEntry.data());
-const byName = new Map(defs.map((d, i) => [d.name, i]));
+const defs = pix.schema.defs;
 console.log("  schema: " + defs.length + " definitions");
 
-const doc = decompressDocument(docEntry.data());
+const doc = pix.document.bytes;
 console.log("  document decompresses to " + doc.length + " bytes");
 
-// ---------- walk it ----------
-const KEEP = new Set(["guid", "parentIndex", "type", "name", "size", "visible", "symbolData",
-  "fillGeometry", "strokeGeometry", "derivedSymbolData"]);
-function readValue(r, type, isArray, keep) {
-  if (isArray) {
-    const n = r.varuint();
-    const out = keep ? [] : null;
-    for (let i = 0; i < n; i++) { const v = readValue(r, type, false, keep); if (keep) out.push(v); }
-    return out;
-  }
-  if (type < 0) {
-    switch (type) {
-      case -1: return r.byte() !== 0;
-      case -2: return r.byte();
-      case -3: return r.varint();
-      case -4: return r.varuint();
-      case -5: return r.float();
-      case -6: return r.string();
-      case -7: return r.varint64();
-      case -8: return r.varuint64();
-    }
-    throw new Error("unknown builtin type " + type);
-  }
-  const d = defs[type];
-  if (d.kind === 0) return r.varuint();
-  if (d.kind === 1) {
-    const o = keep ? {} : null;
-    for (const f of d.fields) { const v = readValue(r, f.type, f.isArray, keep); if (keep) o[f.name] = v; }
-    return o;
-  }
-  return readMessage(r, d, keep);
-}
-function readMessage(r, d, keep) {
-  const o = keep ? {} : null;
-  const isNode = d.name === "PixsoNode";
-  for (;;) {
-    const id = r.varuint();
-    if (id === 0) break;
-    const f = d.fields.find((x) => x.value === id);
-    if (!f) throw new Error("field " + id + " is not in " + d.name);
-    const want = keep && (!isNode || KEEP.has(f.name));
-    const v = readValue(r, f.type, f.isArray, want);
-    if (want) o[f.name] = v;
-  }
-  return o;
-}
-
-const r = new Reader(doc);
-const root = defs[byName.get("PixsoMsg")];
-const nodes = [];
-const blobData = [];
-let blobs = 0;
-const t0 = Date.now();
-for (;;) {
-  const id = r.varuint();
-  if (id === 0) break;
-  const f = root.fields.find((x) => x.value === id);
-  if (!f) throw new Error("root field " + id + " is not in PixsoMsg");
-  if (f.name === "pixsoNodes") {
-    const n = r.varuint();
-    for (let i = 0; i < n; i++) {
-      const o = readMessage(r, defs[f.type], true);
-      nodes.push({
-        guid: o.guid ? o.guid.sessionID + ":" + o.guid.localID : null,
-        parent: o.parentIndex && o.parentIndex.guid ? o.parentIndex.guid.sessionID + ":" + o.parentIndex.guid.localID : null,
-        type: o.type, name: o.name, visible: o.visible,
-        w: o.size ? o.size.x : null, h: o.size ? o.size.y : null,
-        symbol: o.symbolData && o.symbolData.symbolID ? o.symbolData.symbolID.sessionID + ":" + o.symbolData.symbolID.localID : null,
-        pos: o.parentIndex ? o.parentIndex.position : "",
-        derived: (o.derivedSymbolData || []).length,
-        fill: (o.fillGeometry || []).map((p) => p.blobIndex),
-        stroke: (o.strokeGeometry || []).map((p) => p.blobIndex),
-      });
-    }
-  } else if (f.name === "blobs") {
-    const n = r.varuint();
-    for (let i = 0; i < n; i++) {
-      // Blob is a message with one field, bytes: byte[]. Read it directly so the bytes survive.
-      let bytes = null;
-      for (;;) { const fid = r.varuint(); if (fid === 0) break; const cnt = r.varuint(); bytes = r.bytes(cnt); }
-      blobData.push(bytes);
-      blobs++;
-    }
-  } else readValue(r, f.type, f.isArray, false);
-}
-// Every byte consumed is the check that the schema was read correctly.
-const consumed = r.i === doc.length;
+const nodes = pix.nodes.map((o) => ({
+  guid: o.guid ? o.guid.sessionID + ":" + o.guid.localID : null,
+  parent: o.parentIndex && o.parentIndex.guid ? o.parentIndex.guid.sessionID + ":" + o.parentIndex.guid.localID : null,
+  type: o.type, name: o.name, visible: o.visible,
+  w: o.size ? o.size.x : null, h: o.size ? o.size.y : null,
+  symbol: o.symbolData && o.symbolData.symbolID ? o.symbolData.symbolID.sessionID + ":" + o.symbolData.symbolID.localID : null,
+  pos: o.parentIndex ? o.parentIndex.position : "",
+  derived: (o.derivedSymbolData || []).length,
+  fill: (o.fillGeometry || []).map((p) => p.blobIndex),
+  stroke: (o.strokeGeometry || []).map((p) => p.blobIndex),
+}));
+const blobData = pix.blobs;
+const blobs = blobData.length;
+// Every byte consumed is the check that the schema was read correctly — readPix refuses the file
+// otherwise, so reaching this line means it was.
 console.log("  decoded " + nodes.length + " nodes and " + blobs + " blobs in " +
-  ((Date.now() - t0) / 1000).toFixed(1) + "s — " + (consumed ? "every byte consumed" : "STOPPED at " + r.i + " of " + doc.length));
+  (pix.stats.decodeMs / 1000).toFixed(1) + "s — every byte consumed");
 
-const NodeType = defs[byName.get("NodeType")];
-const tname = new Map(NodeType.fields.map((f) => [f.value, f.name]));
+const tname = pix.schema.enums.get("NodeType") || new Map();
 const counts = {};
 for (const n of nodes) { const t = tname.get(n.type) || String(n.type); counts[t] = (counts[t] || 0) + 1; }
 console.log("");
