@@ -35,3 +35,24 @@ per file (duplicates the DS, breaks library updates); matching by key (Pixso key
 in Figma — tested, all four FAIL).
 **Revisit if:** a Pixso component turns out to have no counterpart in the Figma library, in which
 case that specific component gets rebuilt from the IR and flagged in the fidelity ledger.
+
+## 2026-10-04 — Rewrite: two sources, one IR, native components, kit mode
+
+**Decision:** rebuild the migrator around one documented IR fed by either a saved `.pix` (read directly, without
+Pixso) or live Pixso through a redesigned MCP reader. Build native components, variant sets, properties, instances
+with overrides and styles. Add a UI-kit mode that writes a kit map, and a design mode that links library components
+to already migrated, published Figma libraries. The plan of record is `docs/REWRITE.md`.
+**Because:** reading through MCP is 90–95 % of a run and silently lost half of a library; the `.pix` decodes in
+seconds and carries stable library identity (`publishFile` + `publishID`, `overrideKey`) and everything needed to
+build, except many image bytes (5 of 5 and 41 of 66 missing in the test files) and a kit's own component keys and,
+when it has neither own styles nor copies of its own components, its file key; those come from MCP, a render, the
+user, or a counted placeholder. The owner asked for both sources, native components and kit-first migration, with no
+LLM in the transfer.
+**Rejected:** copying code from Pixso2Figma "Rainbow" (PolyForm Strict, and this repository is public: ideas only,
+described in our words); keeping components as frames; matching library components or styles by name at run time
+(39 of 99 style names collide across keys in one file); the one name-based step, the Сова pairing, runs offline, is
+deterministic, and is approved by a person before any run uses it.
+**Supersedes:** the 2026-09-03 decisions "No Figma plugin" (a development plugin has been the write path since the
+first release) and "Resolve components via mainComponent" (kept for the MCP source only); and the owner's earlier
+rule in `docs/METHOD.md` §3 that library links do not travel and are relinked by hand (replaced by kit maps;
+METHOD.md §3 is rewritten in M3).
