@@ -1,6 +1,6 @@
 # Pixso -> Figma migration: verified findings
 
-Source file: `[Дизайн-сток] Каталог концептов на Сове` (`GH37oTm3Jid4I3CI1baDDw`), Pixso plugin API 2.0.0.
+Source file: one real Pixso design file, unnamed here because this repository is public; Pixso plugin API 2.0.0.
 All numbers below were measured, not estimated. All Pixso access was read-only.
 
 ## The file
