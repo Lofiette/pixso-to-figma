@@ -299,8 +299,7 @@ described in our own words and marked "(seen in Rainbow)".
 - Copies from non-Сова libraries are never paired with Сова: they follow ordinary design mode and appear in the
   preflight table.
 - **Inputs:**
-  - `.pix` of the Pixso Сова files: the UI kit is in hand; the second Сова library and the icons library are still
-    needed (decision 10);
+  - `.pix` of the three Pixso Сова files (UI kit, second library, icons), all in hand (decision 10);
   - Pixso component keys: via MCP, or from `componentKey` in any `.pix` that uses the component (they are equal, §3);
   - Figma REST components, sets and styles;
   - a read-only plugin export of each Figma kit, including hidden parts and variables.
@@ -438,13 +437,13 @@ adds (counts only, §8).
 
 | # | milestone | gated by | accepted when |
 |---|---|---|---|
-| M0 | **Foundation**: IR schema. Today's builder, verifier, guarded clean and render bundled in the plugin as fixed commands (BUILD, VERIFY, CLEAN, RENDER, PROBE) that consume today's payload; `visual-all.mjs`, `visual.mjs`, `build-lib.mjs` (clean) and `test-clean.mjs` moved onto them. Token transport; recorded object states and circuit breaker in the current MCP path; synthetic `.pix` fixture; `.gitignore` guards. Before the cut-over, today's tool runs once on the test design file and on the test-kit objects that build today; its build reports and render audit are kept outside the repository as the baseline. Starts once decision 6 is made | P1, P2, P3, P9 | selftest proves no code over the network; a killed Pixso mid-run gives FAIL with the error, not PASS; the same payloads rebuilt through the bundled builder give the same node counts and verifier numbers as the baseline; `test-clean.mjs` passes through CLEAN; the render baseline exists; selftest passes on the synthetic fixture with no real file present; the `.gitignore` guards are in place |
+| M0 | **Foundation**: IR schema. Today's builder, verifier, guarded clean and render bundled in the plugin as fixed commands (BUILD, VERIFY, CLEAN, RENDER, PROBE) that consume today's payload; `visual-all.mjs`, `visual.mjs`, `build-lib.mjs` (clean) and `test-clean.mjs` moved onto them. Token transport; recorded object states and circuit breaker in the current MCP path; synthetic `.pix` fixture; `.gitignore` guards. Before the cut-over, today's tool runs once on the test design file and on the test-kit objects that build today; its build reports and render audit are kept outside the repository as the baseline. Decision 6 is made | P1, P2, P3, P9 | selftest proves no code over the network; a killed Pixso mid-run gives FAIL with the error, not PASS; the same payloads rebuilt through the bundled builder give the same node counts and verifier numbers as the baseline; `test-clean.mjs` passes through CLEAN; the render baseline exists; selftest passes on the synthetic fixture with no real file present; the `.gitignore` guards are in place |
 | M1 | **`.pix` → IR → Figma for ordinary nodes**: the bounds-checked reader, native vectors with the geometry fallback, per-side strokes, text ranges, auto layout, the image fallback chain (through the current MCP path kept in M0: bytes by hash with a SHA-1 check, then a render). Instances are built as counted placeholders (INSTANCE_DEFERRED) with the instance's box. Masters that contain no instance (386 in the test design file, 2 500 in the test kit, own and library copies) are built as plain components without properties on a service page, so the vector and text work is exercised where it lives | P4, P5, P6, P8, P18, P19, run on the first build before the creation order is frozen | node count equals the IR for every non-instance node; geometry within 1 px; side stroke weights equal the IR on every built node, including the 370 lost borders outside instances; for every vector, VERIFY's fill path count and per-path bounds equal the `.pix` `fillGeometry` within 1 px, or the vector carries a reason code; every text whose Figma line count differs from Pixso's stored `baselines` is counted and named; every placeholder is counted; without Pixso the verdict is NOT VISUALLY AUDITED; build time is reported per phase and per 1 000 stored nodes and becomes the baseline (today 3.8 s) |
 | M2a | **IR for components, offline** (needs no Figma; can run in parallel with M1): family validation, property roots, swap-aware guidPath resolver, stale and echo classification | — | derived entries resolve 35 808/35 808 and 160 980/160 982; a non-root override resolves exactly when its path is in `derivedSymbolData` (6 353/726 and 42 456/950); families parse 64/67 and 308/312, and the rest are REJECTED with a reason; the 130 and 2 034 stale assignments are dropped and counted; no property is declared with a type other than its root definition's; two runs give byte-identical IR |
 | M2b | **Components in Figma**: definitions, variant sets, properties, instances, overrides, local styles | P9b, P10, P13, P14, P16 | every `derivedSymbolData` entry is within 1 px or in a named class (§7), zero unclassified; every unapplied override and every dropped property assignment is counted with a reason; all 3 345 lost borders present; with the same file open in Pixso, the render audit against the M0 baseline is no worse than today; override time per 1 000 overrides and stamping time are reported; whole-file build time on both test files is no worse than the M1 baseline plus the override time |
-| M3 | **Kit mode and design mode** (from `.pix`): kit map, stamps, VERIFY, preflight, linking, fallbacks, dependency order, in-place re-run, the designer's run flow. Starts once decision 7 is made | P7, P11, P11b, P12, P15, P17 | of the test design file's 335 direct instances of test-kit masters, every one is linked (`remote === true`, key equal to the map's) or carries a reason code, and instances of the 12 masters deleted in the kit follow decision 3; for every linked instance, the overrides applied equal the overrides intended, or the lost ones are listed under decision 1; the per-library table lists all 14 libraries the design file uses; a second kit run changes no Figma component key; the run flow (§5) is walked through on the test pair without the console |
+| M3 | **Kit mode and design mode** (from `.pix`): kit map, stamps, VERIFY, preflight, linking, fallbacks, dependency order, in-place re-run, the designer's run flow. Decision 7 is made | P7, P11, P11b, P12, P15, P17 | of the test design file's 335 direct instances of test-kit masters, every one is linked (`remote === true`, key equal to the map's) or carries a reason code, and instances of the 12 masters deleted in the kit follow decision 3; for every linked instance, the overrides applied equal the overrides intended, or the lost ones are listed under decision 1; the per-library table lists all 14 libraries the design file uses; a second kit run changes no Figma component key; the run flow (§5) is walked through on the test pair without the console |
 | M4 | **MCP source v2**: session, walker, tiered instance reads, selection and page scope, unsaved edits | Q1–Q10 | on a file saved as `.pix` and also open in Pixso, the two IRs are equal on every field both declare, and every other per-guidPath difference carries a class (stale in `.pix`, undisclosed text, a field the capabilities header does not declare, changed during read), zero unclassified; the test design file is read at ≤ 18 s per 1 000 nodes, against 55.2 s today; design mode from the MCP source links through `componentKey`, and whatever Q4 rules out is reported as unsupported; one run with a real selection |
-| M5 | **Сова pairing**: data collection, matcher, review report, approved map; builder support for library variables (`importVariableByKeyAsync`, `setBoundVariableForPaint` on nodes and in instance overrides, an explicit Theme mode on the nearest frame whose subtree uses one theme, mixed-theme subtrees counted). Starts once the owner has supplied the Pixso Сова files (decision 10) | P11, P20 | the Сова-based product file arrives with instances of the Figma Сова libraries and colours bound to `[Sova] Style` variables in the right mode; every Pixso Сова key is matched or listed as unmatched; every Сова copy whose `sharedSymbolVersion` differs from its master, and every copy that does not resolve (896 today), is reported with its code |
+| M5 | **Сова pairing**: data collection, matcher, review report, approved map; builder support for library variables (`importVariableByKeyAsync`, `setBoundVariableForPaint` on nodes and in instance overrides, an explicit Theme mode on the nearest frame whose subtree uses one theme, mixed-theme subtrees counted). Inputs supplied (decision 10); starts once decision 5 is made | P11, P20 | the Сова-based product file arrives with instances of the Figma Сова libraries and colours bound to `[Sova] Style` variables in the right mode; every Pixso Сова key is matched or listed as unmatched; every Сова copy whose `sharedSymbolVersion` differs from its master, and every copy that does not resolve (896 today), is reported with its code |
 | M6 | **Designer packaging**: launcher, Russian README, the «Ресурсы» page on the docs site | — | the walkthrough is done by someone who has never run it, on Windows and on macOS, with only the stated Node version installed (launcher, token route, per-user data folder) |
 
 Carried from `.product-os/STATE.md` "Open, in order": item 1 (stale ids) is closed by design (stamps, §4); 2 (the
@@ -452,29 +451,33 @@ one-pixel heading wrap) is decision 9, measured in M1; 3 (migrating from a `.pix
 in the M4 acceptance; 5 (a per-card offset) is re-checked in M1 on the file where it was seen; 6 (macOS) is in the M6
 acceptance; 7 (missing fonts) is the font plan in §4; 8 (components as frames) is M2b.
 
-## 11. Decisions for the owner
+## 11. Decisions
 
-1. **When an override cannot be applied to a library instance.** Either fidelity first (a local copy; proposed
-   default) or link first (keep the library instance and list the lost overrides).
-2. **On version drift.** Link when every touched layer still maps (proposed), otherwise use a local copy. Drift is
-   common: on the Сова pair, 1 679 of 3 828 resolved copies no longer carry their master's name.
-3. **Deleted kit masters** that consumers still use: publish them from "Pixso: deleted components" (proposed: yes).
-4. **Where kit maps live:** per user, or published on the internal docs site (proposed: both, site as the shared
-   copy).
-5. **Сова map review:** who approves, and whether the alias table lives with the «Проверка макета» plugin (private).
-6. **Probes P1–P20 need a scratch Figma file.** Either the owner runs the probe command, or allows the assistant to
-   create and use a scratch file. M0 starts once this is decided.
-7. **Where test kits are published.** Kit mode needs a Figma team or project where the owner can publish a migrated
-   test kit and keep it published while design files are checked, without exposing it to the whole organisation.
-   Without it, kit mode can be built but not accepted.
-8. **Kit updates after migration:** whether the Figma kit is frozen once published or re-synced from Pixso, and who
-   wins when both sides changed (proposed: Pixso wins only on nodes nobody edited in Figma; Figma edits are
-   reported).
-9. **The heading that wraps one pixel early** (STATE.md open item 2): either keep `textAutoResize = NONE` at the
-   source box (today's choice; the last word wraps), or widen only the texts where Pixso's stored `baselines` show
-   one line and Figma shows two (proposed: widen, and count each one as TEXT_WIDENED_TO_SOURCE_LINES).
-10. **Сова inputs from the owner.** The Сова UI kit file and one Сова-based product file were supplied on 2026-10-04.
-    Still needed: a saved `.pix` of the second Сова library and of the icons library. M5 cannot start without them.
+Answered by the owner on 2026-10-04: the proposed defaults are accepted, and **every policy below is a setting the
+designer can change** — in the plugin window before the build, and as a console flag. The run report and the IR header
+record the settings used, so two runs are comparable.
+
+| # | question | default (owner) | setting |
+|---|---|---|---|
+| 1 | an override cannot be applied to a library instance | fidelity first: a local copy, the lost link reported | `--overrides fidelity\|link` |
+| 2 | version drift between a copy and its kit master | link when every touched layer still maps, else a local copy (on the Сова pair 1 679 of 3 828 resolved copies no longer carry their master's name) | `--drift link\|local` |
+| 3 | kit masters deleted in Pixso but still used | built and published from "Pixso: deleted components" | `--deleted publish\|skip` |
+| 4 | where kit maps live | the per-user folder, with the internal docs site as the shared copy | `--kitmaps <dir>` |
+| 8 | a kit re-run when both sides changed | Pixso wins only on nodes nobody edited in Figma; Figma edits are reported and kept | `--resync pixso-unless-edited\|report-only` |
+| 9 | a heading that wraps one pixel early (STATE.md open item 2) | widen only texts whose stored `baselines` show one line, counted as TEXT_WIDENED_TO_SOURCE_LINES | `--text-fit widen\|source-box` |
+
+Also settled:
+- **6. Probes.** The assistant may create and use scratch files in a dedicated experiments project in the owner's
+  Figma team. Probes that need the development plugin itself (P1–P3) run there with the owner's plugin window open.
+- **7. Test kits** are published in the same experiments project, not to the whole organisation.
+- **10. Сова inputs.** All three Pixso Сова files (UI kit, second library, icons) and one Сова-based product file
+  were supplied on 2026-10-04. The icons library already exists in Figma as well.
+
+Open:
+- **5. Сова map review.** The matcher pairs Pixso and Figma Сова components automatically; the pairs it cannot decide
+  (renamed components, different variant names) need a person. Who confirms them, and where the confirmed table is kept
+  (proposed: a review page the assistant prepares, confirmed by the owner or a designer of the Сова team, the table
+  stored with the private «Проверка макета» repository).
 
 ## 12. Kept and dropped
 
