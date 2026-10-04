@@ -1,13 +1,18 @@
-// Emits the code to paste into Figma `use_figma`. The payload PNG carries the tree, the SVG
-// assets, the builder (PAY.B) and the verifier (PAY.V); this is only the ~1.2 KB reader that
-// decodes the carrier and runs one of them.
+// Emits the code to paste into Figma `use_figma`. The payload PNG carries the tree and the SVG
+// assets; this is the ~1.2 KB reader that decodes the carrier, followed by the builder or the
+// verifier from tools/builder4.js pasted in as an ordinary async function.
 //
 //   node bootstrap.mjs build  <imageHash>
 //   node bootstrap.mjs verify <imageHash> <rootNodeId>
 //
+// The builder and the verifier used to ride inside the carrier as PAY.B and PAY.V and be compiled
+// from that text in Figma. The payload is data only now (tools/pack4.mjs), so the code comes from
+// this checkout instead — which also means the output is about 40 KB larger than the reader alone.
+//
 // The carrier is written by pack4.mjs with stored deflate blocks, so unpacking is a block walk
 // rather than a full inflate. TextDecoder does not exist in the Figma sandbox: UTF-8 is decoded
 // by hand.
+import { BUILDER_SRC, VERIFIER_SRC } from "./builder4.js";
 
 const [, , MODE, HASH, ROOT] = process.argv;
 if (!HASH || (MODE !== "build" && MODE !== "verify") || (MODE === "verify" && !ROOT)) {
@@ -45,14 +50,16 @@ while (i < end) {
   else { let cp = ((c&7)<<18)|((body[i+1]&63)<<12)|((body[i+2]&63)<<6)|(body[i+3]&63); cp -= 0x10000;
          s += String.fromCharCode(0xD800+(cp>>10), 0xDC00+(cp&1023)); i += 4; }
 }
-const PAY = JSON.parse(s);
-const AF = Object.getPrototypeOf(async function () {}).constructor;
-const NL2 = String.fromCharCode(10);`;
+const PAY = JSON.parse(s);`;
 
-const BR = String.fromCharCode(10) + String.fromCharCode(10);
+const NL = String.fromCharCode(10);
+const BR = NL + NL;
 
+// Inside its own function, as in the plugin, so its declarations cannot collide with the reader's.
 console.log(MODE === "build"
   ? READER + BR +
-    'return await new AF("figma","PAY","let RESULT=null;" + NL2 + PAY.B + NL2 + "return RESULT;")(figma, PAY);'
+    "return await (async function (figma, PAY) {" + NL + "let RESULT = null;" + NL + BUILDER_SRC + NL +
+    "return RESULT;" + NL + "})(figma, PAY);"
   : READER + BR +
-    'return await new AF("figma","PAY","ROOT_NODE_ID","let RESULT=null;" + NL2 + PAY.V + NL2 + "return RESULT;")(figma, PAY, ' + JSON.stringify(ROOT) + ');');
+    "return await (async function (figma, PAY, ROOT_NODE_ID) {" + NL + "let RESULT = null;" + NL + VERIFIER_SRC + NL +
+    "return RESULT;" + NL + "})(figma, PAY, " + JSON.stringify(ROOT) + ");");

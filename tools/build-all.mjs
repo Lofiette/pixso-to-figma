@@ -9,7 +9,7 @@
 // whose extraction lost objects is NOT CLEAN however well the rest builds.
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { startJobServer } from "./jobserver.mjs";
+import { openSession } from "./session.mjs";
 import { buildAll, verdict } from "./build-lib.mjs";
 import { readStates, unextracted } from "./extract-lib.mjs";
 
@@ -38,8 +38,7 @@ if (!dirs.length) {
   process.exit(2);
 }
 
-const srv = startJobServer(3778);
-await srv.ready;
+const srv = await openSession();
 console.log("job server on http://localhost:3778");
 console.log("open the pix-to-fig runner plugin in Figma — waiting for it…");
 const t0 = Date.now();

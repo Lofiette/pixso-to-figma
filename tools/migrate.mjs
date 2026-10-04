@@ -14,7 +14,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from "node:fs";
 import { dirname, join, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
-import { startJobServer } from "./jobserver.mjs";
+import { openSession } from "./session.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const [, , ROOT_ID, WORK = "../out/run"] = process.argv;
@@ -84,8 +84,7 @@ if (process.env.PX_EXTRACT_ONLY) {
 
 // ---------- Figma side ----------
 // Now that no more synchronous child processes will run, the server can answer.
-srv = startJobServer(3778);
-await srv.ready;
+srv = await openSession();
 console.log("\njob server on http://localhost:3778 — open the pix-to-fig runner plugin in Figma now");
 
 const manifest = JSON.parse(readFileSync(join(W, "img", "manifest.json"), "utf8"));

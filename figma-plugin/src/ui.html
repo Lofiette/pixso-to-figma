@@ -1,5 +1,7 @@
 <!-- Network bridge. Figma's main thread has no fetch, so everything that touches the network
-     happens here and crosses to code.js by postMessage. This file holds no migration logic. -->
+     happens here and crosses to code.js by postMessage. This file holds no migration logic.
+     This is a SOURCE file: Figma runs figma-plugin/dist/ui.html, which tools/build-plugin.mjs
+     writes from it every time the runner starts, with that run's key and the plugin build filled in. -->
 <style>
   body { font: 12px -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 12px; color: #333; }
   #s { font-weight: 600; margin-bottom: 6px; }
@@ -18,8 +20,20 @@
   #scope { display: block; width: 100%; margin-top: 3px; padding: 5px; font: 12px inherit;
            color: #333; background: #fff; border: 1px solid #ccc; border-radius: 5px; }
   #scope[disabled] { color: #999; background: #f5f5f5; }
+  #pairrow { margin: 8px 0; color: #666; }
+  #code { width: 7em; margin: 3px 6px 0 0; padding: 5px; font: 600 14px ui-monospace, Menlo, Consolas, monospace;
+          letter-spacing: 2px; border: 1px solid #ccc; border-radius: 5px; }
+  #pairgo { padding: 6px 10px; font: 600 12px inherit; color: #fff; background: #0d99ff; border: 0;
+            border-radius: 6px; cursor: pointer; }
+  #pairgo[disabled] { background: #9dcff0; cursor: default; }
+  #pairmsg { margin-top: 4px; color: #b00; }
 </style>
 <div id="s" class="wait">Проверяю связь с раннером…</div>
+<div id="pairrow" hidden>
+  <label for="code">Код из окна раннера</label><br>
+  <input id="code" inputmode="numeric" maxlength="7" autocomplete="off"><button id="pairgo">Подключить</button>
+  <div id="pairmsg"></div>
+</div>
 <label id="scoperow" hidden>Что переносить
   <select id="scope">
     <option value="file">весь файл</option>
@@ -40,6 +54,22 @@ const CHUNK = 400000;
 const S = document.getElementById("s"), L = document.getElementById("l");
 let busy = false, misses = 0;
 
+// This run's key. The runner writes it into the plugin's files when it starts (tools/run.mjs, through
+// tools/build-plugin.mjs), so a plugin opened after start.cmd carries it, and every request says it.
+// That is the whole proof the runner gets that a request comes from this window: a web page cannot
+// read a file on this disk, while the Origin "null" this frame sends is something any page can
+// produce from a sandboxed iframe. A plugin opened before the runner started holds the previous
+// run's key, or none at all; the runner says 401, and this window asks for the six-digit code the
+// runner printed, which it trades once for the key.
+let TOKEN = "__PXF_TOKEN__";
+if (!/^[0-9a-f]{64}$/.test(TOKEN)) TOKEN = "";
+// Which plugin build this window is, written in by the same generator that wrote code.js beside it.
+// Figma loads both files when the plugin opens and keeps them until it is closed, so this is also the
+// build of the builder this window will run. Every request says it: a runner started from other
+// sources answers 409, and this window asks to be reopened instead of asking for the code — paired,
+// it would build with whatever builder was on disk when it was opened, and nobody would know.
+const PLUGIN = "__PXF_VERSION__";
+
 function log(m) { L.textContent = (m + "\n" + L.textContent).slice(0, 4000); }
 
 // One line of state, composed in one place from everything known.
@@ -50,11 +80,14 @@ function log(m) { L.textContent = (m + "\n" + L.textContent).slice(0, 4000); }
 // whenever the runner was busy in Pixso or had finished and exited — an emergency where nothing at
 // all was wrong. What the person watching needs is one sentence saying what is happening now, and
 // if something needs doing, what.
-const ST = { link: "unknown", phase: "idle", stage: null, trouble: null, sawDone: false, everJob: false };
+// auth: "ok", "need" (the runner wants the code) or "stale" (the runner wrote another plugin build).
+const ST = { link: "unknown", phase: "idle", stage: null, trouble: null, sawDone: false, everJob: false, auth: "ok" };
 function paint(t, cls) { S.textContent = t; S.className = cls || ""; }
 function render() {
   // Most specific first: this frame's own trouble, then its own work, then the runner's state.
   if (ST.trouble) return paint(ST.trouble, "off");
+  // Nothing this window does can fix it, and no code helps: only a fresh window has the new build.
+  if (ST.auth === "stale") return paint("Раннер обновился после того, как открыли этот плагин. Закройте плагин и откройте его снова.", "wait");
   if (ST.stage) return paint(ST.stage, "on");
   if (ST.link === "unknown") return paint("Проверяю связь с раннером…", "wait");
   if (ST.link === "down") {
@@ -63,6 +96,9 @@ function render() {
     if (ST.sawDone) return paint("Готово. Раннер закончил работу и закрылся — результат в Figma.", "on");
     return paint("Раннер не запущен. Откройте start.cmd (Windows) или start.command (macOS) в папке pix-to-fig.", "wait");
   }
+  // The runner is there and answered, but not to this window's key: it was started after this window
+  // was opened. Nothing is wrong, and one of two things fixes it.
+  if (ST.auth === "need") return paint("Раннер запущен после этого окна. Введите код из окна раннера — или закройте плагин и откройте его снова.", "wait");
   if (ST.phase === "done") return paint("Готово. Смотрите результат в Figma.", "on");
   if (ST.phase === "stopped") return paint("Перенос остановлен — причина в сообщениях ниже.", "off");
   if (ST.phase === "working") {
@@ -101,8 +137,83 @@ function fetchT(url, opts, ms) {
   ]).finally(() => clearTimeout(t));
 }
 
+// ---------- the key, and the code that replaces it ----------
+const PAIRROW = document.getElementById("pairrow"), CODE = document.getElementById("code");
+const PAIRGO = document.getElementById("pairgo"), PAIRMSG = document.getElementById("pairmsg");
+let pairWaiters = [];
+// The build id goes on every request, /pair included; the key on every request but /pair.
+function withBuild(opts) {
+  const o = Object.assign({}, opts || {});
+  o.headers = Object.assign({}, o.headers || {}, { "X-PXF-Plugin": PLUGIN });
+  return o;
+}
+function withKey(opts) {
+  const o = withBuild(opts);
+  if (TOKEN) o.headers.Authorization = "Bearer " + TOKEN;
+  return o;
+}
+// Both loops park here while the key is wrong, rather than asking again every second for an answer
+// that cannot change until somebody types the code. A window of another build parks for good: only
+// closing it helps.
+function whenPaired() { return ST.auth !== "ok" ? new Promise((r) => pairWaiters.push(r)) : Promise.resolve(); }
+function staleBuild() {
+  if (ST.auth === "stale") return;
+  log("the runner wrote another plugin build than this window's " + PLUGIN + " — close the plugin and open it again");
+  GO.hidden = true;
+  SCOPEROW.hidden = true;
+  PAIRROW.hidden = true;
+  state({ link: "up", auth: "stale" });
+}
+function needPairing() {
+  if (ST.auth !== "ok") return;
+  log("the runner does not know this window's key — asking for the code");
+  GO.hidden = true;
+  SCOPEROW.hidden = true;
+  PAIRROW.hidden = false;
+  state({ link: "up", auth: "need" });
+}
+function setToken(t) {
+  TOKEN = t;
+  PAIRROW.hidden = true;
+  PAIRMSG.textContent = "";
+  CODE.value = "";
+  state({ auth: "ok" });
+  const w = pairWaiters; pairWaiters = [];
+  for (const r of w) r();
+}
+PAIRGO.onclick = async () => {
+  const code = String(CODE.value || "").replace(/[^0-9]/g, "");
+  if (code.length !== 6) { PAIRMSG.textContent = "Код — шесть цифр из окна раннера."; return; }
+  PAIRGO.disabled = true;
+  try {
+    // The one request that goes without a key: it is how a key is obtained. The runner takes five
+    // tries per run, so the code cannot be guessed, and accepts the right one once.
+    const r = await fetchT(HOST + "/pair", withBuild({ method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: code }) }), 15000);
+    let b = {};
+    try { b = await r.json(); } catch (e) {}
+    if (r.status === 409) staleBuild();
+    else if (r.ok && typeof b.token === "string" && /^[0-9a-f]{64}$/.test(b.token)) { log("paired with the runner"); setToken(b.token); }
+    else if (r.status === 403) PAIRMSG.textContent = "Код не подошёл." + (typeof b.left === "number" ? " Осталось попыток: " + b.left + "." : "");
+    else PAIRMSG.textContent = "Код больше не принимается. Закройте плагин и откройте его снова.";
+  } catch (e) { PAIRMSG.textContent = "Раннер не отвечает: " + (e && e.message || e); }
+  PAIRGO.disabled = false;
+};
+CODE.onkeydown = (e) => { if (e && e.key === "Enter") PAIRGO.onclick(); };
+
+// Every request to the runner but /pair goes through here, with the key. A 401 is not a lost
+// connection — the runner is there and said so — and it must not be retried as one. Nor is a 409:
+// the runner is there, and was started from other sources than this window was opened with.
+async function api(path, opts, ms) {
+  const r = await fetchT(HOST + path, withKey(opts), ms);
+  if (r.status === 409) { staleBuild(); throw new Error("409: the runner wrote another plugin build than this window runs"); }
+  if (r.status === 401) { needPairing(); throw new Error("401: the runner does not know this window's key"); }
+  if (!r.ok) throw new Error("HTTP " + r.status + " " + path);
+  return r;
+}
+
 async function post(path, body) {
-  return fetchT(HOST + path, { method: "POST", headers: { "Content-Type": "application/json" },
+  return api(path, { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body) }, 20000).then(r => r.json());
 }
 
@@ -158,7 +269,7 @@ async function runJob(job) {
   state({ everJob: true, trouble: null, stage: "Получаю задание от раннера…" });
 
   // payload as text, handed over in slices so a multi-megabyte string never crosses in one message
-  const text = await fetchT(HOST + "/job/" + job.id + "/payload", {}, 120000).then(r => r.text());
+  const text = await api("/job/" + job.id + "/payload", {}, 120000).then(r => r.text());
   handedOver = text.length;
   send({ t: "payload-begin", id: job.id, kind: job.kind, total: text.length,
          rootNodeId: job.rootNodeId || null, cleanupRootId: job.cleanupRootId || null,
@@ -173,7 +284,7 @@ async function runJob(job) {
   let fetched = 0;
   for (let i = 0; i < imgs.length; i++) {
     if (sentImages.has(imgs[i])) continue;
-    const b64 = await fetchT(HOST + "/image/" + imgs[i] + "?b64=1", {}, 120000).then(r => r.text());
+    const b64 = await api("/image/" + imgs[i] + "?b64=1", {}, 120000).then(r => r.text());
     send({ t: "image-begin", hash: imgs[i], total: b64.length });
     for (let o = 0; o < b64.length; o += CHUNK) send({ t: "image-chunk", d: b64.slice(o, o + CHUNK) });
     send({ t: "image-end", hash: imgs[i] });
@@ -186,14 +297,39 @@ async function runJob(job) {
   // how far it got: payload handed over, images handed over, or lost inside the sandbox.
   log("job " + job.id + ": payload " + text.length + " chars, " + fetched + " new images of " + imgs.length);
   startBeat(job.id);
-  status("Собираю объект в Figma — это может занять несколько минут.", "on");
+  status(job.kind === "probe" ? "Замеряю (PROBE) — окно можно не трогать."
+    : "Собираю объект в Figma — это может занять несколько минут.", "on");
   send({ t: "payload-end" });
+}
+
+// ---------- the probe's questions (PROBE in code.js) ----------
+// P1: what the runner sees of this frame. Not through api(): a refusal here is the measurement,
+// not a reason to ask for the code.
+async function probeEcho(k) {
+  const out = { t: "probe-answer", k: k };
+  try { out.origin = String(typeof self !== "undefined" && self ? self.origin : ""); } catch (e) {}
+  try { out.href = String(typeof location !== "undefined" && location ? location.href : "").slice(0, 120); } catch (e) {}
+  try {
+    const r = await fetchT(HOST + "/echo", withKey({}), 15000);
+    out.status = r.status;
+    out.echo = (await r.text()).slice(0, 4000);
+  } catch (e) { out.error = String(e && e.message || e); }
+  send(out);
 }
 
 onmessage = async (e) => {
   const m = e.data.pluginMessage;
   if (!m) return;
   if (m.t === "log") { log(m.m); return; }
+  // P2 and P3 answer at once and carry back a length, never the string they were sent.
+  if (m.t === "probe-ping") { send({ t: "probe-answer", k: m.k }); return; }
+  if (m.t === "probe-big") { send({ t: "probe-answer", k: m.k, len: typeof m.s === "string" ? m.s.length : -1 }); return; }
+  if (m.t === "probe-big-up") {
+    const n = Number(m.size);
+    send({ t: "probe-answer", k: m.k, s: n >= 0 && n <= 16 * 1048576 ? "x".repeat(n) : "" });
+    return;
+  }
+  if (m.t === "probe-echo") { probeEcho(m.k); return; }
   if (m.t === "report-begin") { rbuf = []; return; }
   if (m.t === "report-chunk") { rbuf.push(m.d); return; }
   if (m.t === "report-end") {
@@ -254,7 +390,8 @@ let rev = 0;
 async function control() {
   for (;;) {
     try {
-      const c = await fetchT(HOST + "/control?rev=" + rev, {}, 40000).then(r => r.json());
+      await whenPaired();
+      const c = await api("/control?rev=" + rev, {}, 40000).then(r => r.json());
       rev = c.rev || 0;
       GO.hidden = false;
       SCOPEROW.hidden = false;
@@ -268,6 +405,8 @@ async function control() {
       SCOPE.disabled = c.phase === "working" || c.phase === "done";
       if (c.lines && c.lines.length) P.textContent = c.lines.join(String.fromCharCode(10));
     } catch (e) {
+      // Wrong key or wrong build: the runner is up, and the loop waits at the top, not on a timer.
+      if (ST.auth !== "ok") continue;
       GO.hidden = true;
       SCOPEROW.hidden = true;
       // Whatever the runner last said stays on screen. Clearing it wiped the verdict off the window
@@ -287,13 +426,18 @@ async function poll() {
     while (!busy) {
       // A previous loop, parked on a dead socket, must not carry on once a replacement has started.
       if (gen !== pollGen) return;
+      if (ST.auth !== "ok") {
+        await whenPaired();
+        if (gen !== pollGen) return;
+        lastPollOk = Date.now();
+      }
       let ok = false;
       try {
         // The runner holds this request until it has a job, so the wait IS the request. That
         // matters because Chromium throttles timers in a background window to one wake-up a
         // minute: on a timer this plugin asked for work once a minute while the runner, hearing
         // nothing for 45 seconds, decided it was not there.
-        const j = await fetchT(HOST + "/job?client=plugin", {}, 40000).then(r => r.json());
+        const j = await api("/job?client=plugin", {}, 40000).then(r => r.json());
         misses = 0;
         ok = true;
         lastPollOk = Date.now();
@@ -310,6 +454,9 @@ async function poll() {
           }
         } else state({ stage: null, link: "up" });
       } catch (err) {
+        // A wrong key is not a missing runner: park at the top of the loop until the code is typed
+        // (or for good, if this window is of another build).
+        if (ST.auth !== "ok") continue;
         misses++;
         // A failed poll is the fastest evidence the runner has gone, and it feeds the same single
         // link state the progress loop feeds — it does not get to write its own alarm any more.
@@ -347,9 +494,10 @@ poll();
 // loop sits in a fetch that will never settle, against a process that will never answer, while a live
 // runner on the same port wonders where the plugin went. `polling` is true throughout — the only
 // evidence is that nothing has answered in a long time. Ninety seconds is well past the runner's own
-// 25-second hold, so a healthy wait can never trip it.
+// 25-second hold, so a healthy wait can never trip it. A loop waiting for the pairing code, or for
+// this window to be reopened, is not stuck, and is left alone.
 setInterval(function () {
-  if (busy) return;
+  if (busy || ST.auth !== "ok") return;
   if (!polling) { poll(); return; }
   if (Date.now() - lastPollOk > 90000) {
     log("no answer from the runner in 90s — restarting the job loop");

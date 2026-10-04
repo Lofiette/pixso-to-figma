@@ -14,7 +14,7 @@ import { execFileSync, spawnSync, spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { startJobServer } from "./jobserver.mjs";
+import { openSession } from "./session.mjs";
 import { buildAll, verdict } from "./build-lib.mjs";
 import { EXIT, readStates, unextracted, runnerLine, headline } from "./extract-lib.mjs";
 
@@ -37,8 +37,17 @@ let WORK = join(HERE, "..", "out", NAMED || "_scan");
 let PAGES = join(WORK, "pages.json");
 let DIRS = join(WORK, "obj");
 
-const srv = startJobServer(3778);
-await srv.ready;
+// The plugin is rebuilt on every start, with a key made for this run written into it, before the port
+// is opened (tools/session.mjs). Only a window opened from now on — or one given the code printed
+// below — can talk to this runner, and only if it runs the plugin build just written: a window opened
+// before a change to the sources is told to close and reopen (409) rather than paired, so every job
+// in this run is built by the builder in this checkout.
+let srv;
+try { srv = await openSession(); }
+catch (e) {
+  console.log("Раннер не запустился: " + (e.message || e));
+  process.exit(1);
+}
 
 // Everything said here goes to two places: this console, for whoever started the runner, and the
 // plugin window, for whoever pressed the button.

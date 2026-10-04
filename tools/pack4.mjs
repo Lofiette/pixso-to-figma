@@ -2,7 +2,6 @@
 // usage: node pack4.mjs <ir.json> <rootId> <svg.json> <bounds.json> <abs.json> <out.png>
 import { readFileSync, writeFileSync } from "node:fs";
 import { deflateSync } from "node:zlib";
-import { BUILDER_SRC, VERIFIER_SRC } from "./builder4.js";
 
 const [, , IR_PATH, ROOT_ID, SVG_PATH, BOUNDS_PATH, ABS_PATH, OUT = "out/payload.png", TEXTINK_PATH, TEXTSVG_PATH] = process.argv;
 const ir = JSON.parse(readFileSync(IR_PATH, "utf8"));
@@ -331,15 +330,6 @@ function encode(n, path, parentIdx, parentAbs, parentNode) {
 const rootAbs = ABS[""] || [1, 0, 0, 0, 1, 0];
 encode(target, [], -1, rootAbs, null);
 
-// The builder and verifier are shipped as source and only parsed inside Figma, where a syntax
-// error would surface as a failed build with no useful message. Parse them here instead.
-{
-  const AF = Object.getPrototypeOf(async function () {}).constructor;
-  for (const [nm, src] of [["builder", BUILDER_SRC], ["verifier", VERIFIER_SRC]]) {
-    try { new AF("figma", "PAY", "ROOT_NODE_ID", "let RESULT=null;" + String.fromCharCode(10) + src + String.fromCharCode(10) + "return RESULT;"); }
-    catch (e) { console.error(nm + " does not parse: " + e.message); process.exit(1); }
-  }
-}
 // PX_PLACE_ABS puts the built root at the source's own page position, so a page migrated
 // section by section comes out laid out the way it was.
 const rootAbsXY = process.env.PX_PLACE_ABS && rootAbs ? [r2(rootAbs[2]), r2(rootAbs[5])] : null;
@@ -350,7 +340,12 @@ if (rootAbsXY) console.log("place:       root at source position " + rootAbsXY[0
 // check that followed dutifully measured the wrong node. A stamp cannot drift — it is carried by
 // the node itself — so the check can tell "this is the root I built" from "this is whatever now
 // answers to that number".
-const payloadObj = { D: dict, S: svgList, F: flat, B: BUILDER_SRC, V: VERIFIER_SRC, R: String(ROOT_ID) };
+//
+// Data only. The builder and the verifier used to travel in here too, as B and V, and were compiled
+// inside Figma from that text; they are part of the plugin now (tools/build-plugin.mjs), and the
+// plugin compiles nothing it is sent. A change to builder4.js therefore needs no repack — the next
+// runner start rebuilds the plugin — while a change to this file still does.
+const payloadObj = { D: dict, S: svgList, F: flat, R: String(ROOT_ID) };
 if (rootAbsXY) payloadObj.XY = rootAbsXY;
 const json = Buffer.from(JSON.stringify(payloadObj), "utf8");
 const body = Buffer.alloc(4 + json.length);

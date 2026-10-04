@@ -1,8 +1,72 @@
 // Local job server. The Figma plugin polls it, pulls one job at a time, and posts the report back.
 // Localhost only, and it exists only for the duration of a run.
+//
+// It used to answer anyone: CORS "*", no key, and read routes that handed the payload and the
+// images to whoever asked. Any web page open in a browser on this machine could read a designer's
+// file out of it, or post work into Figma. Now every request has to pass four checks, in this order:
+//
+//   Host     localhost:PORT, 127.0.0.1:PORT or [::1]:PORT, or 421. A page served from a name that
+//            resolves to 127.0.0.1 (DNS rebinding) still sends its own name here.
+//   Origin   exactly "null" — the plugin window's origin — or 403. PX_ALLOW_ORIGIN may name one more,
+//            for diagnostics only; every refusal logs the Origin it saw, which is how probe P1 reads
+//            the window's real origin off the console if it turns out not to be "null".
+//   key      `Authorization: Bearer <this run's key>`, compared in constant time, or 401 — on every
+//            route, read routes included. "null" alone proves nothing: any page can send it from a
+//            sandboxed iframe. The key is the proof. It is 32 random bytes made fresh for each run
+//            and written into the plugin's own files (tools/session.mjs), which no page can read.
+//   ...except two things that cannot carry a key: the CORS preflight, which a browser sends
+//            without one, and /pair, the one-time trade of a six-digit code printed on this console
+//            for the key, for a plugin window opened before the runner started. Five tries per run.
+//
+// And one check that is not about who is asking but about what they would run. A runner started by
+// tools/session.mjs knows the plugin build it has just written (opts.pluginVersion), and the plugin
+// window names its own build in X-PXF-Plugin on every request, /pair included. A window opened before
+// the runner was restarted from changed sources runs the builder it was opened with; given the code,
+// it would pair and build with that, silently. So a different build gets 409 — before the key and
+// before /pair, and without spending a pairing try — and the window asks to be closed and reopened.
+// The build id is a hash of the plugin's public sources: not a secret, and 409 reveals nothing else.
 import { createServer } from "node:http";
+import { randomBytes, randomInt, timingSafeEqual, createHash } from "node:crypto";
 
-export function startJobServer(port = 3778) {
+// The only kinds of job the plugin runs (figma-plugin/src/code.js); anything else is refused here
+// before it is queued, and refused again there.
+export const JOB_KINDS = Object.freeze(["build", "verify", "clean", "render", "probe"]);
+const MAX_PAIR_TRIES = 5;
+
+export function newSecrets() {
+  return { token: randomBytes(32).toString("hex"), pairCode: String(randomInt(0, 1000000)).padStart(6, "0") };
+}
+
+// Constant time whatever the lengths: both sides are hashed first, so the comparison is always of 32
+// bytes and says nothing about how much of a guess was right.
+function sameSecret(a, b) {
+  const ha = createHash("sha256").update(String(a)).digest();
+  const hb = createHash("sha256").update(String(b)).digest();
+  return timingSafeEqual(ha, hb);
+}
+
+// Read a request body whole, as bytes, and decode once. Decoding chunk by chunk splits a Cyrillic
+// character that straddles two chunks into two replacement characters.
+function readBody(req, limit, done) {
+  const chunks = [];
+  let size = 0, over = false;
+  req.on("data", (c) => { size += c.length; if (size > limit) over = true; else chunks.push(c); });
+  req.on("end", () => done(over ? null : Buffer.concat(chunks).toString("utf8")));
+}
+
+export function startJobServer(port = 3778, opts = {}) {
+  const fresh = newSecrets();
+  const token = opts.token || fresh.token;
+  const pairCode = opts.pairCode || fresh.pairCode;
+  if (!/^[0-9a-f]{64}$/.test(token)) throw new Error("jobserver: the token must be 64 lowercase hex characters");
+  if (!/^[0-9]{6}$/.test(pairCode)) throw new Error("jobserver: the pairing code must be six digits");
+  const warn = opts.log || ((m) => console.log(m));
+  const pluginVersion = opts.pluginVersion ? String(opts.pluginVersion) : "";
+  const extraOrigin = process.env.PX_ALLOW_ORIGIN || "";
+  let hosts = null;                // filled in once the real port is known
+  let boundPort = port;
+  let pairTries = 0, paired = false;
+
   let pending = null;              // { id, kind, rootNodeId, cleanupRootId, images:[hash] }
   const parts = new Map();         // job id -> report slices still being assembled
   // A run can be started from the plugin window. The plugin may only reach this address, so if
@@ -26,21 +90,122 @@ export function startJobServer(port = 3778) {
   const waiting = new Map();       // id -> { resolve, reject }
   let seq = 0;
   let lastPoll = 0;            // when the plugin last asked for work
+  let staleSeen = 0;           // when a plugin window of another build last asked (409)
 
-  const cors = (res, type) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-    res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-    if (type) res.setHeader("Content-Type", type);
-  };
+  // Every refusal is said, with the Origin that came with it. Said once per kind every ten seconds,
+  // so a page hammering the port cannot bury the run's own output. `detail` is said but is not part
+  // of the kind, because it can carry what the caller sent, and a caller varying it must not be able
+  // to make every request a new kind.
+  const said = new Map();
+  function refused(code, req, path, why, detail) {
+    const origin = req.headers.origin === undefined ? "(none)" : JSON.stringify(String(req.headers.origin).slice(0, 80));
+    const key = code + "|" + why + "|" + origin;
+    const now = Date.now(), prev = said.get(key);
+    if (prev && now - prev.at < 10000) { prev.n++; return; }
+    said.set(key, { at: now, n: 0 });
+    warn("  refused " + code + " " + req.method + " " + path + ": " + why + (detail ? " " + detail : "") + "; Origin " + origin +
+      (prev && prev.n ? " (and " + prev.n + " more like it)" : ""));
+  }
 
-  const server = createServer((req, res) => {
+  const handler = (req, res) => {
     const url = new URL(req.url, "http://127.0.0.1");
     if (process.env.PX_LOG_HTTP) console.log("    [http] " + req.method + " " + url.pathname + (url.search || ""));
-    if (req.method === "OPTIONS") { cors(res); res.writeHead(204); return res.end(); }
+
+    const host = String(req.headers.host || "").toLowerCase();
+    if (!hosts || !hosts.has(host)) {
+      refused(421, req, url.pathname, "Host " + JSON.stringify(req.headers.host || ""));
+      res.writeHead(421, { "Content-Type": "text/plain" });
+      return res.end("misdirected request");
+    }
+    const origin = req.headers.origin;
+    if (!(origin === "null" || (extraOrigin && origin === extraOrigin))) {
+      refused(403, req, url.pathname, "Origin not allowed");
+      res.writeHead(403, { "Content-Type": "text/plain" });
+      return res.end("origin not allowed");
+    }
+    const cors = (type) => {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+      if (type) res.setHeader("Content-Type", type);
+    };
+    if (req.method === "OPTIONS") {
+      cors();
+      res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, X-PXF-Plugin");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      res.setHeader("Access-Control-Max-Age", "600");
+      // Every request now carries a key, so every request is preflighted. A Chromium that enforces
+      // Private Network Access asks here whether a page may reach a loopback address; the answer
+      // grants nothing by itself — the key is still required on the request that follows.
+      if (req.headers["access-control-request-private-network"] === "true") res.setHeader("Access-Control-Allow-Private-Network", "true");
+      res.writeHead(204);
+      return res.end();
+    }
+
+    if (pluginVersion) {
+      const theirs = String(req.headers["x-pxf-plugin"] || "");
+      if (theirs !== pluginVersion) {
+        // The window parks after its first 409, so this line is said once; the wait below repeats it.
+        if (origin === "null") staleSeen = Date.now();
+        refused(409, req, url.pathname, "the plugin window runs another build than this runner wrote —" +
+          " close the plugin in Figma and open it again", "(window " + (theirs ? JSON.stringify(theirs.slice(0, 24)) : "names none") +
+          ", runner " + pluginVersion + ")");
+        // Readable by the window, which then asks to be reopened rather than for the code.
+        cors("application/json");
+        res.writeHead(409);
+        return res.end(JSON.stringify({ ok: false, reopen: true, error: "this plugin window runs another build than the runner wrote; close it and open it again" }));
+      }
+    }
+
+    if (url.pathname === "/pair" && req.method === "POST") {
+      return readBody(req, 1024, (text) => {
+        cors("application/json");
+        if (paired) {
+          refused(410, req, url.pathname, "the pairing code has already been used");
+          res.writeHead(410);
+          return res.end(JSON.stringify({ ok: false, error: "the code has already been used" }));
+        }
+        if (pairTries >= MAX_PAIR_TRIES) {
+          refused(429, req, url.pathname, "no pairing tries left this run");
+          res.writeHead(429);
+          return res.end(JSON.stringify({ ok: false, error: "too many attempts" }));
+        }
+        pairTries++;
+        let code = "";
+        try { code = String(JSON.parse(text || "{}").code || ""); } catch (e) {}
+        if (sameSecret(code, pairCode)) {
+          paired = true;
+          warn("  paired: a plugin window traded the code for this run's key");
+          res.writeHead(200);
+          return res.end(JSON.stringify({ ok: true, token }));
+        }
+        refused(403, req, url.pathname, "wrong pairing code, " + (MAX_PAIR_TRIES - pairTries) + " tries left");
+        res.writeHead(403);
+        return res.end(JSON.stringify({ ok: false, left: MAX_PAIR_TRIES - pairTries }));
+      });
+    }
+
+    const auth = String(req.headers.authorization || "");
+    if (!(auth.startsWith("Bearer ") && sameSecret(auth.slice(7), token))) {
+      refused(401, req, url.pathname, (auth ? "wrong key" : "no key") +
+        (origin === "null" ? " (a plugin window opened before this runner started asks for the code)" : ""));
+      // With the CORS header, so the window can read the status: a 401 it cannot see looks exactly
+      // like a runner that is not there, and it would wait for one instead of asking for the code.
+      cors("text/plain");
+      res.writeHead(401);
+      return res.end("unauthorized");
+    }
+
+    // What the runner sees of the plugin window — probe P1. The key itself is not echoed.
+    if (url.pathname === "/echo" && req.method === "GET") {
+      const h = Object.assign({}, req.headers);
+      if (h.authorization) h.authorization = "Bearer <redacted>";
+      warn("  echo: the plugin window's Origin is " + JSON.stringify(origin));
+      cors("application/json");
+      return res.end(JSON.stringify({ method: req.method, path: url.pathname, headers: h }));
+    }
 
     if (url.pathname === "/control" && req.method === "GET") {
-      cors(res, "application/json");
+      cors("application/json");
       const body = () => JSON.stringify({ rev: rev, phase: phase, lines: progress.slice(-14) });
       const seen = Number(url.searchParams.get("rev") || 0);
       if (!(seen >= rev)) return res.end(body());
@@ -71,22 +236,19 @@ export function startJobServer(port = 3778) {
     if (url.pathname === "/start" && req.method === "POST") {
       // The button carries what the designer chose to migrate — the whole file, the page they have
       // open, or what they have selected. Read the body rather than discarding it.
-      let sbody = "";
-      req.on("data", (c) => { sbody += c; });
-      req.on("end", () => {
-        cors(res, "application/json");
+      return readBody(req, 64 * 1024, (sbody) => {
+        cors("application/json");
         res.end(JSON.stringify({ ok: true }));
-        let opts = {};
-        try { opts = JSON.parse(sbody) || {}; } catch (e) {}
-        if (startResolve) { const r = startResolve; startResolve = null; r(opts); }
+        let opts2 = {};
+        try { opts2 = JSON.parse(sbody || "{}") || {}; } catch (e) {}
+        if (startResolve) { const r = startResolve; startResolve = null; r(opts2); }
       });
-      return;
     }
 
     if (url.pathname === "/job" && req.method === "GET") {
       const fromPlugin = url.searchParams.get("client") === "plugin";
       if (fromPlugin) lastPoll = Date.now();
-      cors(res, "application/json");
+      cors("application/json");
       if (pending || !fromPlugin) return res.end(JSON.stringify(pending || { kind: "noop" }));
       // Nothing to give it yet, so hold the request instead of answering "noop" and letting the
       // plugin come back later on a timer. Chromium throttles timers in a background window to one
@@ -117,15 +279,15 @@ export function startJobServer(port = 3778) {
 
     const pm = url.pathname.match(/^\/job\/([^/]+)\/payload$/);
     if (pm && req.method === "GET") {
-      if (!pending || pending.id !== pm[1]) { cors(res); res.writeHead(404); return res.end("no such job"); }
-      cors(res, "text/plain; charset=utf-8");
+      if (!pending || pending.id !== pm[1]) { cors(); res.writeHead(404); return res.end("no such job"); }
+      cors("text/plain; charset=utf-8");
       return res.end(payload);
     }
 
     const im = url.pathname.match(/^\/image\/([0-9a-f]+)$/);
     if (im && req.method === "GET") {
       const b = blobs.get(im[1]);
-      if (!b) { cors(res); res.writeHead(404); return res.end("no such image"); }
+      if (!b) { cors(); res.writeHead(404); return res.end("no such image"); }
       // Bytes used to cross into the plugin as a JS array of numbers, one element per byte. An
       // object carrying 102 MB of photographs turned that into an array of a hundred million
       // numbers and the sandbox never came back — the build sat there until the watchdog freed
@@ -133,10 +295,10 @@ export function startJobServer(port = 3778) {
       // frame asks for base64 and forwards it in the same slices the payload uses.
       if (process.env.PX_LOG_IMG) console.log("  -> image " + im[1].slice(0, 8) + " " + b.length + " bytes" + (url.searchParams.get("b64") === "1" ? " as base64" : ""));
       if (url.searchParams.get("b64") === "1") {
-        cors(res, "text/plain");
+        cors("text/plain");
         return res.end(b.toString("base64"));
       }
-      cors(res, "application/octet-stream");
+      cors("application/octet-stream");
       return res.end(b);
     }
 
@@ -145,15 +307,15 @@ export function startJobServer(port = 3778) {
     if (url.pathname === "/alive" && req.method === "POST") {
       lastPoll = Date.now();
       req.resume();
-      cors(res, "application/json");
+      cors("application/json");
       return res.end(JSON.stringify({ ok: true }));
     }
 
     if (url.pathname === "/report" && req.method === "POST") {
-      let body = "";
-      req.on("data", (c) => { body += c; });
-      req.on("end", () => {
-        cors(res, "application/json");
+      // A slice is 400 000 characters; escaped and in UTF-8 it stays well under this.
+      return readBody(req, 16 * 1024 * 1024, (body) => {
+        cors("application/json");
+        if (body === null) { res.writeHead(413); return res.end(JSON.stringify({ ok: false, error: "report slice too large" })); }
         res.end(JSON.stringify({ ok: true }));
         let msg; try { msg = JSON.parse(body); } catch { return; }
         const w = waiting.get(msg.id);
@@ -179,26 +341,35 @@ export function startJobServer(port = 3778) {
         if (pending && pending.id === msg.id) { pending = null; payload = ""; blobs = new Map(); }
         w.resolve(report);
       });
-      return;
     }
 
-    cors(res); res.writeHead(404); res.end("not found");
-  });
+    cors(); res.writeHead(404); res.end("not found");
+  };
 
   // The plugin fetches http://localhost:3778 because Figma's manifest validator rejects a raw
   // IP in allowedDomains -- and on Windows localhost often resolves to ::1 first, so binding only
   // 127.0.0.1 would refuse the connection. Bind both loopbacks with the same handler.
-  const server6 = createServer(server.listeners("request")[0]);
+  const server = createServer(handler);
+  const server6 = createServer(handler);
   const ready = new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", () => {
+      // Port 0 asks for any free port (the tests do); the Host check needs the one actually given.
+      boundPort = server.address().port;
+      hosts = new Set(["localhost:" + boundPort, "127.0.0.1:" + boundPort, "[::1]:" + boundPort]);
       server6.once("error", () => resolve());   // no IPv6 loopback here, v4 is enough
-      server6.listen(port, "::1", () => resolve());
+      server6.listen(boundPort, "::1", () => resolve());
     });
   });
 
   return {
     ready,
+    token,
+    pairCode,
+    // The plugin build this runner wrote and accepts; "" when it was started without one (the tests).
+    pluginVersion,
+    get port() { return boundPort; },
+    get paired() { return paired; },
     // Wait until somebody presses the button in the plugin window.
     waitForStart() { if (!startWanted) startWanted = new Promise((r) => { startResolve = r; }); return startWanted; },
     // Say something the plugin window can show while a long step runs.
@@ -208,6 +379,11 @@ export function startJobServer(port = 3778) {
     // Queue one job and resolve when the plugin reports back. One job at a time by construction:
     // the plugin only ever sees the job that is pending right now.
     post(job, payloadText, images = new Map(), timeoutMs = 20 * 60 * 1000) {
+      if (!job || !JOB_KINDS.includes(job.kind)) {
+        return Promise.reject(new Error("refused: unknown job kind " + JSON.stringify(job && job.kind) +
+          " — the plugin runs only " + JOB_KINDS.join(", ")));
+      }
+      if (typeof payloadText !== "string") return Promise.reject(new Error("a job's payload is JSON text"));
       const id = "j" + (++seq);
       pending = { id, kind: job.kind, rootNodeId: job.rootNodeId || null,
                   cleanupRootId: job.cleanupRootId || null, page: job.page || null,
@@ -245,7 +421,8 @@ export function startJobServer(port = 3778) {
             // what subtracting from zero looks like — printed, of course, exactly when the person
             // reading it is already worried.
             console.log("  waiting: " + (lastPoll === 0
-              ? "nothing has asked this runner for work yet"
+              ? (staleSeen ? "the plugin window that is open was opened before this runner was started from changed" +
+                " sources — close it in Figma and open it again" : "nothing has asked this runner for work yet")
               : "the plugin has not polled for " + Math.round(quiet / 1000) + "s") +
               (warned === 1 ? " — is the pix-to-fig runner still open in Figma?" : ""));
           } else if (warned || Date.now() - t0w > 60000) {

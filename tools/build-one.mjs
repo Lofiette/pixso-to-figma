@@ -8,7 +8,7 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { startJobServer } from "./jobserver.mjs";
+import { openSession } from "./session.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -51,8 +51,7 @@ try {
   else if (PAGES) console.log("page: not found for this root — building on the page that is open");
 } catch (e) {}
 
-const srv = startJobServer(3778);
-await srv.ready;
+const srv = await openSession();
 console.log("job server up — the pix-to-fig runner plugin can connect");
 console.log("payload " + payloadFile + "   images " + images.size);
 
