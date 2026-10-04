@@ -73,3 +73,9 @@ tools/count-pages.mjs
 tools/t-noimg.mjs
 tools/_*.js
 _pages.js
+
+# Private artefacts (docs/REWRITE.md §8). The generated plugin carries a per-run token, and a kit
+# map names real components and keys; both are written outside the repository, and
+# tools/test-hygiene.mjs fails if either is ever tracked.
+figma-plugin/dist/
+*.kitmap.json
