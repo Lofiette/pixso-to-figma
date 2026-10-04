@@ -448,6 +448,26 @@ does not support `setPluginData`, so P7, P12 and P17 must run in our own plugin.
 | P11b | sublayer ids of an instance of an imported component are `I<instance>;<kit layer id>`, the kit file's own ids | kit maps record Figma layer ids from the kit file; overrides translate directly |
 | P20 | with the variables library enabled in the file: a Theme variable imports by its **published** key, binds to a node fill and to a fill override inside an imported instance, and an explicit Dark mode on a frame resolves it to the dark value. The key a kit node reports for its bound variable is **not** importable even with the library enabled: the Figma kit is bound to another publication of the styles library | Сова colour binding uses the keys the enabled library publishes (`teamLibrary.getVariablesInLibraryCollectionAsync`, matched by collection and variable name), never keys read from kit nodes; the design-mode preflight requires the variables library to be enabled in the target file and says so |
 
+**P1–P3, in our own plugin (2026-10-04, the owner's Figma desktop 126.9 on Windows, a scratch file; C).** One plugin
+session, P2 repeated with Figma in front, covered by another window, and minimised.
+
+| probe | result | consequence |
+|---|---|---|
+| P1 | the plugin window's requests arrive with `Origin: null`, and the runner's `Access-Control-Allow-Origin: null` lets them through; the key and the build header arrive intact | the token transport stands as built; no origin allowance is needed |
+| P2 | the plugin has no `performance.now`, so the clock is `Date.now` and the per-step means of a back-to-back batch are the numbers to read. In front and covered alike: `setTimeout(0)` median 8 ms, `getNodeByIdAsync` 0.02 ms, a round trip to the window 0.05 ms. Minimised: `setTimeout(0)` median 997 ms (about one wake-up a second), while `getNodeByIdAsync` (0.05 ms) and the window round trip (0.13 ms) do not change. Covering the window throttled nothing | the builder never yields through a timer; where it has to yield it awaits `getNodeByIdAsync` or a window round trip, which a minimised Figma does not slow |
+| P3 | strings of 0.25 to 16 MB (the probe's ceiling) all arrive, both ways. Plugin to window: 1 MB 35 ms, 4 MB 0.2 s, 8 MB 0.6 s, 16 MB 4.0 s. Window to plugin: 1 MB 16 ms, 4 MB 61 ms, 16 MB 0.64 s | no limit up to 16 MB; the plugin-to-window direction grows faster than the size above 4 MB, so anything sent to the window goes in chunks of 4 MB or less |
+
+**M0 acceptance, live (2026-10-04, the same Figma, scratch files; C).** The tool as it was before M0 extracted a
+19-object sample of a product file built on Сова (9 122 nodes: sections and frames, and the file's own components and
+component sets) in 753 s with no object lost, built it 19 of 19 exact (PASS), and its render audit flagged 6 of 19
+objects. All six are sections or a connector whose render at the same width comes out 4–10 px taller in Figma; their
+content matches by eye, and the height difference is checked in M1. The same payloads rebuilt through the bundled
+builder gave verify reports equal to the baseline field for field on all 19 objects, and build reports equal apart from
+the timings (4.0 s against 4.4 s per 1 000 nodes). `test-clean.mjs` passed through CLEAN. The runner refused the
+pre-M0 plugin window by build id (409), and a window opened before the runner paired only with the code. The baseline
+reports and renders are kept outside the repository. The killed-Pixso criterion was not repeated live; it is covered
+offline by `tools/test-mcp.mjs`.
+
 The Figma Сова kit also uses Figma's `SLOT` node type inside its components; the matcher, the verifier and the IR's
 node-type list must know it.
 

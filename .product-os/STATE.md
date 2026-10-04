@@ -5,6 +5,8 @@
 - **2026-10-04: the rewrite is the plan of record — read `docs/REWRITE.md` first.** Two sources (.pix and MCP), one IR,
   native components and styles, kit mode. Research notes with internal names are kept outside this repository.
   Milestones M0–M6 in its §10, owner decisions in §11, probes in §9. Everything below describes the current tool.
+- **2026-10-04: M0 is merged and accepted live** in the owner's Figma: the bundled builder reproduces the pre-M0
+  baseline field for field, CLEAN passes, and P1–P3 are measured (`docs/REWRITE.md` §9). Next: M1.
 
 - **Task:** Pixso -> Figma migration, 1:1, whole files, no model in the loop.
 - **Status:** five files migrated. Day three went into the *instrument* rather than the algorithm:
