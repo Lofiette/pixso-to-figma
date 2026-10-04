@@ -16,6 +16,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startJobServer } from "./jobserver.mjs";
 import { buildAll, verdict } from "./build-lib.mjs";
+import { EXIT, readStates, unextracted, runnerLine, headline } from "./extract-lib.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -67,6 +68,8 @@ try {
     execFileSync("node", [join(HERE, "mcp.mjs"), "info"], { cwd: HERE, encoding: "utf8", timeout: 30000 });
   } catch (e) {
     say("Pixso не отвечает на 127.0.0.1:3667.");
+    // mcp.mjs prints the whole failure to stderr; its first line is the cause.
+    say("  " + headline(e.stderr, "", e.status).slice(0, 160));
     say("Откройте Pixso, включите в нём MCP и откройте нужный файл.");
     srv.phase("stopped");
     throw new Error("pixso not reachable");
@@ -161,63 +164,82 @@ try {
   else if (ONLY_PAGE) exArgs.push("--page", ONLY_PAGE);
   // Read the child line by line as it goes, rather than collecting everything and parsing it
   // when it is over. Extraction is twenty minutes of silence otherwise — and the whole reason
-  // to capture the output was to be able to show it while it matters.
+  // to capture the output was to be able to show it while it matters. Which lines reach the
+  // plugin window is decided by runnerLine (extract-lib.mjs): progress, failures, and the lines
+  // written for the designer, which come prefixed with ">> ".
+  const exStarted = Date.now();
   const status = await new Promise((resolve) => {
     const p = spawn("node", exArgs, { cwd: HERE, stdio: ["ignore", "pipe", "pipe"] });
-    let buf = "";
     const NL = String.fromCharCode(10);
-    const onData = (chunk) => {
-      buf += String(chunk);
-      let at;
-      while ((at = buf.indexOf(NL)) >= 0) {
-        const line = buf.slice(0, at).replace(String.fromCharCode(13), "");
-        buf = buf.slice(at + 1);
-        // Parsed by hand rather than by pattern: the line shape is fixed and known, and a
-        // regular expression written through three layers of shell quoting has eaten its own
-        // backslashes more than once today.
-        //   [12/34] FRAME 2161n  "Ресурсы/ Меню закрыто"   (382s elapsed)
-        if (line.charAt(0) === "[") {
-          const close = line.indexOf("]");
-          const q1 = line.indexOf(String.fromCharCode(34));
-          const q2 = line.lastIndexOf(String.fromCharCode(34));
-          const counter = close > 0 ? line.slice(1, close) : "";
-          const name = q2 > q1 ? line.slice(q1 + 1, q2) : "";
-          say("  " + counter.replace("/", " из ") + "   " + name);
-        } else if (line.indexOf("FAILED") >= 0 || line.indexOf("extracted ") >= 0) {
-          say("  " + line.trim().slice(0, 120));
+    // One buffer per stream, decoded as text: the two streams interleave at arbitrary points, and a
+    // chunk boundary can fall inside a Cyrillic letter.
+    const reader = () => {
+      let buf = "";
+      return (chunk) => {
+        buf += chunk;
+        let at;
+        while ((at = buf.indexOf(NL)) >= 0) {
+          const shown = runnerLine(buf.slice(0, at));
+          buf = buf.slice(at + 1);
+          if (shown !== null) say(shown);
         }
-      }
+      };
     };
-    p.stdout.on("data", onData);
-    p.stderr.on("data", onData);
+    p.stdout.setEncoding("utf8");
+    p.stderr.setEncoding("utf8");
+    p.stdout.on("data", reader());
+    p.stderr.on("data", reader());
     p.on("close", (code) => resolve(code));
   });
-  const ex = { status };
-  if (ex.status !== 0) say("Часть объектов извлечь не удалось — продолжаю с тем, что есть.");
+
+  // What happened to every object, not just the ones that worked. A states file older than this
+  // extraction belongs to an earlier run and says nothing about this one.
+  let states = readStates(join(DIRS, "states.json"));
+  if (states && Date.parse(states.started) < exStarted - 1000) states = null;
+  const losses = unextracted(states);
+  if (status === EXIT.PIXSO_GONE || status === EXIT.IDENTITY_CHANGED || !states) {
+    // The run stopped before the end of the list: Pixso did not come back, or another file is open
+    // in it now, or the extraction itself crashed. Nothing is built from a stopped run — running it
+    // again resumes from the checkpoint and builds everything at once.
+    say("");
+    if (status === EXIT.IDENTITY_CHANGED) say("Извлечение остановлено: в Pixso открыт другой файл. Собирать не начинаю.");
+    else if (status === EXIT.PIXSO_GONE) say("Извлечение остановлено: Pixso не вернулся. Собирать не начинаю.");
+    else say("Извлечение завершилось с ошибкой (код " + status + ") и не записало состояние объектов. Собирать не начинаю.");
+    say("");
+    say("================ итог ================");
+    verdict([], say, losses);
+    srv.phase("stopped");
+    throw new Error("extraction stopped (exit " + status + ")");
+  }
+  if (losses.length) say("Не извлечено объектов: " + losses.length + " — в итоге они будут ошибками. Продолжаю с тем, что есть.");
 
   const list = join(DIRS, "dirs.txt");
-  if (!existsSync(list)) { say("Извлекать оказалось нечего."); srv.phase("stopped"); throw new Error("nothing extracted"); }
-  const dirs = readFileSync(list, "utf8").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  const dirs = existsSync(list) ? readFileSync(list, "utf8").split(/\r?\n/).map((s) => s.trim()).filter(Boolean) : [];
+  if (!dirs.length && !losses.length) { say("Извлекать оказалось нечего."); srv.phase("stopped"); throw new Error("nothing extracted"); }
 
-  // ---------- source against payload ----------
-  const cov = sh("coverage.mjs", ["--dirs", list]);
-  const covOut = String(cov.stdout || "");
-  const loss = /unexplained loss\s+(-?\d+)/.exec(covOut);
-  say("");
-  say("Проверка: потерь при извлечении " + (loss ? loss[1] : "?"));
+  let results = [];
+  if (dirs.length) {
+    // ---------- source against payload ----------
+    const cov = sh("coverage.mjs", ["--dirs", list]);
+    const covOut = String(cov.stdout || "");
+    const loss = /unexplained loss\s+(-?\d+)/.exec(covOut);
+    say("");
+    say("Проверка: потерь при извлечении " + (loss ? loss[1] : "?"));
 
-  // ---------- into Figma ----------
-  say("");
-  say("Собираю в Figma: " + dirs.length + " объектов");
-  process.env.PX_PLACE_ABS = "1";
-  const results = await buildAll({ srv, dirs, pages: doc, clean: true, say });
+    // ---------- into Figma ----------
+    say("");
+    say("Собираю в Figma: " + dirs.length + " объектов");
+    process.env.PX_PLACE_ABS = "1";
+    results = await buildAll({ srv, dirs, pages: doc, clean: true, say });
+  }
 
   say("");
   say("================ итог ================");
-  verdict(results, say);
-  srv.phase("done");
+  verdict(results, say, losses);
+  srv.phase(dirs.length ? "done" : "stopped");
   say("");
-  say("Готово. Смотрите результат в Figma.");
+  say(dirs.length ? "Готово. Смотрите результат в Figma." : "Ни один объект не извлёкся — собирать было нечего.");
+  if (losses.length) say("Что не извлеклось и почему: " + join(DIRS, "states.json") + " и extract-error.log в папке каждого объекта.");
 } catch (e) {
   say("Остановлено: " + (e.message || e));
   srv.phase("stopped");
