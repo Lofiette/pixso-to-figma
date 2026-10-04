@@ -12,33 +12,12 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-// The code that decides what --clean is allowed to delete, as a function so it can be tested against
-// nodes made for the purpose rather than trusted the first time it runs over a designer's file.
-// `want` is one entry per object about to be rebuilt: { src } the Pixso id it came from, { id } the
-// Figma id an earlier run recorded for it.
-export function cleanScript(want) {
-  return [
-    "const want = " + JSON.stringify(want) + ";",
-    "await figma.loadAllPagesAsync();",
-    "const srcs = {}; for (const w of want) if (w.src) srcs[w.src] = 1;",
-    "const stamp = function (n) { try { return n.getPluginData('pxSrc'); } catch (e) { return ''; } };",
-    "let gone = 0, spared = 0;",
-    "const doomed = [];",
-    // Everything stamped with a source this run rebuilds, wherever it sits. This also clears
-    // duplicates an interrupted run left behind, which removing one id each never could.
-    "for (const p of figma.root.children) for (const k of p.children) if (stamp(k) && srcs[stamp(k)]) doomed.push(k);",
-    "for (const w of want) {",
-    "  if (!w.id) continue;",
-    "  const n = await figma.getNodeByIdAsync(w.id);",
-    "  if (!n || n.removed || doomed.indexOf(n) >= 0) continue;",
-    "  const s = stamp(n);",
-    // Unstamped: built before stamping existed, and the id is the only handle there is. Stamped with
-    // something else: the id has gone stale and now points at another object's root. Leave it alone.
-    "  if (!s || (w.src && s === String(w.src))) doomed.push(n); else spared++;",
-    "}",
-    "for (const n of doomed) { try { if (!n.removed) { n.remove(); gone++; } } catch (e) {} }",
-    "RESULT = { removed: gone, of: want.length, spared: spared };",
-  ].join(String.fromCharCode(10));
+// What --clean is allowed to delete is decided in the plugin, by its fixed CLEAN command
+// (figma-plugin/src/code.js), and proved by tools/test-clean.mjs against nodes made for the purpose.
+// This side only says which objects are about to be rebuilt: { src } the Pixso id each came from,
+// { id } the Figma id an earlier run recorded for it. It used to send the deleting code itself.
+export function cleanJob(want) {
+  return { job: { kind: "clean" }, payload: JSON.stringify({ want: want }) };
 }
 
 export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
@@ -70,9 +49,10 @@ export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
       if (src || id) want.push({ src: src ? String(src) : null, id: id || null });
     }
     if (want.length) {
-      const V = cleanScript(want);
+      const c = cleanJob(want);
       try {
-        const rc = await srv.post({ kind: "render", rootNodeId: "0:0" }, JSON.stringify({ V }), new Map(), 600000);
+        const rc = await srv.post(c.job, c.payload, new Map(), 600000);
+        if (rc.error) throw new Error(rc.error);
         say("cleared " + (rc.removed || 0) + " of " + want.length + " roots this run will rebuild" +
           (rc.spared ? " (" + rc.spared + " id" + (rc.spared === 1 ? "" : "s") + " now belonged to something else and was left alone)" : ""));
       } catch (e) { say("could not clear previous builds: " + e.message); }

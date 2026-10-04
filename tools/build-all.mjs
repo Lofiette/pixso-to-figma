@@ -4,7 +4,7 @@
 //
 //   PX_PLACE_ABS=1 node build-all.mjs --clean --pages <pages.json> --dirs <dirs.txt>
 import { readFileSync } from "node:fs";
-import { startJobServer } from "./jobserver.mjs";
+import { openSession } from "./session.mjs";
 import { buildAll, verdict } from "./build-lib.mjs";
 
 const argv = process.argv.slice(2);
@@ -18,8 +18,7 @@ const dirs = dirsFile
   : argv;
 if (!dirs.length) { console.error("usage: node build-all.mjs [--clean] [--pages p.json] --dirs list.txt"); process.exit(1); }
 
-const srv = startJobServer(3778);
-await srv.ready;
+const srv = await openSession();
 console.log("job server on http://localhost:3778");
 console.log("open the pix-to-fig runner plugin in Figma — waiting for it…");
 const t0 = Date.now();

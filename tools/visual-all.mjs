@@ -14,7 +14,7 @@
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, basename } from "node:path";
-import { startJobServer } from "./jobserver.mjs";
+import { openSession } from "./session.mjs";
 import { focusFigma } from "./focus-figma.mjs";
 import { decodePNG } from "./pngutil.mjs";
 
@@ -42,27 +42,10 @@ function pixsoRender(id, width) {
 
 // Asked for by id, then made to prove it is the right node. A remembered id turned out to resolve
 // to something else entirely on two objects out of 45 — so photographing whatever answers to a
-// number would quietly compare the wrong pair of pictures, which is worse than failing.
-const figSrc = (id, srcId, width) => [
-  "await figma.loadAllPagesAsync();",
-  "var want = " + JSON.stringify(srcId ? String(srcId) : "") + ";",
-  "var stampOf = function (n) { try { return n.getPluginData('pxSrc'); } catch (e) { return ''; } };",
-  "var n = await figma.getNodeByIdAsync(" + JSON.stringify(id) + ");",
-  "var relocated = null;",
-  "if (want && (!n || n.removed || stampOf(n) !== want)) {",
-  "  var f = [];",
-  "  for (var pi = 0; pi < figma.root.children.length; pi++) {",
-  "    var k = figma.root.children[pi].children;",
-  "    for (var ki = 0; ki < k.length; ki++) if (stampOf(k[ki]) === want) f.push(k[ki]);",
-  "  }",
-  "  if (f.length) { n = f[f.length - 1]; relocated = n.id; }",
-  "}",
-  "if (!n || n.removed) { RESULT = { e: 'not found' }; } else {",
-  "  const w = " + width + ";",
-  "  const by = await n.exportAsync({ format: 'PNG', constraint: { type: 'WIDTH', value: w } });",
-  "  RESULT = { w: w, bytes: by.length, d: figma.base64Encode(by), relocated: relocated };",
-  "}",
-].join(NL);
+// number would quietly compare the wrong pair of pictures, which is worse than failing. The proving
+// is done by the plugin's fixed RENDER "export" operation; only the id, the stamp and the width go.
+const figJob = (id, srcId, width) => ({ op: "export", id: String(id), src: srcId ? String(srcId) : "",
+  loadAll: true, constraint: { type: "WIDTH", value: width } });
 
 // Ink on one side only is what matters; a whole image shifted by a pixel is not the same defect.
 //
@@ -96,8 +79,7 @@ function compare(a, b) {
 
 // Rasterisation only happens in the front window, and every render here depends on it.
 console.log("figma window: " + focusFigma());
-const srv = startJobServer(3778);
-await srv.ready;
+const srv = await openSession();
 console.log("comparing " + dirs.length + " objects at " + W_TARGET + " px wide" + NL);
 
 const DONE_FILE = join(OUT, "done.jsonl");
@@ -136,11 +118,11 @@ for (let i = 0; i < dirs.length; i++) {
   // the moment anything else takes focus every remaining render stops returning — and over a whole
   // file, something eventually does. Losing the run at object 40 of 290 because of one click is why
   // this audit has never reached the end of a file.
-  const V = { V: figSrc(build.rootId, meta.rootId, px.w) };
+  const job = JSON.stringify(figJob(build.rootId, meta.rootId, px.w));
   let fg = null, why = "";
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt) console.log("      retrying with the Figma window raised: " + focusFigma());
-    try { fg = await srv.post({ kind: "render", rootNodeId: build.rootId }, JSON.stringify(V), new Map(), 120000); }
+    try { fg = await srv.post({ kind: "render" }, job, new Map(), 120000); }
     catch (e) { fg = null; why = "figma: " + e.message.slice(0, 60); }
     if (fg && !fg.e && fg.d) break;
     if (fg) why = "figma: " + JSON.stringify(fg).slice(0, 60);
