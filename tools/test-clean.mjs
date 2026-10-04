@@ -11,7 +11,7 @@
 // plugin's fixed commands — the rule itself is CLEAN, the rectangles are RENDER scratch operations —
 // so what is proved here is exactly what --clean runs. tools/test-plugin.mjs runs the same scenario
 // offline, against a stand-in for Figma.
-import { resolve } from "node:path";
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { cleanJob } from "./build-lib.mjs";
 
@@ -64,7 +64,14 @@ export async function cleanScenario(post, out = console.log) {
   return bad;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Compared by real path. Through a symlink or a directory junction argv[1] and import.meta.url name
+// the same file differently, and a plain comparison ran nothing and exited 0 — a pass for an
+// acceptance test that never ran (the trap tools/mcp-codes.mjs records).
+const isMain = (() => {
+  try { return !!process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch (e) { return false; }
+})();
+if (isMain) {
   const { openSession, waitForPlugin } = await import("./session.mjs");
   const srv = await openSession();
   // A window left open from the last tool holds the last key; the scenario's 120 s per job would be

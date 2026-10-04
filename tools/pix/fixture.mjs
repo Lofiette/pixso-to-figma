@@ -11,8 +11,8 @@
 // The document holds one of each case the reader and the plan have to handle, listed at
 // fixtureMessage() below.
 import { createHash } from "node:crypto";
-import { writeFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
+import { writeFileSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { encodePNG } from "../pngutil.mjs";
 import { parseKiwiText, encodeSchema, encodeMessage, writeDocument, writePix } from "./write.mjs";
 
@@ -351,7 +351,13 @@ export function makeFixture(variant = "valid") {
   return { pix, defs, schema, value, message, image, missingHash: MISSING_IMAGE_HASH };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Compared by real path: through a symlink or a directory junction argv[1] and import.meta.url differ,
+// and a plain comparison wrote nothing and exited 0 (the trap tools/mcp-codes.mjs records).
+const isMain = (() => {
+  try { return !!process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch (e) { return false; }
+})();
+if (isMain) {
   const argv = process.argv.slice(2);
   const vi = argv.indexOf("--variant");
   const variant = vi >= 0 ? argv.splice(vi, 2)[1] : "valid";

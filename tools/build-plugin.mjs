@@ -26,7 +26,7 @@
 // and must never be committed: it holds the key of the last run. For the same reason the command line
 // will not write figma-plugin/dist unasked: a live runner's key is in there, and replacing it would
 // make that runner's next plugin window ask for the code.
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { Script } from "node:vm";
 import { dirname, join, resolve } from "node:path";
@@ -158,7 +158,13 @@ export function buildPlugin({ outDir = DIST_DIR, token = "", sources } = {}) {
   return { codePath, uiPath, version: g.version, tokenWritten: !!token };
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Compared by real path: through a symlink or a directory junction argv[1] and import.meta.url differ,
+// and a plain comparison wrote nothing and exited 0 (the trap tools/mcp-codes.mjs records).
+const isMain = (() => {
+  try { return !!process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch (e) { return false; }
+})();
+if (isMain) {
   const argv = process.argv.slice(2);
   const flag = (n) => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : null; };
   const out = flag("--out") ? resolve(flag("--out")) : null;
