@@ -72,12 +72,18 @@ export const PROPERTY_REF_FIELDS = { characters: "TEXT", visible: "BOOLEAN", mai
 // ---------- reason codes ----------
 // One vocabulary for IR notes and for run reports. `plan` is where docs/REWRITE.md names the code;
 // null marks the codes this IR names for conditions REWRITE.md counts without naming them, each
-// with the sentence it comes from in `from`. Stages: run (stops the run), read (source -> IR),
-// plan (preflight and kit-map resolution), build (in Figma).
+// with the sentence it comes from in `from`. Stages: run (the run's own: it stops the run, or fails
+// or skips one object of it), read (source -> IR), plan (preflight and kit-map resolution), build
+// (in Figma). Every code the run writes today (tools/extract-lib.mjs, tools/kiwi.mjs) is here, and
+// tools/test-ir.mjs fails on one that is not.
 export const REASON_CODES = {
   PIX_CORRUPT: { stage: "run", plan: "§6", meaning: "the .pix is truncated, uses a field id its schema does not define, or does not end on its last byte; nothing is built" },
+  PIX_UNSUPPORTED: { stage: "run", plan: null, from: "§6: the runner requires Node 22.15 or newer (built-in zstd); a .pix that cannot be read stops the run with PIX_CORRUPT before anything is built", meaning: "the .pix is sound but in a form the reader does not read (another compression, a second zstd frame, a Node without zstd); nothing is built" },
   IDENTITY_CHANGED: { stage: "run", plan: "§4", meaning: "after a reconnect the file open in Pixso is not the file being read; the run stops" },
   KIT_FILEKEY_CONFLICT: { stage: "run", plan: "§5", meaning: "sources disagree about a kit's own Pixso file key; the run stops and no kit map is written" },
+  PIXSO_UNAVAILABLE: { stage: "run", plan: null, from: "§6: the run stops issuing work, writes the checkpoint and says \"Pixso stopped answering at object X: N done, M left\"", meaning: "the Pixso channel's circuit breaker: the object whose call did not reach Pixso fails, and if Pixso is not back within 10 minutes the run stops and the rest are skipped; a re-run resumes" },
+  EXTRACT_FAILED: { stage: "run", plan: null, from: "§6: the verdict counts them, so a failed extraction is a failed object", meaning: "Pixso answered and the object's extraction still failed; the whole error is in its extract-error.log, and a re-run tries it again" },
+  NO_ID: { stage: "run", plan: null, from: "§6: every object ends in a recorded state: built, built-with-fallbacks, failed or skipped", meaning: "reading the file gave the object no id, so it cannot be extracted; it is skipped and counted as a loss" },
 
   VARIANT_SET_REJECTED: { stage: "read", plan: "§3", meaning: "a state group whose member names do not parse into one set of axes; its members become standalone components" },
   STALE_ASSIGNMENT: { stage: "read", plan: "§3", meaning: "a property assignment whose definition cannot be reached from the instance's current family; dropped, never matched by name" },

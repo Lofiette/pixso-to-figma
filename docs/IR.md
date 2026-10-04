@@ -315,14 +315,20 @@ values) is listed, because every font is loaded before the first text write.
 record (a rejected set, an unsupported node); `path` is a guidPath inside an instance; `detail` is free text.
 
 The same vocabulary serves IR notes and run reports, and an unknown code is an error. The **stage** says where a
-code arises: *run* codes stop the run, *read* codes come from the reader and may appear in an IR, *plan* codes come
-from the preflight and the kit-map resolution, and *build* codes come from Figma.
+code arises: *run* codes are the run's own and go to its reports (`states.json`, the reader's errors): they stop the
+run, or fail or skip one object of it; *read* codes come from the reader and may appear in an IR, *plan* codes come
+from the preflight and the kit-map resolution, and *build* codes come from Figma. Every code the run writes today
+(`tools/extract-lib.mjs`, `tools/kiwi.mjs`) is in the table, and `tools/test-ir.mjs` fails on one that is not.
 
 | code | stage | meaning | REWRITE.md |
 |---|---|---|---|
 | `PIX_CORRUPT` | run | the `.pix` is truncated, uses a field id its schema does not define, or does not end on its last byte; nothing is built | §6 |
+| `PIX_UNSUPPORTED` | run | the `.pix` is sound but in a form the reader does not read (another compression, a second zstd frame, a Node without zstd); nothing is built | named here (§6) |
 | `IDENTITY_CHANGED` | run | after a reconnect, the file open in Pixso is not the file being read | §4 |
 | `KIT_FILEKEY_CONFLICT` | run | sources disagree about a kit's own Pixso file key; no kit map is written | §5 |
+| `PIXSO_UNAVAILABLE` | run | the Pixso channel's circuit breaker: the object whose call did not reach Pixso fails, and if Pixso is not back within 10 minutes the run stops and the rest are skipped; a re-run resumes | named here (§6) |
+| `EXTRACT_FAILED` | run | Pixso answered and the object's extraction still failed; the whole error is in its `extract-error.log` | named here (§6) |
+| `NO_ID` | run | reading the file gave the object no id, so it cannot be extracted; it is skipped and counted as a loss | named here (§6) |
 | `VARIANT_SET_REJECTED` | read | the member names of a state group do not parse into one set of axes; the members become standalone components | §3 |
 | `STALE_ASSIGNMENT` | read | a property assignment unreachable from the instance's current family; dropped | §3 |
 | `STYLE_MISSING_IN_SOURCE` | read | a style reference that resolves nowhere; raw values kept | §3 |

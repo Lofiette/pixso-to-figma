@@ -300,6 +300,23 @@ else fail("snapshotId: " + snapshotId(header("pix")) + " / " + snapshotId(header
   else ok(named.length + " codes named by the IR for conditions REWRITE.md counts without naming, each with its source sentence");
 }
 {
+  // The run's own reports use the same vocabulary: every code the run writes into states.json
+  // (reason, stopReason) or throws from the reader is in it. In those two files every quoted
+  // UPPER_SNAKE string is such a code; anything else written that way there would have to be listed.
+  const SOURCES = ["extract-lib.mjs", "kiwi.mjs"];
+  const used = new Map();
+  for (const s of SOURCES) {
+    const src = readFileSync(join(HERE, s), "utf8");
+    for (const m of src.matchAll(/"([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)"/g)) if (!used.has(m[1])) used.set(m[1], s);
+  }
+  const unknown = [...used.keys()].filter((c) => !REASON_CODES[c]);
+  const expect = ["PIXSO_UNAVAILABLE", "EXTRACT_FAILED", "NO_ID", "IDENTITY_CHANGED", "PIX_CORRUPT", "PIX_UNSUPPORTED"];
+  const unseen = expect.filter((c) => !used.has(c));
+  if (unseen.length) fail("the scan of " + SOURCES.join(", ") + " misses codes they are known to write: " + unseen.join(", "));
+  else if (unknown.length) fail("codes the run writes that the vocabulary lacks: " + unknown.map((c) => c + " (" + used.get(c) + ")").join(", "));
+  else ok("every one of the " + used.size + " codes the run writes (" + SOURCES.join(", ") + ") is in the vocabulary");
+}
+{
   // The plan may live in this tree (after it merges) or only on its branch. Enum values of Pixso
   // and Figma are written the same way and are not codes.
   const NOT_CODES = new Set(["FOREGROUND_BLUR", "LAYER_BLUR", "SPACE_BETWEEN", "SPACE_EVENLY"]);
