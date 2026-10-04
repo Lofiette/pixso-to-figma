@@ -136,6 +136,9 @@ try {
 } catch (e) { fail("progress endpoint: " + e.message); }
 srv.close();
 
+// ---------- 5. the Pixso channel: object states, full errors, circuit breaker (tools/test-mcp.mjs) ----------
+try { execFileSync(process.execPath, [join(HERE, "test-mcp.mjs")], { stdio: "inherit" }); } catch (e) { fail("test-mcp.mjs: the Pixso channel checks failed, see above"); }
+
 console.log("");
 console.log(failed ? failed + " check" + (failed === 1 ? "" : "s") + " FAILED" : "all checks pass");
 process.exit(failed ? 1 : 0);
