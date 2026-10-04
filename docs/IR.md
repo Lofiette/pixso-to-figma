@@ -44,10 +44,16 @@ IR is a documented format and not the channel. Tasks (at most 4 MB each) are cut
   space, so a guid is unique across all three. A **guidPath** is an array of guids, outermost first, as Pixso
   addresses instance sublayers.
 - **index**: a 0-based integer into one of this IR's tables.
-- **Rounding** on write, as today's payload does:
-  - six decimals for normalised quantities: colour channels, opacities, gradient and image transforms, gradient
-    stops, image filters, and the linear part (`a b c d`) of a node transform;
-  - two decimals for pixels: sizes, translations, radii, stroke weights, spacing and font sizes.
+- **Rounding** on write, as today's payload does (`r2`, `r4`, `r6` and `PRECISE` in `tools/pack4.mjs`):
+  - four decimals for all six entries of a transform, the linear part and the translation alike (a node's
+    `relativeTransform`, a derived box's `transform`), and for the `x` and `y` of `inkBounds`, which today's payload
+    keeps as an ink offset at four decimals too;
+  - six decimals inside values for normalised quantities: colour channels, opacities, image and gradient
+    transforms, gradient stops and image filters;
+  - two decimals for everything else, all of it pixels: sizes (derived sizes and the `inkBounds` width and height
+    included), radii, stroke weights, spacing and font sizes.
+- **Evidence labels** are REWRITE.md's: (C) confirmed by measurement, (I) inferred, (A) assumed until a probe or a
+  real file checks it.
 - **Defaults.** A property may be left out only when its value equals the builder's default for it (today the
   `DROP` table in `tools/pack4.mjs`). Paint lists always travel, empty ones included, because Figma's default paints
   differ by node type.
@@ -106,7 +112,7 @@ the current IR's. `snapshotId()` in the schema module gives the string: `pix:<sh
 | `inkBounds` | rendered bounds of nodes | false (no renderer) | true (A) |
 | `renders` | renders of nodes, for filters Figma lacks, missing images and the visual audit | false | true |
 
-The validator enforces the first six against the content: `overrideKey` needs `overrideKeys`, `publishID` needs
+The validator enforces the first seven against the content: `overrideKey` needs `overrideKeys`, `publishID` needs
 `publishIds`, `sharedSymbolVersion` needs `symbolVersions`, `derived` needs `derivedBoxes`, `inkBounds` needs
 `inkBounds`, and an instance's `overrideBasis` needs the matching override capability. `renders` describes the source
 for the planner and has no content of its own in the IR.
@@ -226,8 +232,11 @@ the variant-local aliases newer Pixso writes.
 
 **Library identity**: `{ publishFile, publishID?, componentKey?, sharedSymbolVersion? }`.
 - `publishFile` is the library's Pixso file key and is required.
-- `publishID` is the master's guid in that library; `componentKey` is 40 lowercase hex. At least one of them is
-  required. The kit map resolves `publishFile@publishID`; an MCP source resolves through `componentKey`.
+- `publishID` is the master's guid in that library; `componentKey` is 40 lowercase hex (A: REWRITE.md shows only
+  that keys match by their 12-hex prefix, and its probe Q4 compares full keys; M1 and M2a confirm the length and
+  case on a real file, and if they differ, every real IR fails validation until this rule is corrected). At least
+  one of them is required. The kit map resolves `publishFile@publishID`; an MCP source resolves through
+  `componentKey`.
 - `sharedSymbolVersion` is opaque and is only compared for equality.
 - Identity is never the name: names drift.
 
@@ -241,7 +250,7 @@ An `INSTANCE` record's `instance`:
 | `properties` | `[{ family, id, value }]`: assignments to the master's family |
 | `overrides` | `[{ path, fields?, swap?, properties? }]` |
 | `overrideBasis` | `"authored"` or `"resolved"`; required when there are overrides, and needs the matching capability |
-| `derived` | `[{ path, size: [w, h], transform: [a, b, tx, c, d, ty] }]`: Pixso's resolved geometry of each sublayer (capability `derivedBoxes`); the verifier's oracle, and the geometry of any fallback frame |
+| `derived` | `[{ path, size: [w, h], transform: [a, b, tx, c, d, ty], fillGeometry?, strokeGeometry? }]`: Pixso's resolved geometry of each sublayer (capability `derivedBoxes`); the verifier's oracle, and the geometry and vector paths of any fallback frame (REWRITE.md §3). `fillGeometry` and `strokeGeometry` are `values` indexes of lists, as on nodes, and are written when the source stores paths for that sublayer |
 
 **Master reference**: `{ guid?, library? }`. It resolves:
 1. to a definition in this IR, when `guid` is the guid of a `COMPONENT` record; or else
@@ -290,7 +299,10 @@ styleKey with different values are two styles; two with the same key and value a
 - `format` is the sniffed format, because some `.png` entries are JPEG or WebP: `png`, `jpeg`, `webp`, `gif` or
   `unknown`.
 
-Every IMAGE paint anywhere in `values` names a listed hash.
+Every IMAGE paint anywhere in `values` has an `imageHash`, and the hash is listed. An IMAGE paint without one
+(Figma allows `imageHash: null`) is refused, because it would be exactly the empty fill a missing image must never
+become. A source image paint that names no image at all has not been seen so far (A); if the reader meets one, its
+handling is decided then and recorded here, with a version change if the format changes.
 
 ## 12. Fonts
 
@@ -358,7 +370,7 @@ most 200 errors are listed. It checks:
   type; the first hop of each override and of each derived box is a layer of the master; one override entry per
   path; and no instance sits inside its own master;
 - styles: signatures, and identity unique per styleKey;
-- images: every IMAGE paint is listed; fonts: every `fontName` is listed;
+- images: every IMAGE paint has a hash and the hash is listed; fonts: every `fontName` is listed;
 - notes: codes from the vocabulary;
 - capabilities: the content claims nothing the header does not declare.
 

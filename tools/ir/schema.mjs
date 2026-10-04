@@ -4,8 +4,11 @@
 //   import { validateIR } from "./ir/schema.mjs";
 //   const { ok, errors } = validateIR(ir);      // errors: [{ path: "nodes[3].parent", message }]
 //
-// Dependency-free and free of Node built-ins on purpose: the same file has to be bundleable into
-// the plugin later, and the runner refuses an IR before anything is built, not after.
+// Dependency-free, free of Node built-ins, and free of TextEncoder and BigInt, which the plugin's
+// main-thread sandbox may lack: the runner refuses an IR before anything is built, and the plugin
+// may want the same check later. tools/test-ir.mjs runs it in a context without them. Its syntax
+// is ES2015 (const, arrow functions, Map, Set, for-of); nothing in REWRITE.md §9 has checked that
+// syntax in Figma's sandbox yet, so bundling it into the plugin needs that check (or a transpile).
 //
 // What it checks is structure and reference integrity — the things that, wrong, make the builder
 // do something silently different from what the reader meant: an unknown format or version, the
@@ -111,6 +114,9 @@ export const REASON_CODE_LIST = Object.keys(REASON_CODES);
 
 // ---------- helpers ----------
 const GUID = /^\d+:\d+$/;
+// An image hash is a SHA-1. A componentKey is assumed (A) to be 40 lowercase hex as well: the
+// plan only shows that keys match by their 12-hex prefix (REWRITE.md §3), and Q4 checks full keys.
+// M1/M2a confirm it on a real file; if real keys differ, every real IR fails here, loudly.
 const HEX40 = /^[0-9a-f]{40}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
 const FILE_KEY = /^[A-Za-z0-9_-]{1,128}$/;
@@ -134,13 +140,36 @@ export function canonicalJSON(v) {
   return s === undefined ? "null" : s;
 }
 
+// FNV-1a 64 over the UTF-8 bytes of a string, as 16 hex digits. Written without TextEncoder and
+// BigInt (see the top of this file): the UTF-8 is encoded by hand (a lone surrogate becomes U+FFFD,
+// as TextEncoder does), and the 64-bit state is two 32-bit halves. The prime is 2^40 + 0x1b3, so
+// h * prime = h * 0x1b3 + (h << 40); each half times 0x1b3 stays below 2^41, exact in a double.
+export function fnv1a64(str) {
+  let hi = 0xcbf29ce4, lo = 0x84222325;
+  const step = (b) => {
+    lo = (lo ^ b) >>> 0;
+    const l = lo * 0x1b3;
+    hi = (hi * 0x1b3 + Math.floor(l / 4294967296) + ((lo << 8) >>> 0)) >>> 0;
+    lo = l >>> 0;
+  };
+  for (let i = 0; i < str.length; i++) {
+    let c = str.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff && i + 1 < str.length && str.charCodeAt(i + 1) >= 0xdc00 && str.charCodeAt(i + 1) <= 0xdfff) {
+      c = 0x10000 + ((c - 0xd800) << 10) + (str.charCodeAt(i + 1) - 0xdc00);
+      i++;
+    } else if (c >= 0xd800 && c <= 0xdfff) c = 0xfffd;
+    if (c < 0x80) step(c);
+    else if (c < 0x800) { step(0xc0 | (c >> 6)); step(0x80 | (c & 63)); }
+    else if (c < 0x10000) { step(0xe0 | (c >> 12)); step(0x80 | ((c >> 6) & 63)); step(0x80 | (c & 63)); }
+    else { step(0xf0 | (c >> 18)); step(0x80 | ((c >> 12) & 63)); step(0x80 | ((c >> 6) & 63)); step(0x80 | (c & 63)); }
+  }
+  return ("0000000" + hi.toString(16)).slice(-8) + ("0000000" + lo.toString(16)).slice(-8);
+}
+
 // A style's value signature: FNV-1a 64 over the UTF-8 of its canonical JSON. Identity, not
 // security; it keeps two copies of one styleKey with different values apart (REWRITE.md §3).
 export function valueSignature(v) {
-  const bytes = new TextEncoder().encode(canonicalJSON(v));
-  let h = 0xcbf29ce484222325n;
-  for (let i = 0; i < bytes.length; i++) { h ^= BigInt(bytes[i]); h = (h * 0x100000001b3n) & 0xffffffffffffffffn; }
-  return "fnv1a64:" + h.toString(16).padStart(16, "0");
+  return "fnv1a64:" + fnv1a64(canonicalJSON(v));
 }
 
 // The string every built node is stamped with (pxSnap): a stamped root is resumed only when its
@@ -570,7 +599,8 @@ export function validateIR(ir, options) {
     const famGuid = familyOfComp(ci);
     const fam = famGuid ? families.get(famGuid) : null;
     for (const f of Object.keys(refs)) {
-      if (!PROPERTY_REF_FIELDS[f]) { err(P + "." + f, "a layer binds only " + Object.keys(PROPERTY_REF_FIELDS).join(", ")); continue; }
+      // An own-property test: the key is the IR's, and "constructor" is not a field.
+      if (!Object.prototype.hasOwnProperty.call(PROPERTY_REF_FIELDS, f)) { err(P + "." + f, "a layer binds only " + Object.keys(PROPERTY_REF_FIELDS).join(", ")); continue; }
       const d = fam ? fam.get(refs[f]) : null;
       if (!d) err(P + "." + f, "no property " + show(refs[f]) + " in family " + famGuid);
       else if (d.def.type !== PROPERTY_REF_FIELDS[f]) err(P + "." + f, f + " binds a " + PROPERTY_REF_FIELDS[f] + " property; " + show(refs[f]) + " is " + d.def.type);
@@ -634,11 +664,14 @@ export function validateIR(ir, options) {
       else inst.derived.forEach((d, j) => {
         const D = P + ".derived[" + j + "]";
         if (!isObj(d)) { err(D, "must be an object"); return; }
-        closed(d, ["path", "size", "transform"], D);
+        // A fallback frame takes geometry and vector paths from derivedSymbolData (REWRITE.md §3),
+        // so an entry may carry the sublayer's fill and stroke geometry, interned like node props.
+        closed(d, ["path", "size", "transform", "fillGeometry", "strokeGeometry"], D);
         if (!Array.isArray(d.path) || d.path.length === 0 || !d.path.every(isGuid)) err(D + ".path", "a guidPath is a non-empty array of guids");
         else firstHop(d.path[0], D + ".path[0]");
         if (!(Array.isArray(d.size) && d.size.length === 2 && d.size.every(isNum))) err(D + ".size", "must be [width, height]");
         if (!(Array.isArray(d.transform) && d.transform.length === 6 && d.transform.every(isNum))) err(D + ".transform", "must be six numbers [a, b, tx, c, d, ty]");
+        checkFields(d, D);
       });
     }
   });
@@ -691,12 +724,16 @@ export function validateIR(ir, options) {
     if (m.format !== undefined && IMAGE_FORMATS.indexOf(m.format) < 0) err(P + ".format", "must be one of " + IMAGE_FORMATS.join(", "));
   });
   // Every image paint, wherever it sits in values, names a listed image: a missing image is a
-  // counted placeholder later, never an empty fill, and that needs the hash on the list.
+  // counted placeholder later, never an empty fill, and that needs the hash on the list. An image
+  // paint with no hash at all (Figma allows imageHash null) would be exactly that empty fill.
   values.forEach((v, i) => {
     (function walk(x, P) {
       if (Array.isArray(x)) { x.forEach((y, j) => walk(y, P + "[" + j + "]")); return; }
       if (!isObj(x)) return;
-      if (x.type === "IMAGE" && x.imageHash !== undefined && x.imageHash !== null && !hashes.has(x.imageHash)) err(P + ".imageHash", show(x.imageHash) + " is not in images");
+      if (x.type === "IMAGE") {
+        if (!isStr(x.imageHash)) err(P + ".imageHash", "an IMAGE paint names its image's hash; got " + show(x.imageHash) + " (a missing image is a placeholder later, never an empty fill)");
+        else if (!hashes.has(x.imageHash)) err(P + ".imageHash", show(x.imageHash) + " is not in images");
+      }
       for (const k of Object.keys(x)) walk(x[k], P + "." + k);
     })(v, "values[" + i + "]");
   });

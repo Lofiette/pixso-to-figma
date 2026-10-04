@@ -10,7 +10,8 @@ import { readFileSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { validateIR, valueSignature, snapshotId, canonicalJSON, REASON_CODES } from "./ir/schema.mjs";
+import { runInNewContext } from "node:vm";
+import { validateIR, valueSignature, fnv1a64, snapshotId, canonicalJSON, REASON_CODES } from "./ir/schema.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
@@ -143,6 +144,8 @@ if (example) {
   expectError("a paint style used as a text style", mut(rich, (ir) => { ir.nodes[3].props.textStyle = 0; }), "nodes[3].props.textStyle");
   expectError("a text range outside the characters", mut(rich, (ir) => { ir.nodes[3].props.textRanges[0].end = 99; }), "nodes[3].props.textRanges[0]");
   expectError("an image paint whose hash is not listed", mut(rich, (ir) => { ir.images = []; }), "values[2][0].imageHash");
+  expectError("an image paint with no hash", mut(rich, (ir) => { delete ir.values[2][0].imageHash; }), "values[2][0].imageHash", true);
+  expectError("an image paint whose hash is null", mut(rich, (ir) => { ir.values[2][0].imageHash = null; }), "values[2][0].imageHash", true);
   expectError("a font that is not declared", mut(rich, (ir) => { ir.fonts = []; }), "nodes[3].props.fontName");
   expectError("a value interned twice", mut(rich, (ir) => { ir.values.push({ style: "Regular", family: "Inter" }); }), "values[5]");
   expectError("fills pointing at a value that is not a list", mut(rich, (ir) => { ir.nodes[0].props.fills = 3; }), "nodes[0].props.fills");
@@ -150,6 +153,11 @@ if (example) {
   expectError("a page and a node sharing a guid", mut(rich, (ir) => { ir.pages[1].guid = "2:30"; }), "nodes[9].guid");
   expectError("a style and a node sharing a guid", mut(rich, (ir) => { ir.styles[0].guid = "1:13"; }), "styles[0].guid");
   expectError("a derived box outside the master", mut(rich, (ir) => { ir.nodes[1].instance.derived[0].path = ["2:31"]; }), "nodes[1].instance.derived[0].path[0]");
+  // A derived entry may carry the sublayer's vector paths, for a fallback frame (REWRITE.md §3).
+  const withPaths = (ir) => { ir.values.push([{ windingRule: "NONZERO", data: "M 0 0 L 88 0 L 88 20 Z" }]); ir.nodes[1].instance.derived[0].fillGeometry = ir.values.length - 1; };
+  expectValid("a derived box with its fill geometry passes", mut(rich, withPaths));
+  expectError("derived geometry index out of range", mut(rich, (ir) => { withPaths(ir); ir.nodes[1].instance.derived[0].strokeGeometry = 40; }), "nodes[1].instance.derived[0].strokeGeometry", true);
+  expectError("derived geometry pointing at an object", mut(rich, (ir) => { ir.nodes[1].instance.derived[0].fillGeometry = 3; }), "nodes[1].instance.derived[0].fillGeometry", true);
   expectError("a note with an empty path", mut(rich, (ir) => { ir.notes[1].path = []; }), "notes[1].path");
 }
 
@@ -182,6 +190,14 @@ if (example) {
   expectError("a component record with no definition", mut(rich, (ir) => { ir.components.pop(); }), "nodes[9]");
   expectError("a layer bound to a property of the wrong type", mut(rich, (ir) => { ir.sets[0].properties[0].type = "BOOLEAN"; ir.sets[0].properties[0].default = true; ir.nodes[1].instance.properties = []; }), "nodes[6].props.componentPropertyReferences.characters");
   expectError("a layer bound to a property its family lacks", mut(rich, (ir) => { ir.nodes[10].props.componentPropertyReferences.visible = "Label#0:1"; }), "nodes[10].props.componentPropertyReferences.visible");
+  for (const f of ["constructor", "__proto__", "toString"]) {
+    const ir = rich();
+    ir.nodes[10].props.componentPropertyReferences = JSON.parse("{" + JSON.stringify(f) + ": \"Dot#0:2\"}");
+    const r = validateIR(ir);
+    const hit = r.errors.find((e) => e.path === "nodes[10].props.componentPropertyReferences." + f);
+    if (!r.ok && hit && /^a layer binds only /.test(hit.message)) ok("a layer bound through " + f + " is refused as an unknown field  ->  " + hit.path + ": " + hit.message);
+    else fail("a layer bound through " + f + ": " + JSON.stringify(r.errors.slice(0, 2)));
+  }
 }
 
 // ---------- capabilities: the content claims nothing the header does not declare ----------
@@ -219,6 +235,55 @@ if (canonicalJSON({ b: 1, a: { d: 2, c: 3 } }) === '{"a":{"c":3,"d":2},"b":1}') 
 else fail("canonicalJSON: " + canonicalJSON({ b: 1, a: { d: 2, c: 3 } }));
 if (snapshotId(header("pix")) === "pix:" + SHA && snapshotId(header("mcp")) === "mcp:SyntheticFileKey000001@2026-01-02T03:04:05Z") ok("snapshot ids for both sources");
 else fail("snapshotId: " + snapshotId(header("pix")) + " / " + snapshotId(header("mcp")));
+
+// FNV-1a 64 without BigInt: the published test vectors, then agreement with a BigInt and
+// TextEncoder reference (Node has both) on strings that exercise every UTF-8 length and lone
+// surrogates, which TextEncoder turns into U+FFFD.
+{
+  const vectors = [["", "cbf29ce484222325"], ["a", "af63dc4c8601ec8c"], ["foobar", "85944171f73967e8"]];
+  const bad = vectors.filter(([s, h]) => fnv1a64(s) !== h);
+  if (bad.length) fail("fnv1a64 test vectors: " + bad.map(([s, h]) => JSON.stringify(s) + " gives " + fnv1a64(s) + ", not " + h).join("; "));
+  else ok("fnv1a64 gives the published FNV-1a 64 test vectors");
+  const ref = (s) => {
+    const bytes = new TextEncoder().encode(s);
+    let h = 0xcbf29ce484222325n;
+    for (const b of bytes) h = ((h ^ BigInt(b)) * 0x100000001b3n) & 0xffffffffffffffffn;
+    return h.toString(16).padStart(16, "0");
+  };
+  // A fixed pseudo-random sequence, so a failure reproduces.
+  let seed = 12345;
+  const rnd = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  const samples = ["Текст ✓", "😀 grin", "\ud800", "a\udc00b", "x\ud83d", "\u007f\u0080߿ࠀ￿"];
+  for (let i = 0; i < 3000; i++) { let s = ""; for (let j = rnd(24); j > 0; j--) s += String.fromCharCode(rnd(65536)); samples.push(s); }
+  const differ = samples.filter((s) => fnv1a64(s) !== ref(s));
+  if (differ.length) fail("fnv1a64 disagrees with the BigInt reference on " + differ.length + " of " + samples.length + " strings, e.g. " + JSON.stringify(differ[0]));
+  else ok("fnv1a64 agrees with a BigInt and TextEncoder reference on " + samples.length + " strings");
+}
+
+// The validator runs where neither TextEncoder nor BigInt nor any Node global exists, as the
+// plugin's main-thread sandbox may be: its source is evaluated in a bare context with those
+// names removed, and must give the same answers as the module.
+{
+  const src = readFileSync(join(HERE, "ir", "schema.mjs"), "utf8");
+  const banned = [[/^\s*import\b/m, "an import"], [/\bTextEncoder\b/, "TextEncoder"], [/\b(?:0x[0-9a-f]+|\d+)n\b/i, "a BigInt literal"], [/\bBigInt\s*\(/, "a BigInt call"]];
+  const uses = (code) => banned.filter(([re]) => re.test(code)).map(([, what]) => what);
+  // Whole-line comments may name what the code avoids; only code counts.
+  const code = src.split(/\r?\n/).filter((l) => !/^\s*\/\//.test(l)).join("\n");
+  const planted = uses("import x from \"y\";\nconst b = new TextEncoder().encode(s);\nlet h = 0xcbf29ce484222325n;\nh ^= BigInt(b);");
+  const found = uses(code);
+  if (planted.length !== banned.length) fail("the sandbox scan misses planted uses: found only " + planted.join(", "));
+  else if (found.length) fail("tools/ir/schema.mjs uses " + found.join(", ") + ", which the plugin sandbox may lack");
+  else ok("tools/ir/schema.mjs has no import, TextEncoder or BigInt (the scan finds all four when planted)");
+  try {
+    const bare = runInNewContext(code.replace(/^export (const|function) /gm, "$1 ") + "\n;({ validateIR, valueSignature });",
+      { TextEncoder: undefined, TextDecoder: undefined, BigInt: undefined });
+    const cases = [example ? ["the docs example", example] : null, ["a broken IR", mut(minimal, (ir) => { ir.nodes[0].parent = 3; ir.header.settings.drift = "x"; })]].filter((c) => c && c[1]);
+    const same = cases.every(([, ir]) => JSON.stringify(bare.validateIR(clone(ir))) === JSON.stringify(validateIR(clone(ir))));
+    const sig = bare.valueSignature({ a: "Текст", b: [1, 2.5] }) === valueSignature({ a: "Текст", b: [1, 2.5] });
+    if (same && sig) ok("the validator gives the same answers in a context without TextEncoder, BigInt or Node globals (" + cases.map((c) => c[0]).join(", ") + ")");
+    else fail("the validator answers differently without TextEncoder and BigInt");
+  } catch (e) { fail("the validator does not run without TextEncoder, BigInt or Node globals: " + e.message); }
+}
 
 // ---------- the vocabulary: code, docs/IR.md and docs/REWRITE.md agree ----------
 {
