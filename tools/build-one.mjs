@@ -29,7 +29,13 @@ let rootId2 = null;
 
 // The second pass repacks, so it needs the same inputs the first pack had. Per-run flags such as
 // PX_PLACE_ABS come from the caller's environment; the per-directory ones are found here.
+// The same two that tools/build-lib.mjs and tools/migrate.mjs set: without PX_PAINTSUB the repack
+// drops the Pixso-rendered stand-ins for filters Figma cannot express, and the kept rebuild shows the
+// unfiltered image.
 if (existsSync(f("textruns.json"))) process.env.PX_TEXTRUNS = f("textruns.json");
+else delete process.env.PX_TEXTRUNS;
+if (existsSync(f("paintsub.json"))) process.env.PX_PAINTSUB = f("paintsub.json");
+else delete process.env.PX_PAINTSUB;
 
 const images = new Map();
 if (existsSync(f("img/manifest.json"))) {
@@ -102,17 +108,23 @@ const finalPayload = rootId2 ? readFileSync(f("payload2.json"), "utf8") : payloa
 console.log("\nverifying " + finalRoot + "…");
 const c = await srv.post(Object.assign({ kind: "verify", rootNodeId: finalRoot }, jobPage), finalPayload);
 srv.close();
-writeFileSync(f("check-report.json"), JSON.stringify(c, null, 2), "utf8");
+writeFileSync(f("check-report.json"), JSON.stringify(c === undefined ? null : c, null, 2), "utf8");
 
-console.log("  nodes            " + c.count + " / " + c.expected);
-console.log("  visible nodes    " + c.visibleNodes);
-// Over a pixel is a defect a person could point at. The half-pixel band below it is on every file and
-// is an engine difference: Figma takes an inside border on one side of an auto-layout frame out of the
-// content box, Pixso does not, so a centred child sits half a border-width low and its whole subtree
-// with it. Both printed — adding them made the verdict fire on almost every object and mean nothing.
-console.log("  out of position  " + (c.visibleOver1 || 0) + " over 1 px (worst " + c.maxPosVisible + ")");
-console.log("  within a pixel   " + Math.max(0, (c.visibleOver05 || 0) - (c.visibleOver1 || 0)));
-console.log("  size delta       max " + c.maxSize + " px");
-const clean = c.count === c.expected && (c.visibleOver1 || 0) === 0;
+// A verify that measured nothing (a root nobody carries, a refused command, an error the window made)
+// has no counts, and undefined equals undefined: it used to print PASS and exit 0.
+const measured = !!c && !c.error && typeof c.count === "number" && typeof c.expected === "number";
+if (!measured) console.log("  verify failed: " + ((c && c.error) || "the report has no node counts"));
+else {
+  console.log("  nodes            " + c.count + " / " + c.expected);
+  console.log("  visible nodes    " + c.visibleNodes);
+  // Over a pixel is a defect a person could point at. The half-pixel band below it is on every file and
+  // is an engine difference: Figma takes an inside border on one side of an auto-layout frame out of the
+  // content box, Pixso does not, so a centred child sits half a border-width low and its whole subtree
+  // with it. Both printed — adding them made the verdict fire on almost every object and mean nothing.
+  console.log("  out of position  " + (c.visibleOver1 || 0) + " over 1 px (worst " + c.maxPosVisible + ")");
+  console.log("  within a pixel   " + Math.max(0, (c.visibleOver05 || 0) - (c.visibleOver1 || 0)));
+  console.log("  size delta       max " + c.maxSize + " px");
+}
+const clean = measured && c.count === c.expected && (c.visibleOver1 || 0) === 0;
 console.log("\n" + (clean ? "PASS" : "NOT CLEAN"));
 process.exit(clean ? 0 : 2);

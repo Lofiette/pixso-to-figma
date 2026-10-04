@@ -36,7 +36,7 @@ import { buildPlugin, generatePlugin, forbiddenIn, DIST_DIR } from "./build-plug
 import { startJobServer, newSecrets, JOB_KINDS } from "./jobserver.mjs";
 import { openSession } from "./session.mjs";
 import { cleanScenario } from "./test-clean.mjs";
-import { buildAll } from "./build-lib.mjs";
+import { buildAll, verdict, staleBuildNote } from "./build-lib.mjs";
 import { BUILDER_SRC } from "./builder4.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -456,6 +456,59 @@ function bareHost(opts) {
   check(lines.some((l) => /2 ids now belonged to something else and were left alone/.test(l)) &&
     lines.some((l) => /1 named id is no longer at the top of a page and was left alone/.test(l)),
     "build-lib says apart which ids clean spared and which are no longer at the top of a page", lines.join(" | ").slice(0, 300));
+}
+
+// Two ways a run used to end on PASS with nothing proved: a verify that measured nothing, and text the
+// second pass could not render. And a report the window made, which names no build, is not a mismatch.
+{
+  const OURS = "aaaaaaaaaaaa";
+  const obj = (name, files) => {
+    const d = join(scratch, name);
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, "payload.json"), JSON.stringify(PAYLOAD || { D: [], S: [], F: [] }));
+    writeFileSync(join(d, "payload-meta.json"), JSON.stringify({ rootId: "9:1" }));
+    for (const k of Object.keys(files || {})) writeFileSync(join(d, k), files[k]);
+    return d;
+  };
+  const run = async (dir, post) => {
+    const lines = [];
+    let results = [], v = {};
+    try {
+      results = await buildAll({ srv: { pluginVersion: OURS, post }, dirs: [dir], pages: null, clean: false, say: (l) => lines.push(l) });
+      v = verdict(results, (l) => lines.push(l));
+    } catch (e) { lines.push("threw " + e.message); }
+    return { lines, results, v, text: lines.join(" | ").slice(0, 400) };
+  };
+
+  // The shape the bundled verifier answers with for a root nobody carries any more, and a report with
+  // no counts at all.
+  for (const [label, answer] of [["an error", { error: "root 9:9 not found even after loading every page", refused: true, plugin: OURS }],
+    ["no node counts", { plugin: OURS }]]) {
+    const r = await run(obj("obj-verify-" + label.replace(/ /g, "-")), async (job) =>
+      job.kind === "build" ? { rootId: "1:9", nodes: 3, plugin: OURS } : answer);
+    check(r.results.length === 1 && /^verify: /.test(r.results[0].error || "") && r.v.errored === 1 && r.v.exact === 0 && r.v.clean === false &&
+      r.lines[r.lines.length - 1] === "NOT CLEAN" && !r.lines.some((l) => /undefined/.test(l)),
+      "a verify that answers with " + label + " is a failed object, not an exact one, and the run is NOT CLEAN", r.text);
+  }
+
+  // ir.json without a tree makes px-lostpaths.mjs fail: a second pass that dies in a child process
+  // with the cause on its stderr, with neither Pixso nor the network involved. The verify is exact.
+  const d2 = obj("obj-text-lost", { "ir.json": JSON.stringify({ meta: { rootId: "9:1" } }) });
+  const r2 = await run(d2, async (job) => job.kind === "build"
+    ? { rootId: "1:9", nodes: 3, plugin: OURS, textOverrideLost: [{ i: 1, name: "t", inked: 40, drew: 20 }], fontSubs: ["Synthetic Sans|Regular"] }
+    : { count: 3, expected: 3, plugin: OURS });
+  const log2 = existsSync(join(d2, "second-pass-error.log")) ? readFileSync(join(d2, "second-pass-error.log"), "utf8") : "";
+  check(r2.v.clean === false && r2.v.wrong === 1 && r2.v.heldByFonts === 0 && r2.results[0] && r2.results[0].textLost === 1 &&
+    r2.lines.some((l) => /second pass failed: TypeError: Cannot read properties/.test(l)) &&
+    r2.lines.some((l) => /1 undisclosed text override\(s\) not rendered: TypeError/.test(l)) && /px-lostpaths\.mjs/.test(log2),
+    "text the second pass could not render keeps the run from PASS (fonts or not), with the cause on the console and the whole error in second-pass-error.log", r2.text);
+
+  // The window's own error reports carry its build; one that names none is not called a mismatch.
+  const windowReports = (UI_SRC.match(/post\("\/report", \{[^\n]*error: [^\n]*plugin: PLUGIN/g) || []).length;
+  check(staleBuildNote({ pluginVersion: OURS }, { error: "no report from the plugin sandbox within 8 minutes" }, "build") === null &&
+    /^WARNING/.test(staleBuildNote({ pluginVersion: OURS }, { rootId: "1:9" }, "build") || "") && windowReports === 2,
+    "an error report that names no build is not called a mismatch, and both error reports the window makes name its build",
+    "window reports naming the build: " + windowReports);
 }
 
 // ============================================================================================

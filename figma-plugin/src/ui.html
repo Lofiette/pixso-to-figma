@@ -246,7 +246,9 @@ function startBeat(id) {
     stopBeat();
     log("job " + id + " produced no report in " + mins + " minutes — telling the runner, still waiting");
     status("Объект не собрался за " + mins + " мин — жду, пока Figma освободится.", "off");
-    post("/report", { id: id, i: 0, n: 1, d: JSON.stringify({ error: "no report from the plugin sandbox within " + mins + " minutes" }) }).catch(() => {});
+    // Named with this window's build like every report code.js makes, so the runner does not take it
+    // for a report from another build (tools/build-lib.mjs staleBuildNote).
+    post("/report", { id: id, i: 0, n: 1, d: JSON.stringify({ error: "no report from the plugin sandbox within " + mins + " minutes", plugin: PLUGIN }) }).catch(() => {});
     // Deliberately NOT freeing the frame here. The sandbox is single-threaded: if it is still
     // working, taking the next job now queues a second payload behind the first and the two jobs
     // interleave — which is how one slow object turned into a second failure that had nothing
@@ -450,7 +452,7 @@ async function poll() {
             stopBeat();
             log("job " + j.id + " failed: " + jerr);
             status("Объект не собрался: " + jerr, "off");
-            try { await post("/report", { id: j.id, report: { error: String(jerr && jerr.message || jerr) } }); } catch (e2) {}
+            try { await post("/report", { id: j.id, report: { error: String(jerr && jerr.message || jerr), plugin: PLUGIN } }); } catch (e2) {}
           }
         } else state({ stage: null, link: "up" });
       } catch (err) {

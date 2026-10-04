@@ -9,6 +9,7 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { headline } from "./extract-lib.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -23,9 +24,14 @@ export function cleanJob(want) {
 // Every report names the plugin build that made it. The runner refuses a plugin window of another
 // build (tools/jobserver.mjs), so a difference here should be impossible — which is exactly why it is
 // said, loudly, if it ever happens: the numbers would come from a builder other than this checkout's.
+//
+// An error report that names no build was not made by the plugin's code: the window makes one when a
+// job times out or throws, the job server one when a report does not parse. It says nothing about
+// which builder ran, so it is not called a mismatch — the error itself is what gets said.
 export function staleBuildNote(srv, report, what) {
   const want = srv && srv.pluginVersion;
   if (!want || !report || typeof report !== "object" || report.plugin === want) return null;
+  if (!report.plugin && report.error) return null;
   return "WARNING: this " + what + " came from plugin build " + (report.plugin || "(not named)") + ", not " + want +
     ", which this runner wrote — close the plugin in Figma, open it again, and run again";
 }
@@ -117,33 +123,55 @@ export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
     const subs = [...new Set(r.fontSubs || [])];
     if (subs.length) say("    fonts substituted: " + subs.join(", "));
 
-    // Second pass for text whose instance override Pixso will not disclose.
+    // Second pass for text whose instance override Pixso will not disclose. It asks Pixso again
+    // (px-textsvg.mjs), so Pixso may be gone by now. A failure keeps the first build, whose text is the
+    // master's where Pixso shows the override, and the verdict counts it: the geometry check cannot see
+    // wrong words. The whole error goes to second-pass-error.log; the console gets its cause.
     const lost = r.textOverrideLost || [];
+    let secondPassError = null;
     if (lost.length) {
       say("    " + lost.length + " undisclosed text override(s) — rendering them from the canvas");
       try {
         const rootId = JSON.parse(readFileSync(f("ir.json"), "utf8")).meta.rootId;
-        const sh = (s, a) => execFileSync("node", [join(HERE, s), ...a], { stdio: "ignore", cwd: HERE });
+        const sh = (s, a) => execFileSync("node", [join(HERE, s), ...a],
+          { cwd: HERE, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
         sh("px-lostpaths.mjs", [f("ir.json"), f("textlost.json"), ...lost.map((t) => String(t.i))]);
         sh("px-textsvg.mjs", [rootId, f("textlost.json"), f("textsvg.json")]);
         sh("pack4.mjs", [f("ir.json"), rootId, f("svg.json"), f("bounds.json"), f("abs.json"),
           f("payload2.png"), f("textink.json"), f("textsvg.json")]);
-        payload = readFileSync(f("payload2.json"), "utf8");
-        const r2 = await srv.post(Object.assign({ kind: "build", cleanupRootId: r.rootId }, jobPage), payload, images, budget);
+        // Verify against the payload that made the tree standing in the file: this one only once it
+        // has built. If the rebuild fails, the first build stays, and so does its payload.
+        const payload2 = readFileSync(f("payload2.json"), "utf8");
+        const r2 = await srv.post(Object.assign({ kind: "build", cleanupRootId: r.rootId }, jobPage), payload2, images, budget);
         const sb2 = staleBuildNote(srv, r2, "second pass");
         if (sb2) say("    " + sb2);
         if (r2.error) throw new Error(r2.error);
         r = r2;
-      } catch (e) { say("    second pass failed: " + e.message + " — keeping the first build"); }
+        payload = payload2;
+      } catch (e) {
+        secondPassError = (e.stderr || e.stdout) ? headline(e.stderr, e.stdout, e.status) : e.message;
+        try { writeFileSync(f("second-pass-error.log"), String(e.stderr || "") + String(e.stdout || "") + String(e.stack || e), "utf8"); }
+        catch (e2) {}
+        say("    second pass failed: " + secondPassError + " — keeping the first build (whole error in second-pass-error.log)");
+      }
     }
     writeFileSync(f("build-report.json"), JSON.stringify(r, null, 2), "utf8");
 
     let c;
     try { c = await srv.post(Object.assign({ kind: "verify", rootNodeId: r.rootId }, jobPage), payload, new Map(), budget); }
     catch (e) { say("    verify: " + e.message); results.push({ name, error: e.message }); continue; }
-    writeFileSync(f("check-report.json"), JSON.stringify(c, null, 2), "utf8");
+    writeFileSync(f("check-report.json"), JSON.stringify(c === undefined ? null : c, null, 2), "utf8");
     const sv = staleBuildNote(srv, c, "verify");
     if (sv) say("    " + sv);
+    // A verify that measured nothing — the root is gone, the command refused, the window or the job
+    // server reported an error in its place — has no counts, and undefined equals undefined: such an
+    // object used to pass as exact. It is a failed object.
+    if (!c || c.error || typeof c.count !== "number" || typeof c.expected !== "number") {
+      const why = "verify: " + ((c && c.error) || "the report has no node counts");
+      say("    " + why);
+      results.push({ name, error: why });
+      continue;
+    }
     // The id the build reported is not always the node the check finds. Say so when it happens
     // rather than letting a silently corrected lookup pass for a clean one.
     if (c.rootRelocated) {
@@ -164,7 +192,8 @@ export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
       posOver: c.visibleOver1 || 0, subPixel: sub, worstPos: c.maxPosVisible,
       maxSize: c.maxSizeVisible || 0, sizeOver: c.sizeOverVisible || 0,
       sizeHidden: Math.max(0, (c.sizeOver || 0) - (c.sizeOverVisible || 0)),
-      failures: (r.failures || []).length, fontSubs: subs });
+      failures: (r.failures || []).length, fontSubs: subs,
+      textLost: (r.textOverrideLost || []).length, secondPassError });
   }
   return results;
 }
@@ -187,9 +216,12 @@ export function verdict(results, say = console.log, losses = []) {
     if (r.subPixel) { subTotal += r.subPixel; subObjects++; }
     if (r.sizeHidden) { hiddenSize += r.sizeHidden; hiddenSizeObjects++; }
     for (const f of r.fontSubs) fontUse.set(f, (fontUse.get(f) || 0) + 1);
-    const ok = r.nodes === r.expected && r.posOver === 0 && r.sizeOver === 0 && r.failures === 0;
+    // Text the second pass left unrendered shows the master's words. The fonts are not its cause, so it
+    // is never held back by them; tools/migrate.mjs counts it the same way.
+    const ok = typeof r.nodes === "number" && r.nodes === r.expected && r.posOver === 0 && r.sizeOver === 0 &&
+      r.failures === 0 && !r.textLost;
     if (ok) exact++;
-    else if (r.fontSubs.length) heldByFonts++;
+    else if (r.fontSubs.length && !r.textLost) heldByFonts++;
     else {
       // Name the thing that is actually wrong. This line reported position no matter what, so 17
       // objects failing on node size were listed as "0 out of position, worst 0 px" — a summary
@@ -200,6 +232,8 @@ export function verdict(results, say = console.log, losses = []) {
       if (r.posOver) why.push(r.posOver + " out of position, worst " + r.worstPos + " px");
       if (r.sizeOver) why.push(r.sizeOver + " the wrong size, worst " + r.maxSize + " px");
       if (r.failures) why.push(r.failures + " property " + (r.failures === 1 ? "failure" : "failures"));
+      if (r.textLost) why.push(r.textLost + " undisclosed text override(s) not rendered" +
+        (r.secondPassError ? ": " + String(r.secondPassError).slice(0, 120) : ""));
       bad.push(r.name + ": " + (why.join("; ") || "no reason recorded — look at check-report.json"));
     }
   }
