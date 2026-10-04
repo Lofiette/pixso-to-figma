@@ -3,17 +3,17 @@
 //   node selftest.mjs
 //
 // Worth having because the two most expensive classes of mistake here are invisible until a run is
-// well under way: the builder and the verifier travel to Figma as text and are compiled there, so a
-// typo in them surfaces as a job that fails minutes later; and the plugin window's state line is
+// well under way: the builder and the verifier are compiled only when Figma loads the plugin, so a
+// typo in them surfaces as a plugin that will not start; and the plugin window's state line is
 // the only thing telling a designer what is happening, so a wrong sentence there is a support
 // conversation. Both are testable on this machine in under a second.
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createContext, runInContext } from "node:vm";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { BUILDER_SRC, VERIFIER_SRC } from "./builder4.js";
+import { buildPlugin } from "./build-plugin.mjs";
 import { startJobServer } from "./jobserver.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -21,21 +21,24 @@ let failed = 0;
 const ok = (m) => console.log("ok   " + m);
 const fail = (m) => { failed++; console.log("FAIL " + m); };
 
-// ---------- 1. the code that travels inside the payload ----------
-const AF = Object.getPrototypeOf(async function () {}).constructor;
-for (const [name, src] of [["builder", BUILDER_SRC], ["verifier", VERIFIER_SRC]]) {
-  try {
-    new AF("figma", "PAY", "ROOT_NODE_ID", "let RESULT=null;\n" + src + "\nreturn RESULT;");
-    ok(name + " compiles (" + src.length + " chars)");
-  } catch (e) { fail(name + " does not compile: " + e.message); }
-}
+// ---------- 1. the plugin as Figma will load it ----------
+// The builder and the verifier no longer travel inside the payload; they are part of the generated
+// plugin, so the generated plugin is what has to compile. Written to a scratch folder, never to
+// figma-plugin/dist, which belongs to whichever runner last started.
+const distDir = mkdtempSync(join(tmpdir(), "pxf-dist-"));
+let built = null;
+try {
+  built = buildPlugin({ outDir: distDir, token: "0".repeat(64) });
+  execFileSync("node", ["--check", built.codePath], { stdio: "pipe" });
+  ok("bundled plugin compiles (build " + built.version + ", " + readFileSync(built.codePath, "utf8").length + " chars)");
+} catch (e) { fail("bundled plugin does not build or compile: " + String(e.stderr || e.message).slice(0, 300)); }
 
 // ---------- 2. the plugin frame ----------
-const html = readFileSync(join(HERE, "..", "figma-plugin", "ui.html"), "utf8");
+const html = built ? readFileSync(built.uiPath, "utf8") : "";
 const a = html.indexOf("<script>"), b = html.lastIndexOf("</script>");
 if (a < 0 || b < 0) fail("ui.html has no script block");
 const js = html.slice(a + 8, b);
-const scratch = join(tmpdir(), "pxf-uicheck.js");
+const scratch = join(distDir, "uicheck.js");
 writeFileSync(scratch, js, "utf8");
 try { execFileSync("node", ["--check", scratch], { stdio: "pipe" }); ok("plugin window parses"); }
 catch (e) { fail("plugin window does not parse: " + String(e.stderr || e.message).slice(0, 200)); }
@@ -93,10 +96,12 @@ try {
 // ---------- 4. progress must be held, not polled ----------
 // On a timer this ran once a minute whenever the plugin window was not in front, which is exactly
 // when someone leaves it to watch extraction.
-const PORT = 3779;
-const srv = startJobServer(PORT);
+// Asked the way the plugin window asks: Origin "null" and this run's key (tools/jobserver.mjs).
+const srv = startJobServer(0);
 await srv.ready;
-const ctl = (q) => fetch("http://127.0.0.1:" + PORT + "/control" + q).then((r) => r.json());
+const PORT = srv.port;
+const asPlugin = { Origin: "null", Authorization: "Bearer " + srv.token };
+const ctl = (q) => fetch("http://127.0.0.1:" + PORT + "/control" + q, { headers: asPlugin }).then((r) => r.json());
 try {
   let t = Date.now();
   const first = await ctl("?rev=0");
@@ -127,7 +132,7 @@ try {
   // ---------- and the runner receives that choice ----------
   const waited = srv.waitForStart();
   await fetch("http://127.0.0.1:" + PORT + "/start", {
-    method: "POST", headers: { "Content-Type": "application/json" },
+    method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, asPlugin),
     body: JSON.stringify({ scope: "selection" }),
   });
   const got = await waited;
@@ -135,6 +140,23 @@ try {
   else ok("the runner receives the scope the button sent");
 } catch (e) { fail("progress endpoint: " + e.message); }
 srv.close();
+rmSync(distDir, { recursive: true, force: true });
+
+// ---------- 5. the .pix reader on the synthetic fixture (tools/test-pix.mjs) ----------
+// It needs zstd, which node:zlib has from Node 22.15. On an older Node that is not a fault in the
+// repository, and the failure says so instead of pointing at the reader.
+const zlib = await import("node:zlib");
+if (typeof zlib.zstdCompressSync !== "function") fail("this Node (" + process.version + ") has no zstd — the .pix reader needs Node 22.15 or newer");
+else { try { execFileSync(process.execPath, [join(HERE, "test-pix.mjs")], { stdio: "inherit" }); } catch (e) { fail("the .pix reader on the synthetic fixture (tools/test-pix.mjs)"); } }
+
+// ---------- 6. the IR schema and the repository's data hygiene, each a script of its own ----------
+for (const t of ["test-ir.mjs", "test-hygiene.mjs"]) { try { process.stdout.write(execFileSync(process.execPath, [join(HERE, t)], { encoding: "utf8" })); } catch (e) { process.stdout.write(String(e.stdout || "")); fail(t + " failed"); } }
+
+// ---------- 7. the Pixso channel: object states, full errors, circuit breaker (tools/test-mcp.mjs) ----------
+try { execFileSync(process.execPath, [join(HERE, "test-mcp.mjs")], { stdio: "inherit" }); } catch (e) { fail("test-mcp.mjs: the Pixso channel checks failed, see above"); }
+
+// ---------- 8. the plugin's fixed commands and the runner's door: tools/test-plugin.mjs ----------
+try { console.log(""); execFileSync("node", [join(HERE, "test-plugin.mjs")], { stdio: "inherit" }); } catch (e) { fail("tools/test-plugin.mjs failed (exit " + e.status + ")"); }
 
 console.log("");
 console.log(failed ? failed + " check" + (failed === 1 ? "" : "s") + " FAILED" : "all checks pass");

@@ -9,36 +9,31 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { headline } from "./extract-lib.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-// The code that decides what --clean is allowed to delete, as a function so it can be tested against
-// nodes made for the purpose rather than trusted the first time it runs over a designer's file.
-// `want` is one entry per object about to be rebuilt: { src } the Pixso id it came from, { id } the
-// Figma id an earlier run recorded for it.
-export function cleanScript(want) {
-  return [
-    "const want = " + JSON.stringify(want) + ";",
-    "await figma.loadAllPagesAsync();",
-    "const srcs = {}; for (const w of want) if (w.src) srcs[w.src] = 1;",
-    "const stamp = function (n) { try { return n.getPluginData('pxSrc'); } catch (e) { return ''; } };",
-    "let gone = 0, spared = 0;",
-    "const doomed = [];",
-    // Everything stamped with a source this run rebuilds, wherever it sits. This also clears
-    // duplicates an interrupted run left behind, which removing one id each never could.
-    "for (const p of figma.root.children) for (const k of p.children) if (stamp(k) && srcs[stamp(k)]) doomed.push(k);",
-    "for (const w of want) {",
-    "  if (!w.id) continue;",
-    "  const n = await figma.getNodeByIdAsync(w.id);",
-    "  if (!n || n.removed || doomed.indexOf(n) >= 0) continue;",
-    "  const s = stamp(n);",
-    // Unstamped: built before stamping existed, and the id is the only handle there is. Stamped with
-    // something else: the id has gone stale and now points at another object's root. Leave it alone.
-    "  if (!s || (w.src && s === String(w.src))) doomed.push(n); else spared++;",
-    "}",
-    "for (const n of doomed) { try { if (!n.removed) { n.remove(); gone++; } } catch (e) {} }",
-    "RESULT = { removed: gone, of: want.length, spared: spared };",
-  ].join(String.fromCharCode(10));
+// What --clean is allowed to delete is decided in the plugin, by its fixed CLEAN command
+// (figma-plugin/src/code.js), and proved by tools/test-clean.mjs against nodes made for the purpose.
+// This side only says which objects are about to be rebuilt: { src } the Pixso id each came from,
+// { id } the Figma id an earlier run recorded for it. It used to send the deleting code itself.
+export function cleanJob(want) {
+  return { job: { kind: "clean" }, payload: JSON.stringify({ want: want }) };
+}
+
+// Every report names the plugin build that made it. The runner refuses a plugin window of another
+// build (tools/jobserver.mjs), so a difference here should be impossible — which is exactly why it is
+// said, loudly, if it ever happens: the numbers would come from a builder other than this checkout's.
+//
+// An error report that names no build was not made by the plugin's code: the window makes one when a
+// job times out or throws, the job server one when a report does not parse. It says nothing about
+// which builder ran, so it is not called a mismatch — the error itself is what gets said.
+export function staleBuildNote(srv, report, what) {
+  const want = srv && srv.pluginVersion;
+  if (!want || !report || typeof report !== "object" || report.plugin === want) return null;
+  if (!report.plugin && report.error) return null;
+  return "WARNING: this " + what + " came from plugin build " + (report.plugin || "(not named)") + ", not " + want +
+    ", which this runner wrote — close the plugin in Figma, open it again, and run again";
 }
 
 export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
@@ -70,11 +65,22 @@ export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
       if (src || id) want.push({ src: src ? String(src) : null, id: id || null });
     }
     if (want.length) {
-      const V = cleanScript(want);
+      const c = cleanJob(want);
       try {
-        const rc = await srv.post({ kind: "render", rootNodeId: "0:0" }, JSON.stringify({ V }), new Map(), 600000);
+        const rc = await srv.post(c.job, c.payload, new Map(), 600000);
+        if (rc.error) throw new Error(rc.error);
         say("cleared " + (rc.removed || 0) + " of " + want.length + " roots this run will rebuild" +
-          (rc.spared ? " (" + rc.spared + " id" + (rc.spared === 1 ? "" : "s") + " now belonged to something else and was left alone)" : ""));
+          (rc.spared ? " (" + rc.spared + " id" + (rc.spared === 1 ? " now belonged to something else and was" : "s now belonged to something else and were") +
+            " left alone)" : ""));
+        // Not the same as spared. One of these may be a built object the designer moved into a section
+        // or a frame; it is not deleted, so the rebuild will sit beside it.
+        if (rc.notTopLevel) {
+          say("    " + rc.notTopLevel + " named id" + (rc.notTopLevel === 1 ? " is" : "s are") + " no longer at the top of a page and " +
+            (rc.notTopLevel === 1 ? "was" : "were") + " left alone — if a built object was moved into a section or frame, " +
+            "the rebuild will appear beside it; delete the old one by hand");
+        }
+        const sc = staleBuildNote(srv, rc, "clean");
+        if (sc) say("    " + sc);
       } catch (e) { say("could not clear previous builds: " + e.message); }
     }
   }
@@ -107,6 +113,8 @@ export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
     let r;
     try { r = await srv.post(Object.assign({ kind: "build" }, jobPage), payload, images, budget); }
     catch (e) { say("    " + e.message); results.push({ name, error: e.message }); continue; }
+    const sb = staleBuildNote(srv, r, "build");
+    if (sb) say("    " + sb);
     if (r.error) { say("    build failed: " + r.error); results.push({ name, error: r.error }); continue; }
     if (r.rootIdChanged) say("    note: the root's id changed during the build: " + r.rootIdChanged + " -> " + r.rootId);
     // A deliberate trade, so it is said out loud every time it is made.
@@ -115,29 +123,55 @@ export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
     const subs = [...new Set(r.fontSubs || [])];
     if (subs.length) say("    fonts substituted: " + subs.join(", "));
 
-    // Second pass for text whose instance override Pixso will not disclose.
+    // Second pass for text whose instance override Pixso will not disclose. It asks Pixso again
+    // (px-textsvg.mjs), so Pixso may be gone by now. A failure keeps the first build, whose text is the
+    // master's where Pixso shows the override, and the verdict counts it: the geometry check cannot see
+    // wrong words. The whole error goes to second-pass-error.log; the console gets its cause.
     const lost = r.textOverrideLost || [];
+    let secondPassError = null;
     if (lost.length) {
       say("    " + lost.length + " undisclosed text override(s) — rendering them from the canvas");
       try {
         const rootId = JSON.parse(readFileSync(f("ir.json"), "utf8")).meta.rootId;
-        const sh = (s, a) => execFileSync("node", [join(HERE, s), ...a], { stdio: "ignore", cwd: HERE });
+        const sh = (s, a) => execFileSync("node", [join(HERE, s), ...a],
+          { cwd: HERE, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
         sh("px-lostpaths.mjs", [f("ir.json"), f("textlost.json"), ...lost.map((t) => String(t.i))]);
         sh("px-textsvg.mjs", [rootId, f("textlost.json"), f("textsvg.json")]);
         sh("pack4.mjs", [f("ir.json"), rootId, f("svg.json"), f("bounds.json"), f("abs.json"),
           f("payload2.png"), f("textink.json"), f("textsvg.json")]);
-        payload = readFileSync(f("payload2.json"), "utf8");
-        const r2 = await srv.post(Object.assign({ kind: "build", cleanupRootId: r.rootId }, jobPage), payload, images, budget);
+        // Verify against the payload that made the tree standing in the file: this one only once it
+        // has built. If the rebuild fails, the first build stays, and so does its payload.
+        const payload2 = readFileSync(f("payload2.json"), "utf8");
+        const r2 = await srv.post(Object.assign({ kind: "build", cleanupRootId: r.rootId }, jobPage), payload2, images, budget);
+        const sb2 = staleBuildNote(srv, r2, "second pass");
+        if (sb2) say("    " + sb2);
         if (r2.error) throw new Error(r2.error);
         r = r2;
-      } catch (e) { say("    second pass failed: " + e.message + " — keeping the first build"); }
+        payload = payload2;
+      } catch (e) {
+        secondPassError = (e.stderr || e.stdout) ? headline(e.stderr, e.stdout, e.status) : e.message;
+        try { writeFileSync(f("second-pass-error.log"), String(e.stderr || "") + String(e.stdout || "") + String(e.stack || e), "utf8"); }
+        catch (e2) {}
+        say("    second pass failed: " + secondPassError + " — keeping the first build (whole error in second-pass-error.log)");
+      }
     }
     writeFileSync(f("build-report.json"), JSON.stringify(r, null, 2), "utf8");
 
     let c;
     try { c = await srv.post(Object.assign({ kind: "verify", rootNodeId: r.rootId }, jobPage), payload, new Map(), budget); }
     catch (e) { say("    verify: " + e.message); results.push({ name, error: e.message }); continue; }
-    writeFileSync(f("check-report.json"), JSON.stringify(c, null, 2), "utf8");
+    writeFileSync(f("check-report.json"), JSON.stringify(c === undefined ? null : c, null, 2), "utf8");
+    const sv = staleBuildNote(srv, c, "verify");
+    if (sv) say("    " + sv);
+    // A verify that measured nothing — the root is gone, the command refused, the window or the job
+    // server reported an error in its place — has no counts, and undefined equals undefined: such an
+    // object used to pass as exact. It is a failed object.
+    if (!c || c.error || typeof c.count !== "number" || typeof c.expected !== "number") {
+      const why = "verify: " + ((c && c.error) || "the report has no node counts");
+      say("    " + why);
+      results.push({ name, error: why });
+      continue;
+    }
     // The id the build reported is not always the node the check finds. Say so when it happens
     // rather than letting a silently corrected lookup pass for a clean one.
     if (c.rootRelocated) {
@@ -158,14 +192,20 @@ export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
       posOver: c.visibleOver1 || 0, subPixel: sub, worstPos: c.maxPosVisible,
       maxSize: c.maxSizeVisible || 0, sizeOver: c.sizeOverVisible || 0,
       sizeHidden: Math.max(0, (c.sizeOver || 0) - (c.sizeOverVisible || 0)),
-      failures: (r.failures || []).length, fontSubs: subs });
+      failures: (r.failures || []).length, fontSubs: subs,
+      textLost: (r.textOverrideLost || []).length, secondPassError });
   }
   return results;
 }
 
 // A font this machine does not have is not a defect in the migration and must not be presented as
 // one — but it must not be hidden either, or a run reads as broken when the algorithm did its job.
-export function verdict(results, say = console.log) {
+//
+// `losses` are the objects that never reached the build: their extraction failed, or the run never
+// got to them (extract-lib.mjs unextracted(states.json)). They used to be invisible here, because the
+// list of what to build names only the successes — so a run that lost 249 of 577 objects could still
+// end on PASS. Each one is a failed object now, named with the first line of its error.
+export function verdict(results, say = console.log, losses = []) {
   let exact = 0, heldByFonts = 0, wrong = 0, errored = 0, relocated = 0, subTotal = 0, subObjects = 0;
   let hiddenSize = 0, hiddenSizeObjects = 0;
   const fontUse = new Map();
@@ -176,9 +216,12 @@ export function verdict(results, say = console.log) {
     if (r.subPixel) { subTotal += r.subPixel; subObjects++; }
     if (r.sizeHidden) { hiddenSize += r.sizeHidden; hiddenSizeObjects++; }
     for (const f of r.fontSubs) fontUse.set(f, (fontUse.get(f) || 0) + 1);
-    const ok = r.nodes === r.expected && r.posOver === 0 && r.sizeOver === 0 && r.failures === 0;
+    // Text the second pass left unrendered shows the master's words. The fonts are not its cause, so it
+    // is never held back by them; tools/migrate.mjs counts it the same way.
+    const ok = typeof r.nodes === "number" && r.nodes === r.expected && r.posOver === 0 && r.sizeOver === 0 &&
+      r.failures === 0 && !r.textLost;
     if (ok) exact++;
-    else if (r.fontSubs.length) heldByFonts++;
+    else if (r.fontSubs.length && !r.textLost) heldByFonts++;
     else {
       // Name the thing that is actually wrong. This line reported position no matter what, so 17
       // objects failing on node size were listed as "0 out of position, worst 0 px" — a summary
@@ -189,6 +232,8 @@ export function verdict(results, say = console.log) {
       if (r.posOver) why.push(r.posOver + " out of position, worst " + r.worstPos + " px");
       if (r.sizeOver) why.push(r.sizeOver + " the wrong size, worst " + r.maxSize + " px");
       if (r.failures) why.push(r.failures + " property " + (r.failures === 1 ? "failure" : "failures"));
+      if (r.textLost) why.push(r.textLost + " undisclosed text override(s) not rendered" +
+        (r.secondPassError ? ": " + String(r.secondPassError).slice(0, 120) : ""));
       bad.push(r.name + ": " + (why.join("; ") || "no reason recorded — look at check-report.json"));
     }
   }
@@ -200,11 +245,16 @@ export function verdict(results, say = console.log) {
     }
     say("  Install them, restart Figma (it scans fonts only at startup), and run again.");
   }
+  const failedEx = losses.filter((l) => l.state === "failed");
+  const skippedEx = losses.filter((l) => l.state !== "failed");
+  const clip = (s) => { s = String(s || ""); return s.length > 200 ? s.slice(0, 199) + "…" : s; };
   say("");
-  say("exact                    " + exact + " of " + results.length);
+  say("exact                    " + exact + " of " + (results.length + losses.length));
   if (heldByFonts) say("held back by fonts       " + heldByFonts + "   (not a migration defect)");
   if (wrong) say("wrong, fonts all present " + wrong + "   <- these are the real ones");
   if (errored) say("failed to build          " + errored);
+  if (failedEx.length) say("failed to extract        " + failedEx.length + "   (never reached Figma; full text in each extract-error.log)");
+  if (skippedEx.length) say("not extracted            " + skippedEx.length + "   (the run did not get to them)");
   // Not a defect in the result — the object was built and checked. It is a defect in the handle,
   // and it stays visible until it is understood.
   if (relocated) say("root found by stamp      " + relocated + "   (the id the build reported had gone stale)");
@@ -218,11 +268,15 @@ export function verdict(results, say = console.log) {
     "   (an inside border on one side of an auto-layout frame:");
   if (subTotal) say("                         Figma takes it out of the content box and Pixso does not)");
   for (const b of bad.slice(0, 10)) say("   " + b);
-  const clean = wrong === 0 && errored === 0 && results.length > 0;
+  // Every one named, not the first ten: these never reached Figma at all.
+  for (const l of failedEx) say("   " + l.name + ": " + clip(l.error));
+  for (const l of skippedEx) say("   " + l.name + ": " + clip(l.error));
+  const clean = wrong === 0 && errored === 0 && losses.length === 0 && results.length > 0;
   say("");
   // A run that built nothing must not report PASS. It said so, and "PASS" over an empty list is the
-  // most misleading thing this summary could print.
-  if (!results.length) say("NOTHING BUILT — there was nothing to build, or every object was skipped");
+  // most misleading thing this summary could print. Nor may a run that lost objects on the way in.
+  if (losses.length) say("NOT CLEAN" + (results.length ? "" : " — nothing was built"));
+  else if (!results.length) say("NOTHING BUILT — there was nothing to build, or every object was skipped");
   else say(clean ? (heldByFonts ? "PASS apart from the missing fonts" : "PASS") : "NOT CLEAN");
-  return { exact, heldByFonts, wrong, errored, clean };
+  return { exact, heldByFonts, wrong, errored, failedExtract: failedEx.length, notExtracted: skippedEx.length, clean };
 }

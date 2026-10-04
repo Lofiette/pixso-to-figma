@@ -4,12 +4,12 @@
 //
 // The verifier measures geometry, and geometry has been clean through defects that changed what
 // the page looks like — per-side strokes, per-range text fills, a paint that silently failed.
-// Only a render catches those. The Figma side goes through the runner plugin, which executes
-// whatever the payload's V slot contains, so this needs no plugin change.
+// Only a render catches those. The Figma side goes through the runner plugin's fixed RENDER command,
+// operation "export": the node and the scale travel as data, never as code.
 import { writeFileSync, mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { startJobServer } from "./jobserver.mjs";
+import { openSession, waitForPlugin } from "./session.mjs";
 import { focusFigma } from "./focus-figma.mjs";
 
 const [, , PX_ID, FIG_ID, OUT = "../out/visual", SCALE = "1"] = process.argv;
@@ -33,20 +33,16 @@ const pxFile = join(OUT, "pixso.png");
 writeFileSync(pxFile, Buffer.from(pxOut.d, "base64"));
 console.log("  " + pxOut.w + " x " + pxOut.h + ", " + pxOut.bytes + " bytes -> " + pxFile);
 
-const figSrc = [
-  "const n = await figma.getNodeByIdAsync(" + JSON.stringify(FIG_ID) + ");",
-  "if (!n || n.removed) { RESULT = { e: 'not found' }; } else {",
-  "  const by = await n.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: " + SCALE + " } });",
-  "  RESULT = { w: n.width, h: n.height, bytes: by.length, d: figma.base64Encode(by) };",
-  "}",
-].join(NL);
+const figJob = { op: "export", id: String(FIG_ID), constraint: { type: "SCALE", value: Number(SCALE) } };
 
 // Rasterisation only happens in the front window, and every render here depends on it.
 console.log("figma window: " + focusFigma());
-const srv = startJobServer(3778);
-await srv.ready;
+const srv = await openSession();
+// A window left open from the last tool holds the last key and has to be given this one first.
+try { await waitForPlugin(srv); }
+catch (e) { console.error(e.message + " — figma render not attempted"); srv.close(); process.exit(1); }
 console.log("rendering Figma " + FIG_ID + " — the runner plugin must be open…");
-const r = await srv.post({ kind: "render", rootNodeId: FIG_ID }, JSON.stringify({ V: figSrc }), new Map(), 300000);
+const r = await srv.post({ kind: "render" }, JSON.stringify(figJob), new Map(), 300000);
 srv.close();
 if (!r || r.e || !r.d) { console.error("figma render failed: " + JSON.stringify(r).slice(0, 300)); process.exit(1); }
 const figFile = join(OUT, "figma.png");

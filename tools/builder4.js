@@ -1,5 +1,8 @@
-// Builder body. Shipped INSIDE the PNG carrier as PAY.B and eval'd by the bootstrap.
-// Globals available when it runs: figma, PAY (={D,S,F,B}).
+// Builder body. tools/build-plugin.mjs pastes it into the plugin as the body of an ordinary async
+// function, PXF_BUILD(figma, PAY), so it is compiled once when Figma loads the plugin and never sent
+// over the network; tools/bootstrap.mjs pastes it the same way into code for the use_figma channel.
+// What it can see when it runs: figma, PAY (={D,S,F,R,XY} from tools/pack4.mjs, plus IMG from the
+// host), and the standard globals — nothing of the host's. It assigns RESULT.
 export const BUILDER_SRC = `
 const REPORT = { nodes: 0, svg: 0, failures: [], fontSubs: [], rtFail: 0, textPinned: 0, textOverrideLost: [], textUnderSubstitutedFont: [] };
 // family|style -> true once a font failed to load and the fallback was used. A substituted
@@ -726,7 +729,7 @@ REPORT.rootSize = { w: Math.round(root.width), h: Math.round(root.height) };
 RESULT = REPORT;
 `;
 
-// Verifier body. Shipped as PAY.V. Globals: figma, PAY. Set ROOT_NODE_ID before eval.
+// Verifier body. Bundled the same way, as PXF_VERIFY(figma, PAY, ROOT_NODE_ID). It assigns RESULT.
 export const VERIFIER_SRC = `
 const F = PAY.F;
 // The verifier only reads, so its yields are purely so Figma does not kill it: rationed by the

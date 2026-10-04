@@ -40,15 +40,19 @@ Or the steps separately, from `tools/`:
 ```
 node px-pages.mjs ../out/mine/pages.json
 node migrate-file.mjs ../out/mine/pages.json ../out/mine/obj
-node repack-all.mjs ../out/mine/obj/dirs.txt        # after any builder or packer change
+node repack-all.mjs ../out/mine/obj/dirs.txt        # after any packer change
 PX_PLACE_ABS=1 node build-all.mjs --clean --pages ../out/mine/pages.json --dirs ../out/mine/obj/dirs.txt
 node coverage.mjs --dirs ../out/mine/obj/dirs.txt
 node visual-all.mjs ../out/mine/obj/dirs.txt ../out/mine/vis 700
 ```
 
 Extraction needs Pixso desktop with its MCP on `127.0.0.1:3667`. Building needs the
-`pix-to-fig runner` plugin open in the target Figma file. **A change to `builder4.js` or `pack4.mjs`
-reaches Figma only through `repack-all.mjs`** — both travel inside the payload.
+`pix-to-fig runner` plugin open in the target Figma file, opened after the runner started (or given the
+pairing code it prints). **A change to `pack4.mjs` reaches Figma only through `repack-all.mjs`**; a change
+to `builder4.js` reaches it once the runner restarts (it rebuilds the plugin in `figma-plugin/dist/`
+with the builder bundled in) and the plugin is opened again. The plugin no longer runs code that arrives in a job.
+A plugin window opened before such a change is refused by the runner (409, by build id) and asks to be
+reopened; the pairing code does not get it in. Every report carries `plugin`, the build that made it.
 
 ## The two things to understand before touching anything
 

@@ -73,3 +73,10 @@ tools/count-pages.mjs
 tools/t-noimg.mjs
 tools/_*.js
 _pages.js
+
+# Private artefacts (docs/REWRITE.md §8). The generated plugin carries a per-run token, a kit map
+# names real components and keys, and a .pix is a whole design file (the synthetic fixture is made in
+# memory, never on disk here). tools/test-hygiene.mjs fails if any of them is ever tracked.
+figma-plugin/dist/
+*.kitmap.json
+*.pix
