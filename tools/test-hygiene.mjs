@@ -3,12 +3,14 @@
 //   node tools/test-hygiene.mjs
 //
 // It fails when a tracked file
-//   - is a private artefact: the generated plugin (it carries a per-run token) or a kit map (it names
-//     real components and keys);
-//   - is larger than 2 MB, which no source file here is and every real design file is;
-//   - sits under tools/ or docs/ and contains something shaped like a real key: a 22-character
-//     Pixso or Figma file key, or 40 or 64 hex digits (a componentKey, an image's SHA-1, a file's
-//     SHA-256).
+//   - is a private artefact: the generated plugin (it carries a per-run token), a kit map (it names
+//     real components and keys) or a .pix design file;
+//   - is larger than 2 MB, which no source file here is;
+//   - has a path, or text, holding something shaped like a real key: a 22-character Pixso or Figma
+//     file key, or 40 or 64 hex digits (a componentKey, an image's SHA-1, a file's SHA-256). Every
+//     tracked path is checked, binary files and links included, and the text of every tracked text
+//     file wherever it sits: the README and the project log are as public as tools/ and docs/.
+// Names cannot be told by their shape, so a real file's or a product's name is not caught here.
 // Synthetic values used by the docs and tests are allowed by exact value below. Anything else is
 // reported with its file and line, masked, so the report does not repeat the key it found.
 //
@@ -25,13 +27,15 @@ const ok = (m) => console.log("ok   " + m);
 const fail = (m) => { failed++; console.log("FAIL " + m); };
 
 const MAX_BYTES = 2 * 1024 * 1024;
-const SCANNED = ["tools/", "docs/"];
 const PRIVATE = [
   { test: (p) => p.startsWith("figma-plugin/dist/"), what: "the generated plugin, which carries a per-run token" },
   { test: (p) => p.toLowerCase().endsWith(".kitmap.json"), what: "a kit map, which names real components and keys" },
+  // The size limit is no guard here: a vector-only file of a few thousand nodes compresses to well
+  // under 2 MB.
+  { test: (p) => p.toLowerCase().endsWith(".pix"), what: "a .pix design file (the synthetic fixture is made in memory and never committed)" },
 ];
 // Paths .gitignore must ignore, one per private pattern, so the guard cannot quietly disappear.
-const MUST_IGNORE = ["figma-plugin/dist/ui.html", "figma-plugin/dist/code.js", "lib.kitmap.json", "maps/kit.kitmap.json"];
+const MUST_IGNORE = ["figma-plugin/dist/ui.html", "figma-plugin/dist/code.js", "lib.kitmap.json", "maps/kit.kitmap.json", "x.pix"];
 
 // The synthetic values docs/IR.md and the tests use. Exact values only: a pattern here would let a
 // real key through the moment it happened to match.
@@ -130,12 +134,12 @@ if (!tracked) {
   const priv = [];
   for (const t of tracked) for (const p of PRIVATE) if (p.test(t.path)) priv.push(t.path + ": " + p.what);
   if (priv.length) priv.forEach((m) => fail("tracked private artefact " + m));
-  else ok("no tracked file is a generated plugin or a kit map (" + tracked.length + " files)");
+  else ok("no tracked file is a generated plugin, a kit map or a .pix (" + tracked.length + " files)");
   const notIgnored = MUST_IGNORE.filter((p) => {
     try { git(["check-ignore", "--no-index", "-q", p]); return false; } catch (e) { return true; }
   });
   if (notIgnored.length) fail(".gitignore does not ignore " + notIgnored.join(", "));
-  else ok(".gitignore keeps out the generated plugin and kit maps");
+  else ok(".gitignore keeps out the generated plugin, kit maps and .pix files");
 
   // 2. size: the committed blob and the working copy, whichever is larger
   const blobs = tracked.filter((t) => t.mode !== "160000");
@@ -150,11 +154,15 @@ if (!tracked) {
   if (big.length) big.forEach((m) => fail("tracked file over 2 MB: " + m));
   else ok("no tracked file is over 2 MB");
 
-  // 3. key-shaped strings under tools/ and docs/
+  // 3. key-shaped strings in every tracked path and every tracked text file. It looked only inside
+  //    tools/ and docs/, so a key pasted into the README or the project log passed, and so did an
+  //    image named by its SHA-1. The path is checked first, before anything is skipped, and is
+  //    reported with the key masked, like the text.
   let scanned = 0;
   const found = [];
   for (const t of tracked) {
-    if (!SCANNED.some((d) => t.path.startsWith(d)) || t.mode === "120000" || t.mode === "160000") continue;
+    for (const h of scanText(t.path)) found.push(t.path.split(h.value).join(mask(h.value)) + " (its path): " + h.kind + " " + mask(h.value));
+    if (t.mode === "120000" || t.mode === "160000") continue;
     const file = join(ROOT, t.path);
     if (!existsSync(file)) continue;
     const buf = readFileSync(file);
@@ -163,7 +171,7 @@ if (!tracked) {
     for (const h of scanText(buf.toString("utf8"))) found.push(t.path + ":" + h.line + ": " + h.kind + " " + mask(h.value));
   }
   if (found.length) found.forEach((m) => fail("key-shaped value in " + m + " (synthetic values go in SYNTHETIC in tools/test-hygiene.mjs)"));
-  else ok("no key-shaped value in the " + scanned + " text files under " + SCANNED.join(" and "));
+  else ok("no key-shaped value in the " + tracked.length + " tracked paths or the " + scanned + " tracked text files");
 }
 
 console.log("");

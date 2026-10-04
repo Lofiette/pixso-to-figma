@@ -480,6 +480,13 @@ try {
   const r2 = run(bad);
   if (r2.status === 1 && r2.stderr.startsWith("PIX_CORRUPT:") && r2.stdout === "") ok("pix-open refuses the truncated fixture with one PIX_CORRUPT line and prints nothing else");
   else fail("pix-open on the truncated fixture: exit " + r2.status + ", stderr " + JSON.stringify(r2.stderr.slice(0, 200)));
+
+  // A dump holds the file's own names and images, so --out refuses the repository outside out/.
+  const inside = join(HERE, "pxf-dump-refused-" + process.pid);
+  const r6 = run(file, "--out", inside);
+  if (r6.status === 1 && /^refusing to write a \.pix dump inside the repository/.test(r6.stderr) && !existsSync(inside)) {
+    ok("pix-open --out refuses a folder inside the repository and writes nothing there");
+  } else fail("pix-open --out inside the repository: exit " + r6.status + ", stderr " + JSON.stringify(r6.stderr.slice(0, 200)));
 } finally { rmSync(tmp, { recursive: true, force: true }); }
 
 console.log("");

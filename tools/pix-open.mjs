@@ -23,14 +23,27 @@
 // file in a form this does not read) and nothing else: it is checked whole before anything is
 // reported about it. Images are the exception — they are read, and so checked, only when --out
 // writes them; a damaged one gets the same one line, is skipped, and the exit code is 1.
+//
+// What --out writes is the file's own: layer names, images named by their SHA-1, shapes named after
+// layers. So it writes only under out/ (git-ignored) or outside this repository, and refuses anywhere
+// else in it (docs/REWRITE.md §8), as tools/plugin-probe.mjs does.
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, dirname, relative, resolve, isAbsolute, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { decodePath, pathToSVG } from "./kiwi.mjs";
 import { readPix } from "./pix/read.mjs";
 
 const argv = process.argv.slice(2);
 function flag(n) { const i = argv.indexOf(n); if (i < 0) return null; return argv.splice(i, 2)[1]; }
 const OUT = flag("--out");
+if (OUT) {
+  const rel = relative(resolve(dirname(fileURLToPath(import.meta.url)), ".."), resolve(OUT));
+  const outside = rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel);
+  if (!outside && rel.split(sep)[0] !== "out") {
+    console.error("refusing to write a .pix dump inside the repository (" + (rel || ".") + "); use ../out/<name> or a path outside it");
+    process.exit(1);
+  }
+}
 const FILE = argv[0];
 if (!FILE) { console.error("usage: node pix-open.mjs <file.pix> [--out <dir>]"); process.exit(1); }
 
