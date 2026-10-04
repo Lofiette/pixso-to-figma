@@ -1,6 +1,8 @@
 # Pixso -> Figma migration: verified findings
 
-Source file: one real Pixso design file, unnamed here because this repository is public; Pixso plugin API 2.0.0.
+Source file: one real Pixso design file; Pixso plugin API 2.0.0. Its name and file key were removed from this line
+because this repository is public, but the rest of this document has not been cleaned yet: it still quotes real
+section names, interface strings and the name of another real file, which are to be scrubbed separately.
 All numbers below were measured, not estimated. All Pixso access was read-only.
 
 ## The file

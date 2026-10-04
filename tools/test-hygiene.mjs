@@ -43,21 +43,45 @@ const SYNTHETIC = new Set([
   "c0ffee" + "0".repeat(33) + "2",
   "c0ffee" + "0".repeat(33) + "3",
   "da7a" + "0".repeat(35) + "1",
+  // The componentKey of the synthetic .pix fixture in tools/pix/fixture.mjs (branch claude/m0-pix),
+  // listed ahead of that merge so the merged tree passes without a change here.
+  "0f1e2d3c4b5a6978" + "8796a5b4c3d2e1f0" + "0f1e2d3c",
 ]);
 
-// A 22-character run of letters and digits, not part of a longer identifier. Ordinary camelCase
-// identifiers are 22 characters often enough (createBooleanOperation), so a run counts as a key
-// only if it mixes cases and has a digit or at least six capitals; a random base-62 key fails that
-// about once in five thousand.
-const KEY22 = /(?<![A-Za-z0-9_$])[A-Za-z0-9]{22}(?![A-Za-z0-9_$])/g;
+// A 22-character file key. Figma's keys are base 62. Pixso's are most likely base64 of 16 bytes:
+// the one real Pixso key on record has that encoding's length and its last-character signature
+// (16 bytes leave the 22nd character only A, Q, g or w). Base64url keys hold - and _, plain base64
+// keys + and /, so about half of all keys are not runs of letters and digits.
+//
+// A candidate is any 22 characters of [A-Za-z0-9_+/-] with no letter, digit or $ on either side.
+// - _ + / may touch it, so file_<key>, key-<key>-v2, .../design/<key>?page=1 and <key>== are all
+// seen; candidates overlap (a lookahead), so a key is found even when it is glued to its
+// neighbours with the characters it is made of.
+//
+// Ordinary identifiers are 22 characters often enough (createBooleanOperation), so a candidate
+// counts as a key only if it mixes cases and has a digit or at least six capitals. One that holds
+// + or / must also end in A, Q, g or w, because paths are full of slashes.
+//
+// Measured on 200,000 random 16-byte keys per encoding, each in five contexts (quoted, glued with
+// _, in a URL path, glued with -, followed by ==): a base-62 key is missed about once in 7,000,
+// a base64 or base64url key about once in 2,500. The misses are the keys with no digit and fewer
+// than six capitals. Widening the alphabet added no hit on the tracked files.
+const KEY22 = /(?<![A-Za-z0-9$])(?=([A-Za-z0-9_+/-]{22})(?![A-Za-z0-9$]))/g;
 const HEX = /(?<![0-9A-Za-z])(?:[0-9a-fA-F]{64}|[0-9a-fA-F]{40})(?![0-9A-Za-z])/g;
-const looksLikeKey = (s) => /[a-z]/.test(s) && /[A-Z]/.test(s) && (/[0-9]/.test(s) || (s.match(/[A-Z]/g) || []).length >= 6);
+const looksLikeKey = (s) => /[a-z]/.test(s) && /[A-Z]/.test(s) && (/[0-9]/.test(s) || (s.match(/[A-Z]/g) || []).length >= 6) &&
+  (!/[+/]/.test(s) || /[AQgw]$/.test(s));
 const mask = (s) => s.slice(0, 4) + "... (" + s.length + " chars)";
 
 function scanText(text) {
   const hits = [];
   text.split(/\r?\n/).forEach((line, i) => {
-    for (const m of line.matchAll(KEY22)) if (looksLikeKey(m[0]) && !SYNTHETIC.has(m[0])) hits.push({ line: i + 1, kind: "a 22-character file key", value: m[0] });
+    let end = -1; // overlapping candidates: report a key once, not once per window inside it
+    for (const m of line.matchAll(KEY22)) {
+      const s = m[1];
+      if (m.index < end || !looksLikeKey(s) || SYNTHETIC.has(s)) continue;
+      hits.push({ line: i + 1, kind: "a 22-character file key", value: s });
+      end = m.index + s.length;
+    }
     for (const m of line.matchAll(HEX)) if (!SYNTHETIC.has(m[0].toLowerCase())) hits.push({ line: i + 1, kind: m[0].length + " hex digits", value: m[0] });
   });
   return hits;
@@ -65,12 +89,25 @@ function scanText(text) {
 
 // ---------- the detector itself, on planted values that appear nowhere in this file ----------
 {
-  const key = "aB3".repeat(7) + "Q";
-  const hex = "0123456789abcdef".repeat(3).slice(0, 40);
-  const text = ["const k = \"" + key + "\";", "hash: " + hex, "figma.createBooleanOperation(", "SyntheticLibKey0000002", "x".repeat(40)].join("\n");
-  const hits = scanText(text);
-  if (hits.length === 2 && hits[0].line === 1 && hits[1].line === 2) ok("the detector finds a planted key and a planted hash, and passes an identifier and an allowed value");
-  else fail("the detector is wrong on planted values: " + JSON.stringify(hits.map((h) => [h.line, h.kind])));
+  const alnum = "aB3".repeat(7) + "Q";
+  const planted = [
+    ["const k = \"" + alnum + "\";", true],                                       // base 62, quoted
+    ["hash: " + "0123456789abcdef".repeat(3).slice(0, 40), true],                // 40 hex
+    ["figma.createBooleanOperation(", false],                                    // an identifier
+    ["SyntheticLibKey0000002", false],                                           // an allowed value
+    ["x".repeat(40), false],
+    ["Source file: `" + "aB3-".repeat(5) + "xQ`", true],                         // base64url, holds -
+    ["export_" + alnum + ".pix", true],                                          // glued with _
+    ["file_" + "aB_3".repeat(5) + "Zw", true],                                   // base64url glued with _
+    ["https://example.invalid/app/design/" + "aB3/".repeat(5) + "xQ?page=1", true], // base64, holds /
+    ["Lib2/Button/Primary/Sm", false],                                           // a path: + or / and no A Q g w end
+    ["figma-plugin/dist/code.js", false],                                        // a path with no capital
+  ];
+  const hits = scanText(planted.map((p) => p[0]).join("\n"));
+  const want = planted.map((p, i) => (p[1] ? i + 1 : 0)).filter(Boolean);
+  const got = hits.map((h) => h.line);
+  if (JSON.stringify(got) === JSON.stringify(want)) ok("the detector finds " + want.length + " planted keys and hashes (base 62, base64url, base64, glued with _ and -) and passes identifiers, paths and an allowed value");
+  else fail("the detector is wrong on planted values: wanted lines " + want.join(",") + ", got " + JSON.stringify(hits.map((h) => [h.line, h.kind])));
 }
 
 // ---------- the repository ----------
