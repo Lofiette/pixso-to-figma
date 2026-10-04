@@ -493,7 +493,6 @@ Also settled:
 - **7. Test kits** are published in the same experiments project, not to the whole organisation.
 - **10. Сова inputs.** All three Pixso Сова files (UI kit, second library, icons) and one Сова-based product file
   were supplied on 2026-10-04. The icons library already exists in Figma as well.
-
 - **5. Сова map review.** The matcher writes a review page of the pairs it could not decide, with renders of both sides; the owner or a designer of the Сова team confirms them, and the confirmed table (aliases included) is kept with the private «Проверка макета» repository, next to the Сова key lists.
 
 ## 12. Kept and dropped
