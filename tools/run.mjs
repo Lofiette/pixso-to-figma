@@ -189,7 +189,8 @@ try {
     p.stderr.setEncoding("utf8");
     p.stdout.on("data", reader());
     p.stderr.on("data", reader());
-    p.on("close", (code) => resolve(code));
+    // A signal leaves no exit code; name it rather than report "null".
+    p.on("close", (code, signal) => resolve(code === null ? "signal " + signal : code));
   });
 
   // What happened to every object, not just the ones that worked. A states file older than this
@@ -197,14 +198,20 @@ try {
   let states = readStates(join(DIRS, "states.json"));
   if (states && Date.parse(states.started) < exStarted - 1000) states = null;
   const losses = unextracted(states);
-  if (status === EXIT.PIXSO_GONE || status === EXIT.IDENTITY_CHANGED || !states) {
-    // The run stopped before the end of the list: Pixso did not come back, or another file is open
-    // in it now, or the extraction itself crashed. Nothing is built from a stopped run — running it
-    // again resumes from the checkpoint and builds everything at once.
+  // Only a run that got to the end of its list — 0, everything extracted, or 2, some objects failed —
+  // leaves a dirs.txt that belongs to it: the loop writes it last. Anything else is a stopped run,
+  // whatever states.json says: Pixso did not come back (3), another file is open in it now (4), or
+  // the extraction itself crashed or was killed, and the dirs.txt on disk is an earlier run's or
+  // none. Nothing is built from a stopped run — running it again resumes from the checkpoint and
+  // builds everything at once.
+  const reachedEnd = status === EXIT.OK || status === EXIT.SOME_FAILED;
+  if (!reachedEnd || !states) {
+    const how = typeof status === "number" ? "код " + status : status;
     say("");
     if (status === EXIT.IDENTITY_CHANGED) say("Извлечение остановлено: в Pixso открыт другой файл. Собирать не начинаю.");
     else if (status === EXIT.PIXSO_GONE) say("Извлечение остановлено: Pixso не вернулся. Собирать не начинаю.");
-    else say("Извлечение завершилось с ошибкой (код " + status + ") и не записало состояние объектов. Собирать не начинаю.");
+    else if (!states) say("Извлечение завершилось с ошибкой (" + how + ") и не записало состояние объектов. Собирать не начинаю.");
+    else say("Извлечение прервалось с ошибкой (" + how + "), не дойдя до конца списка. Собирать не начинаю.");
     say("");
     say("================ итог ================");
     verdict([], say, losses);
