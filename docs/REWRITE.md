@@ -430,6 +430,27 @@ P1–P20 run in a scratch file (decision 6); P11, P11b, P12 and P15 also need a 
 7). P11's import-only parts (latency; library enabled or not) run early against the published Сова libraries. Q1–Q10
 run before the MCP milestone starts; Q3 and Q10 set the call budget. §10 says which milestone each probe gates.
 
+**Results so far (2026-10-04, through the Figma MCP in a scratch file; C).** The MCP environment differs from our
+plugin in two ways that matter for reading these: it starts with `figma.skipInvisibleInstanceChildren = true` (hidden
+instance sublayers vanish from `children` and `getNodeByIdAsync` returns null for them until it is set to false), and it
+does not support `setPluginData`, so P7, P12 and P17 must run in our own plugin.
+
+| probe | result | consequence |
+|---|---|---|
+| P14 | empty components combine into a set; `addComponentProperty` works before any content exists; an instance created before the content was filled shows it afterwards | the two-phase definition order stands |
+| P15 (first half) | `ComponentNode.key` is readable on a local, unpublished component | the second half (unchanged after publishing) needs decision 7 |
+| P9 | sublayer ids are `I<instance>;<master layer>`, nested ones chain `I<outer>;<nested instance>;<layer>`; after a variant switch the last segment becomes the new master's layer id | ids are computable without reading layout |
+| P16 | `setProperties` on an unexposed nested instance switches its variant | nested variant switches need no swap |
+| P9b | writing a sublayer's current value creates no override | the no-reassert rule holds; echo overrides are harmless but still dropped |
+| P13 | accepted on instance sublayers: fills, strokes, stroke weight per side, stroke align, effects, opacity, blend mode, name, corner radii (per corner too), visibility, text size, fills and auto-resize; a text bound to a property takes `characters` as the property value. Refused with an error: rotation and position (relative transform), constraints. **Silently ignored:** `resize` and `resizeWithoutConstraints` | Pixso size, position and rotation overrides on instance sublayers cannot be expressed: each one is counted (OVERRIDE_FIELD_UNSUPPORTED) and handled by decision 1 (a local copy by default). Size changes are never verified by the absence of an error |
+| P19 | a decoded network with per-vertex `cornerRadius` and per-region fills is accepted and drawn; an open network with no region is not filled even with a node fill | the `fillGeometry` fallback for region-less vectors (§3) is required |
+| P11 | importing a published component by key works **without** enabling its library in the file: 2.4 s first, 1.1 s again, a 154-variant set in 1.4 s; the import is `remote` with the same key | preflight imports must run in parallel batches (latency, P11 parallel) |
+| P11b | sublayer ids of an instance of an imported component are `I<instance>;<kit layer id>`, the kit file's own ids | kit maps record Figma layer ids from the kit file; overrides translate directly |
+| P20 (first half) | `importVariableByKeyAsync` with a Сова Theme variable's key from the kit fails ("not found") in a file without the library enabled | re-run with the variables library enabled in the scratch file (owner's action); until then M5 assumes the library must be enabled |
+
+The Figma Сова kit also uses Figma's `SLOT` node type inside its components; the matcher, the verifier and the IR's
+node-type list must know it.
+
 ## 10. Milestones
 
 Each milestone is one branch and one pull request, accepted by numbers on the test files and on any file the owner
