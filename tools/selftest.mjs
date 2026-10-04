@@ -135,6 +135,7 @@ try {
   else ok("the runner receives the scope the button sent");
 } catch (e) { fail("progress endpoint: " + e.message); }
 srv.close();
+try { execFileSync(process.execPath, [join(HERE, "test-pix.mjs")], { stdio: "inherit" }); } catch (e) { fail("the .pix reader on the synthetic fixture (tools/test-pix.mjs)"); }
 
 console.log("");
 console.log(failed ? failed + " check" + (failed === 1 ? "" : "s") + " FAILED" : "all checks pass");
