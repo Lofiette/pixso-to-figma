@@ -13,7 +13,7 @@ import { deepStrictEqual } from "node:assert";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { zstdCompressSync } from "node:zlib";
+import * as zlib from "node:zlib";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Reader, parseSchema, createDecoder, decodePath, pathToSVG, MAX_DEPTH, UINT } from "./kiwi.mjs";
@@ -25,6 +25,13 @@ import {
 } from "./pix/fixture.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+// zstd and crc32 are built into node:zlib from Node 22.15. On an older Node a named import of them
+// failed at link time with a SyntaxError that named neither; this says what to install.
+if (typeof zlib.zstdCompressSync !== "function" || typeof zlib.crc32 !== "function") {
+  console.log("FAIL the .pix checks need Node 22.15 or newer (built-in zstd); this is node " + process.version);
+  process.exit(1);
+}
+const { zstdCompressSync } = zlib;
 let failed = 0;
 const ok = (m) => console.log("ok   " + m);
 const fail = (m) => { failed++; console.log("FAIL " + m); };

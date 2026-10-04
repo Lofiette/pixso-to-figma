@@ -143,7 +143,11 @@ srv.close();
 rmSync(distDir, { recursive: true, force: true });
 
 // ---------- 5. the .pix reader on the synthetic fixture (tools/test-pix.mjs) ----------
-try { execFileSync(process.execPath, [join(HERE, "test-pix.mjs")], { stdio: "inherit" }); } catch (e) { fail("the .pix reader on the synthetic fixture (tools/test-pix.mjs)"); }
+// It needs zstd, which node:zlib has from Node 22.15. On an older Node that is not a fault in the
+// repository, and the failure says so instead of pointing at the reader.
+const zlib = await import("node:zlib");
+if (typeof zlib.zstdCompressSync !== "function") fail("this Node (" + process.version + ") has no zstd — the .pix reader needs Node 22.15 or newer");
+else { try { execFileSync(process.execPath, [join(HERE, "test-pix.mjs")], { stdio: "inherit" }); } catch (e) { fail("the .pix reader on the synthetic fixture (tools/test-pix.mjs)"); } }
 
 // ---------- 6. the IR schema and the repository's data hygiene, each a script of its own ----------
 for (const t of ["test-ir.mjs", "test-hygiene.mjs"]) { try { process.stdout.write(execFileSync(process.execPath, [join(HERE, t)], { encoding: "utf8" })); } catch (e) { process.stdout.write(String(e.stdout || "")); fail(t + " failed"); } }
