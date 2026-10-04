@@ -2,6 +2,10 @@
 
 ## Now
 
+- **2026-10-04: the rewrite is the plan of record — read `docs/REWRITE.md` first.** Two sources (.pix and MCP), one IR,
+  native components and styles, kit mode. Research notes with internal names are kept outside this repository.
+  Milestones M0–M6 in its §10, owner decisions in §11, probes in §9. Everything below describes the current tool.
+
 - **Task:** Pixso -> Figma migration, 1:1, whole files, no model in the loop.
 - **Status:** five files migrated. Day three went into the *instrument* rather than the algorithm:
   the verdict now distinguishes what a person could see from what only a measurement can, and the
