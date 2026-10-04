@@ -37,8 +37,10 @@ let PAGES = join(WORK, "pages.json");
 let DIRS = join(WORK, "obj");
 
 // The plugin is rebuilt on every start, with a key made for this run written into it, before the port
-// is opened (tools/session.mjs). So the plugin always runs the builder in this checkout, and only a
-// window opened from now on — or one given the code printed below — can talk to this runner.
+// is opened (tools/session.mjs). Only a window opened from now on — or one given the code printed
+// below — can talk to this runner, and only if it runs the plugin build just written: a window opened
+// before a change to the sources is told to close and reopen (409) rather than paired, so every job
+// in this run is built by the builder in this checkout.
 let srv;
 try { srv = await openSession(); }
 catch (e) {

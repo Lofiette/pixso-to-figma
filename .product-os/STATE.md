@@ -47,6 +47,8 @@ Extraction needs Pixso desktop with its MCP on `127.0.0.1:3667`. Building needs 
 pairing code it prints). **A change to `pack4.mjs` reaches Figma only through `repack-all.mjs`**; a change
 to `builder4.js` reaches it once the runner restarts (it rebuilds the plugin in `figma-plugin/dist/`
 with the builder bundled in) and the plugin is opened again. The plugin no longer runs code that arrives in a job.
+A plugin window opened before such a change is refused by the runner (409, by build id) and asks to be
+reopened; the pairing code does not get it in. Every report carries `plugin`, the build that made it.
 
 ## The two things to understand before touching anything
 

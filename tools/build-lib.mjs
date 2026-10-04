@@ -20,6 +20,16 @@ export function cleanJob(want) {
   return { job: { kind: "clean" }, payload: JSON.stringify({ want: want }) };
 }
 
+// Every report names the plugin build that made it. The runner refuses a plugin window of another
+// build (tools/jobserver.mjs), so a difference here should be impossible — which is exactly why it is
+// said, loudly, if it ever happens: the numbers would come from a builder other than this checkout's.
+export function staleBuildNote(srv, report, what) {
+  const want = srv && srv.pluginVersion;
+  if (!want || !report || typeof report !== "object" || report.plugin === want) return null;
+  return "WARNING: this " + what + " came from plugin build " + (report.plugin || "(not named)") + ", not " + want +
+    ", which this runner wrote — close the plugin in Figma, open it again, and run again";
+}
+
 export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
   const pageFor = (rootId) => {
     if (!pages) return null;
@@ -54,7 +64,17 @@ export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
         const rc = await srv.post(c.job, c.payload, new Map(), 600000);
         if (rc.error) throw new Error(rc.error);
         say("cleared " + (rc.removed || 0) + " of " + want.length + " roots this run will rebuild" +
-          (rc.spared ? " (" + rc.spared + " id" + (rc.spared === 1 ? "" : "s") + " now belonged to something else and was left alone)" : ""));
+          (rc.spared ? " (" + rc.spared + " id" + (rc.spared === 1 ? " now belonged to something else and was" : "s now belonged to something else and were") +
+            " left alone)" : ""));
+        // Not the same as spared. One of these may be a built object the designer moved into a section
+        // or a frame; it is not deleted, so the rebuild will sit beside it.
+        if (rc.notTopLevel) {
+          say("    " + rc.notTopLevel + " named id" + (rc.notTopLevel === 1 ? " is" : "s are") + " no longer at the top of a page and " +
+            (rc.notTopLevel === 1 ? "was" : "were") + " left alone — if a built object was moved into a section or frame, " +
+            "the rebuild will appear beside it; delete the old one by hand");
+        }
+        const sc = staleBuildNote(srv, rc, "clean");
+        if (sc) say("    " + sc);
       } catch (e) { say("could not clear previous builds: " + e.message); }
     }
   }
@@ -87,6 +107,8 @@ export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
     let r;
     try { r = await srv.post(Object.assign({ kind: "build" }, jobPage), payload, images, budget); }
     catch (e) { say("    " + e.message); results.push({ name, error: e.message }); continue; }
+    const sb = staleBuildNote(srv, r, "build");
+    if (sb) say("    " + sb);
     if (r.error) { say("    build failed: " + r.error); results.push({ name, error: r.error }); continue; }
     if (r.rootIdChanged) say("    note: the root's id changed during the build: " + r.rootIdChanged + " -> " + r.rootId);
     // A deliberate trade, so it is said out loud every time it is made.
@@ -108,6 +130,8 @@ export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
           f("payload2.png"), f("textink.json"), f("textsvg.json")]);
         payload = readFileSync(f("payload2.json"), "utf8");
         const r2 = await srv.post(Object.assign({ kind: "build", cleanupRootId: r.rootId }, jobPage), payload, images, budget);
+        const sb2 = staleBuildNote(srv, r2, "second pass");
+        if (sb2) say("    " + sb2);
         if (r2.error) throw new Error(r2.error);
         r = r2;
       } catch (e) { say("    second pass failed: " + e.message + " — keeping the first build"); }
@@ -118,6 +142,8 @@ export async function buildAll({ srv, dirs, pages, clean, say = console.log }) {
     try { c = await srv.post(Object.assign({ kind: "verify", rootNodeId: r.rootId }, jobPage), payload, new Map(), budget); }
     catch (e) { say("    verify: " + e.message); results.push({ name, error: e.message }); continue; }
     writeFileSync(f("check-report.json"), JSON.stringify(c, null, 2), "utf8");
+    const sv = staleBuildNote(srv, c, "verify");
+    if (sv) say("    " + sv);
     // The id the build reported is not always the node the check finds. Say so when it happens
     // rather than letting a silently corrected lookup pass for a clean one.
     if (c.rootRelocated) {

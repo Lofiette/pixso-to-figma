@@ -102,6 +102,12 @@ async function cmdVerify(PAY, j) {
 // which also clears duplicates an interrupted run left behind. Only top-level objects of a page are
 // ever removed: that is where every build puts its root, and an id that has come to name a page, a
 // layer deep inside someone's frame, or the document must not take it with it.
+//
+// The report keeps two reasons for leaving a named node alone apart, because they mean different
+// things to the person reading it: `spared` — the id now belongs to another object's root, all is
+// well; `notTopLevel` — the node is no longer at the top of a page (a page, the document, a layer, or
+// a built root the designer moved into a section), and if it is the last case the rebuild will sit
+// beside it as a duplicate.
 async function cmdClean(P) {
   if (!P || !Array.isArray(P.want) || P.want.length > 100000) refuse("clean: expected { want: [...] }");
   var want = [];
@@ -128,16 +134,14 @@ async function cmdClean(P) {
     if (!want[b].id) continue;
     var n = await figma.getNodeByIdAsync(want[b].id);
     if (!n || n.removed || doomed.indexOf(n) >= 0) continue;
-    if (!topLevel(n)) { notTopLevel++; spared++; continue; }
+    if (!topLevel(n)) { notTopLevel++; continue; }
     var s = stampOf(n);
     // Unstamped: built before stamping existed, and the id is the only handle there is. Stamped with
     // something else: the id has gone stale and now points at another object's root. Leave it alone.
     if (!s || (want[b].src && s === String(want[b].src))) doomed.push(n); else spared++;
   }
   for (var d = 0; d < doomed.length; d++) { try { if (!doomed[d].removed) { doomed[d].remove(); gone++; } } catch (e) {} }
-  var out = { removed: gone, of: want.length, spared: spared };
-  if (notTopLevel) out.notTopLevel = notTopLevel;
-  return out;
+  return { removed: gone, of: want.length, spared: spared, notTopLevel: notTopLevel };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -177,6 +181,10 @@ async function renderExport(P) {
     }
     // Newest last: a root is appended to its page, so a leftover duplicate sits ahead of it.
     if (f.length) { n = f[f.length - 1]; relocated = n.id; }
+    // Nothing carries the stamp, and the id names a node stamped with another source: that is another
+    // object's root, and a picture of it would be compared against the wrong source. An unstamped
+    // node is still photographed — a build from before stamping has only its id.
+    else if (n && !n.removed && stampOf(n)) return { e: "the id names another object's root, and nothing carries the stamp asked for" };
   }
   if (!n || n.removed || typeof n.exportAsync !== "function") return { e: "not found" };
   var by = await n.exportAsync({ format: "PNG", constraint: { type: c.type, value: c.value } });
@@ -289,17 +297,35 @@ function stats(xs, asked) {
   return { n: s.length, asked: asked, min: r2(s[0]), median: r2(at(0.5)), p95: r2(at(0.95)), max: r2(s[s.length - 1]) };
 }
 
+// Each step timed on its own gives the spread (min, median, p95, max), but where performance.now is
+// missing the clock is Date.now, whole milliseconds, and a step that takes microseconds reads 0 every
+// time. So the whole series is timed as well (mean = total / steps), and then the step is run back to
+// back until the clock has moved at least BATCH_MS (batch.mean): on a millisecond clock the error is
+// then at most one tick in BATCH_MS, half a percent. Both are bounded by the series' time budget.
+var BATCH_MS = 200, BATCH_MAX = 200000;
 async function series(n, maxMs, step) {
-  var xs = [], t0 = clockNow(), lost = 0;
+  var xs = [], t0 = clockNow(), lost = 0, done = 0;
   for (var i = 0; i < n; i++) {
     var a = clockNow();
     var ok = await step();
+    done++;
     if (ok === false) lost++; else xs.push(clockNow() - a);
     // A setTimeout in a background window can take a whole minute per turn; the series stops at its
     // budget and says how far it got rather than holding the plugin for an hour.
     if (clockNow() - t0 > maxMs) break;
   }
+  var total = clockNow() - t0;
   var out = stats(xs, n);
+  out.totalMs = Math.round(total * 100) / 100;
+  out.mean = done ? Math.round(total / done * 10000) / 10000 : null;
+  var b0 = clockNow(), steps = 0, blost = 0;
+  while (steps < BATCH_MAX && clockNow() - b0 < Math.min(BATCH_MS, maxMs)) {
+    if ((await step()) === false) blost++;
+    steps++;
+  }
+  var bms = clockNow() - b0;
+  out.batch = { steps: steps, ms: Math.round(bms * 100) / 100, mean: steps ? Math.round(bms / steps * 10000) / 10000 : null };
+  if (blost) out.batch.lost = blost;
   if (lost) out.lost = lost;
   return out;
 }
@@ -448,6 +474,9 @@ figma.ui.onmessage = async function (msg) {
     report = { error: String((e3 && e3.message) || e3), stack: String((e3 && e3.stack) || "").slice(0, 900) };
     if (e3 && e3.refused) report.refused = true;
   }
+  // Every report names the plugin build that made it, so a build-report.json says which builder built
+  // it, and the runner can check it is the one it wrote (tools/build-lib.mjs).
+  if (report && typeof report === "object" && !Array.isArray(report) && !own(report, "plugin")) report.plugin = PXF_VERSION;
   sendReport(j.id, report);
   job = null;
 };

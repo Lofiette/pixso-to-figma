@@ -17,6 +17,14 @@
 //   ...except two things that cannot carry a key: the CORS preflight, which a browser sends
 //            without one, and /pair, the one-time trade of a six-digit code printed on this console
 //            for the key, for a plugin window opened before the runner started. Five tries per run.
+//
+// And one check that is not about who is asking but about what they would run. A runner started by
+// tools/session.mjs knows the plugin build it has just written (opts.pluginVersion), and the plugin
+// window names its own build in X-PXF-Plugin on every request, /pair included. A window opened before
+// the runner was restarted from changed sources runs the builder it was opened with; given the code,
+// it would pair and build with that, silently. So a different build gets 409 — before the key and
+// before /pair, and without spending a pairing try — and the window asks to be closed and reopened.
+// The build id is a hash of the plugin's public sources: not a secret, and 409 reveals nothing else.
 import { createServer } from "node:http";
 import { randomBytes, randomInt, timingSafeEqual, createHash } from "node:crypto";
 
@@ -53,6 +61,7 @@ export function startJobServer(port = 3778, opts = {}) {
   if (!/^[0-9a-f]{64}$/.test(token)) throw new Error("jobserver: the token must be 64 lowercase hex characters");
   if (!/^[0-9]{6}$/.test(pairCode)) throw new Error("jobserver: the pairing code must be six digits");
   const warn = opts.log || ((m) => console.log(m));
+  const pluginVersion = opts.pluginVersion ? String(opts.pluginVersion) : "";
   const extraOrigin = process.env.PX_ALLOW_ORIGIN || "";
   let hosts = null;                // filled in once the real port is known
   let boundPort = port;
@@ -81,17 +90,20 @@ export function startJobServer(port = 3778, opts = {}) {
   const waiting = new Map();       // id -> { resolve, reject }
   let seq = 0;
   let lastPoll = 0;            // when the plugin last asked for work
+  let staleSeen = 0;           // when a plugin window of another build last asked (409)
 
   // Every refusal is said, with the Origin that came with it. Said once per kind every ten seconds,
-  // so a page hammering the port cannot bury the run's own output.
+  // so a page hammering the port cannot bury the run's own output. `detail` is said but is not part
+  // of the kind, because it can carry what the caller sent, and a caller varying it must not be able
+  // to make every request a new kind.
   const said = new Map();
-  function refused(code, req, path, why) {
-    const origin = req.headers.origin === undefined ? "(none)" : JSON.stringify(req.headers.origin);
+  function refused(code, req, path, why, detail) {
+    const origin = req.headers.origin === undefined ? "(none)" : JSON.stringify(String(req.headers.origin).slice(0, 80));
     const key = code + "|" + why + "|" + origin;
     const now = Date.now(), prev = said.get(key);
     if (prev && now - prev.at < 10000) { prev.n++; return; }
     said.set(key, { at: now, n: 0 });
-    warn("  refused " + code + " " + req.method + " " + path + ": " + why + "; Origin " + origin +
+    warn("  refused " + code + " " + req.method + " " + path + ": " + why + (detail ? " " + detail : "") + "; Origin " + origin +
       (prev && prev.n ? " (and " + prev.n + " more like it)" : ""));
   }
 
@@ -118,7 +130,7 @@ export function startJobServer(port = 3778, opts = {}) {
     };
     if (req.method === "OPTIONS") {
       cors();
-      res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+      res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, X-PXF-Plugin");
       res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
       res.setHeader("Access-Control-Max-Age", "600");
       // Every request now carries a key, so every request is preflighted. A Chromium that enforces
@@ -127,6 +139,21 @@ export function startJobServer(port = 3778, opts = {}) {
       if (req.headers["access-control-request-private-network"] === "true") res.setHeader("Access-Control-Allow-Private-Network", "true");
       res.writeHead(204);
       return res.end();
+    }
+
+    if (pluginVersion) {
+      const theirs = String(req.headers["x-pxf-plugin"] || "");
+      if (theirs !== pluginVersion) {
+        // The window parks after its first 409, so this line is said once; the wait below repeats it.
+        if (origin === "null") staleSeen = Date.now();
+        refused(409, req, url.pathname, "the plugin window runs another build than this runner wrote —" +
+          " close the plugin in Figma and open it again", "(window " + (theirs ? JSON.stringify(theirs.slice(0, 24)) : "names none") +
+          ", runner " + pluginVersion + ")");
+        // Readable by the window, which then asks to be reopened rather than for the code.
+        cors("application/json");
+        res.writeHead(409);
+        return res.end(JSON.stringify({ ok: false, reopen: true, error: "this plugin window runs another build than the runner wrote; close it and open it again" }));
+      }
     }
 
     if (url.pathname === "/pair" && req.method === "POST") {
@@ -339,6 +366,8 @@ export function startJobServer(port = 3778, opts = {}) {
     ready,
     token,
     pairCode,
+    // The plugin build this runner wrote and accepts; "" when it was started without one (the tests).
+    pluginVersion,
     get port() { return boundPort; },
     get paired() { return paired; },
     // Wait until somebody presses the button in the plugin window.
@@ -392,7 +421,8 @@ export function startJobServer(port = 3778, opts = {}) {
             // what subtracting from zero looks like — printed, of course, exactly when the person
             // reading it is already worried.
             console.log("  waiting: " + (lastPoll === 0
-              ? "nothing has asked this runner for work yet"
+              ? (staleSeen ? "the plugin window that is open was opened before this runner was started from changed" +
+                " sources — close it in Figma and open it again" : "nothing has asked this runner for work yet")
               : "the plugin has not polled for " + Math.round(quiet / 1000) + "s") +
               (warned === 1 ? " — is the pix-to-fig runner still open in Figma?" : ""));
           } else if (warned || Date.now() - t0w > 60000) {

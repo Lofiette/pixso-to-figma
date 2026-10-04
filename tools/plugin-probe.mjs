@@ -55,11 +55,14 @@ if (p.P1) {
   catch (e) { if (p.P1.echo) console.log("    echo: " + String(p.P1.echo).slice(0, 200)); }
 }
 if (p.P2) {
-  console.log("P2  clock " + p.P2.clock + "   (ms: min / median / p95 / max, n)");
+  // mean is the whole series over its steps; batch is the step run back to back for 200 ms — the one
+  // to read when the clock is Date.now and a step is shorter than its millisecond.
+  console.log("P2  clock " + p.P2.clock + "   (ms: min / median / p95 / max, n; mean of the series; mean of a back-to-back batch)");
   for (const k of ["setTimeout0", "getNodeByIdAsync", "uiRoundTrip", "resolvedPromise"]) {
     const s = p.P2[k];
     if (!s) continue;
-    console.log("    " + k.padEnd(18) + [s.min, s.median, s.p95, s.max].join(" / ") + "   n " + s.n + " of " + s.asked + (s.lost ? ", " + s.lost + " lost" : ""));
+    console.log("    " + k.padEnd(18) + [s.min, s.median, s.p95, s.max].join(" / ") + "   n " + s.n + " of " + s.asked + (s.lost ? ", " + s.lost + " lost" : "") +
+      "   mean " + s.mean + (s.batch ? "   batch " + s.batch.mean + " (" + s.batch.steps + " in " + s.batch.ms + " ms)" : ""));
   }
 }
 if (p.P3) {

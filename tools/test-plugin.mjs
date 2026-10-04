@@ -7,15 +7,18 @@
 // only network is loopback, to job servers this script starts on free ports.
 //
 //   1. the generated plugin: dist/ holds no eval(, no Function( and no async-function constructor;
-//      the key lands in dist/ui.html and nowhere else; the manifest runs dist/.
+//      the key lands in dist/ui.html and nowhere else; both files carry the same build id; a builder
+//      that does not compile is caught before anything is written; the manifest runs dist/.
 //   2. the payload is data only: tools/pack4.mjs on a synthetic tree writes no B or V.
 //   3. dist/code.js compiled with a stand-in for Figma: every command is dispatchable, an unknown kind
 //      or operation is refused, nothing a payload carries is ever run.
 //   4. the job server: 401 without the key on every route, 403 for any other Origin, 421 for any
-//      other Host, the preflight without a key, /pair once and never after five wrong codes.
+//      other Host, 409 for a window of another plugin build, the preflight without a key, /pair once
+//      and never after five wrong codes.
 //   5. the whole chain — runner, plugin window, plugin — with the real dist/ui.html wired to the
 //      real dist/code.js: a build and its verify, the clean rule (tools/test-clean.mjs's own
-//      scenario), a render, the probes, and a window that has to ask for the pairing code.
+//      scenario), a render, the probes, a window that has to ask for the pairing code, and a window
+//      opened before the sources changed, which must be told to reopen instead of being paired.
 //
 // The stand-in for Figma implements only what these checks call, with plain geometry: no auto
 // layout, no text, no SVG import. It proves the plumbing and the dispatch, not the builder's
@@ -29,10 +32,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { performance } from "node:perf_hooks";
-import { buildPlugin, generatePlugin, forbiddenIn } from "./build-plugin.mjs";
+import { buildPlugin, generatePlugin, forbiddenIn, DIST_DIR } from "./build-plugin.mjs";
 import { startJobServer, newSecrets, JOB_KINDS } from "./jobserver.mjs";
 import { openSession } from "./session.mjs";
 import { cleanScenario } from "./test-clean.mjs";
+import { buildAll } from "./build-lib.mjs";
+import { BUILDER_SRC } from "./builder4.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
@@ -47,6 +52,13 @@ async function until(fn, ms, what) {
   throw new Error("timed out waiting for " + what);
 }
 const scratch = mkdtempSync(join(tmpdir(), "pxf-test-plugin-"));
+// Nothing here may wait for ever. A check whose answer never comes — a job nobody takes, a request
+// the server holds — fails the run after this long instead of hanging selftest with it.
+setTimeout(() => {
+  console.log("FAIL test-plugin did not finish within 180 s: something waited on an answer that never came");
+  try { rmSync(scratch, { recursive: true, force: true }); } catch (e) {}
+  process.exit(1);
+}, 180000).unref();
 
 // ============================================================================================
 // 1. the generated plugin
@@ -75,7 +87,41 @@ check(CODE.indexOf("async function PXF_BUILD(figma, PAY)") >= 0 && CODE.indexOf(
   "the builder and the verifier are bundled as ordinary functions");
 check(UI_KEYED.split(KEY).length === 2 && CODE.indexOf(KEY) < 0, "the run's key is written into dist/ui.html once, and into nothing else");
 check(UI_BARE.indexOf('let TOKEN = "";') >= 0 && UI_BARE.indexOf("__PXF_TOKEN__") < 0, "without a key the window carries none, and asks for the code");
-check(generatePlugin({ token: KEY }).version === distKeyed.version, "the same sources give the same build id");
+check(generatePlugin({ token: KEY }).version === distKeyed.version && distBare.version === distKeyed.version,
+  "the same sources give the same build id, whatever the key");
+check(CODE.indexOf("var PXF_VERSION = " + JSON.stringify(distKeyed.version) + ";") >= 0 &&
+  UI_KEYED.indexOf("const PLUGIN = " + JSON.stringify(distKeyed.version) + ";") >= 0 && UI_KEYED.indexOf("__PXF_VERSION__") < 0,
+  "dist/code.js and dist/ui.html carry the same build id");
+const HOST_SRC = readFileSync(join(ROOT, "figma-plugin", "src", "code.js"), "utf8");
+const UI_SRC = readFileSync(join(ROOT, "figma-plugin", "src", "ui.html"), "utf8");
+{
+  const vs = [generatePlugin({ sources: { host: HOST_SRC + "\n// edited\n" } }).version,
+    generatePlugin({ sources: { builder: BUILDER_SRC + "\n// edited\n" } }).version,
+    generatePlugin({ sources: { ui: UI_SRC.replace("<style>", "<style>\n/* edited */") } }).version];
+  check(vs.every((v) => v !== distKeyed.version) && new Set(vs).size === 3, "an edit to the host, the builder or the window gives a new build id");
+}
+// A mistake in the builder used to be caught by pack4; it is now caught here, before dist/ is touched.
+{
+  const L = "\n";
+  const b = BUILDER_SRC.split(L); b.splice(3, 0, "let = ;");
+  const d = join(scratch, "dist-broken");
+  let msg = "";
+  try { buildPlugin({ outDir: d, sources: { builder: b.join(L) } }); } catch (e) { msg = e.message; }
+  check(/dist\/code\.js does not compile/.test(msg) && /builder4\.js \(BUILDER_SRC\) line 4\b/.test(msg) && !existsSync(join(d, "code.js")) && !existsSync(join(d, "ui.html")),
+    "a builder that does not compile is refused by the generator, named by its line, and nothing is written", msg);
+  const uiLine = UI_SRC.slice(0, UI_SRC.indexOf("let busy = false")).split(L).length;
+  let msg2 = "";
+  try { generatePlugin({ sources: { ui: UI_SRC.replace("let busy = false", "let busy = = false") } }); } catch (e) { msg2 = e.message; }
+  check(/dist\/ui\.html <script> does not compile/.test(msg2) && msg2.indexOf("figma-plugin/src/ui.html line " + uiLine + ")") >= 0,
+    "a window script that does not compile is refused the same way, at its line in src/ui.html", msg2);
+}
+// The command line will not replace the plugin a live runner wrote, unless told to.
+{
+  const had = existsSync(DIST_DIR);
+  const run = (args) => { try { execFileSync("node", [join(HERE, "build-plugin.mjs"), ...args], { stdio: "pipe" }); return 0; } catch (e) { return e.status; } };
+  const s1 = run([]), s2 = run(["--out", DIST_DIR]);
+  check(s1 === 2 && s2 === 2 && existsSync(DIST_DIR) === had, "build-plugin.mjs refuses to write figma-plugin/dist without --out and --force", s1 + "," + s2);
+}
 try { generatePlugin({ token: "not-hex" }); fail("a malformed key was written into the plugin"); }
 catch (e) { ok("a malformed key is refused"); }
 const manifest = JSON.parse(readFileSync(join(ROOT, "figma-plugin", "manifest.json"), "utf8"));
@@ -215,7 +261,7 @@ function makeFigma() {
 
 // The host alone, fed messages the way the window feeds it, recording what it posts back. Probe
 // questions are answered the way the window answers them.
-function bareHost() {
+function bareHost(opts) {
   const figma = makeFigma(), posted = [];
   figma.ui.postMessage = (m) => {
     posted.push(m);
@@ -224,7 +270,10 @@ function bareHost() {
     if (m.t === "probe-big-up") setImmediate(() => figma.ui.onmessage({ t: "probe-answer", k: m.k, s: "x".repeat(m.size) }));
     if (m.t === "probe-echo") setImmediate(() => figma.ui.onmessage({ t: "probe-answer", k: m.k, status: 200, echo: "{}", origin: "null" }));
   };
-  runInContext(CODE, createContext({ figma, __html__: "", setTimeout, clearTimeout, performance }));
+  // Without `performance` the plugin falls back to Date.now, as it would in a sandbox that lacks it.
+  const g = { figma, __html__: "", setTimeout, clearTimeout };
+  if (!(opts && opts.noPerformance)) g.performance = performance;
+  runInContext(CODE, createContext(g));
   let seq = 0;
   async function job(kind, payloadText, meta) {
     const id = "t" + (++seq), from = posted.length;
@@ -246,7 +295,8 @@ function bareHost() {
   // Refusals: kinds outside the table, including the names every object inherits.
   for (const kind of ["script", "eval", "constructor", "__proto__", "toString", "hasOwnProperty", ""]) {
     const { report } = await H.job(kind, "{}");
-    check(report.refused && /unknown job kind/.test(report.error), "job kind " + JSON.stringify(kind) + " is refused", JSON.stringify(report).slice(0, 120));
+    check(report.refused && /unknown job kind/.test(report.error) && report.plugin === distKeyed.version,
+      "job kind " + JSON.stringify(kind) + " is refused, and the refusal names the plugin build", JSON.stringify(report).slice(0, 120));
   }
   // The old free-form render job, and operations outside the table.
   {
@@ -279,10 +329,11 @@ function bareHost() {
     const root = H.figma._reg.byId.get(r.rootId);
     check(!r.error && r.nodes === 3 && root && root.getPluginData("pxSrc") === "9:1" && root.children.length === 2,
       "build runs the bundled builder (3 nodes, root stamped with its source)", JSON.stringify(r).slice(0, 200));
+    check(r.plugin === distKeyed.version, "the build report names the plugin build that made it");
     check(H.posted.some((m) => m.t === "log" && /older packer; it is ignored/.test(m.m)), "builder code riding in an old payload is ignored, and said to be");
     const v = (await H.job("verify", JSON.stringify(PAYLOAD), { rootNodeId: r.rootId })).report;
-    check(!v.error && v.count === 3 && v.expected === 3 && (v.visibleOver1 || 0) === 0 && (v.sizeOver || 0) === 0,
-      "verify runs the bundled verifier (3 of 3 nodes, none out of position)", JSON.stringify(v).slice(0, 200));
+    check(!v.error && v.count === 3 && v.expected === 3 && (v.visibleOver1 || 0) === 0 && (v.sizeOver || 0) === 0 && v.plugin === distKeyed.version,
+      "verify runs the bundled verifier (3 of 3 nodes, none out of position) and names the plugin build", JSON.stringify(v).slice(0, 200));
     const vr = (await H.job("verify", JSON.stringify(PAYLOAD), { rootNodeId: "1:99999" })).report;
     check(vr.rootRelocated && vr.rootUsed === r.rootId, "verify finds the root by its stamp when the id is wrong");
 
@@ -305,8 +356,8 @@ function bareHost() {
     const f = H.figma.createFrame(); H.figma.currentPage.appendChild(f);
     const inner = H.figma.createRectangle(); f.appendChild(inner);
     const c = (await H.job("clean", JSON.stringify({ want: [{ src: null, id: inner.id }, { src: null, id: H.figma.currentPage.id }, { src: null, id: "0:0" }] }))).report;
-    check(c.removed === 0 && c.notTopLevel === 3 && !inner.removed && H.figma.root.children.length >= 1,
-      "clean spares a layer inside a frame, a page and the document named by id", JSON.stringify(c));
+    check(c.removed === 0 && c.notTopLevel === 3 && c.spared === 0 && !inner.removed && H.figma.root.children.length >= 1,
+      "clean leaves a layer inside a frame, a page and the document named by id, and counts them apart from spared", JSON.stringify(c));
     const bad = (await H.job("clean", JSON.stringify({ want: [{ src: { evil: 1 } }] }))).report;
     check(bad.refused, "clean refuses an entry that is not a short string");
   }
@@ -334,6 +385,30 @@ function bareHost() {
     check(ping.ok === 1 && ping.plugin === distKeyed.version, "render ping answers with the plugin build");
   }
 
+  // RENDER export proves the node before photographing it (STATE.md: stamps, not remembered ids).
+  {
+    H.figma._reg.exportBytes = 16;
+    const rect = (w, h, stamp) => {
+      const n = H.figma.createRectangle(); H.figma.currentPage.appendChild(n); n.resize(w, h);
+      if (stamp) n.setPluginData("pxSrc", stamp);
+      return n;
+    };
+    const olderA = rect(7, 8, "pxf-src-A"), A = rect(11, 12, "pxf-src-A"), B = rect(33, 34, "pxf-src-B"), C = rect(5, 6, "");
+    const ex = async (id, src) => (await H.job("render", JSON.stringify({ op: "export", id, src, constraint: { type: "SCALE", value: 1 } }))).report;
+    const e1 = await ex(B.id, "pxf-src-A");
+    check(e1.relocated === A.id && e1.w === 11 && e1.h === 12,
+      "export: an id naming another object's root is not photographed — the newest root carrying the stamp is, and the move is reported", JSON.stringify(e1).slice(0, 160));
+    const e2 = await ex("1:999999", "pxf-src-A");
+    check(e2.relocated === A.id && e2.w === 11, "export: an id that is gone is found again by its stamp", JSON.stringify(e2).slice(0, 160));
+    const e3 = await ex(A.id, "pxf-src-A");
+    check(e3.relocated === null && e3.w === 11 && !e3.e, "export: the right id is photographed as asked, nothing relocated");
+    const e4 = await ex(B.id, "pxf-src-none");
+    check(e4.e && !e4.d, "export: an id naming another object's root, with nothing carrying the stamp, is refused rather than photographed", JSON.stringify(e4).slice(0, 160));
+    const e5 = await ex(C.id, "pxf-src-C");
+    check(!e5.e && e5.w === 5 && e5.relocated === null, "export: an unstamped node (a build from before stamping) is photographed by its id");
+    for (const n of [olderA, A, B, C]) n.remove();
+  }
+
   // PROBE, with the window's answers simulated.
   {
     const p = (await H.job("probe", JSON.stringify({ n: 5, sizesMB: [0.01, 0.5], deadlineMs: 2000 }))).report;
@@ -342,7 +417,45 @@ function bareHost() {
       ["setTimeout0", "getNodeByIdAsync", "uiRoundTrip", "resolvedPromise"].every((k) => p2[k] && p2[k].n === 5 && typeof p2[k].median === "number") &&
       p3 && p3.largestDownMB === 0.5 && p3.largestUpMB === 0.5,
       "probe runs P1, P2 (four series of min/median/p95/max) and P3 (both directions)", JSON.stringify(p).slice(0, 200));
+    check(p2 && p2.clock === "performance.now" &&
+      ["setTimeout0", "getNodeByIdAsync", "uiRoundTrip", "resolvedPromise"].every((k) => typeof p2[k].mean === "number" && typeof p2[k].totalMs === "number" &&
+        p2[k].batch && p2[k].batch.steps >= 1 && typeof p2[k].batch.mean === "number"),
+      "P2 also times each whole series (mean) and a back-to-back batch", JSON.stringify(p2 && p2.resolvedPromise));
   }
+}
+
+// P2 where the sandbox has no performance.now: a millisecond clock, on which a step of microseconds
+// reads 0 one at a time. The batch has to give a mean anyway.
+{
+  const H2 = bareHost({ noPerformance: true });
+  const p2 = (await H2.job("probe", JSON.stringify({ probes: ["P2"], n: 5, deadlineMs: 2000 }))).report.probes.P2;
+  const rp = p2 && p2.resolvedPromise;
+  check(p2 && p2.clock === "Date.now" && rp && rp.batch.steps > 100 && rp.batch.ms >= 1 && rp.batch.mean > 0,
+    "on Date.now, P2's batch still gives a mean above zero for a step of microseconds (" + (rp && rp.batch.steps) + " steps)", JSON.stringify(rp));
+}
+
+// What tools/build-lib.mjs says about the reports. A fake runner, so nothing is built: the point is
+// the sentences, which are all the person running it sees.
+{
+  const d = join(scratch, "obj-1");
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, "payload.json"), JSON.stringify(PAYLOAD || { D: [], S: [], F: [] }));
+  writeFileSync(join(d, "payload-meta.json"), JSON.stringify({ rootId: "9:1" }));
+  writeFileSync(join(d, "build-report.json"), JSON.stringify({ rootId: "1:5" }));
+  const OURS = "aaaaaaaaaaaa", OTHER = "bbbbbbbbbbbb";
+  const fake = { pluginVersion: OURS, post: async (job) =>
+    job.kind === "clean" ? { removed: 1, of: 1, spared: 2, notTopLevel: 1, plugin: OURS }
+    : job.kind === "build" ? { rootId: "1:9", nodes: 3, plugin: OTHER }
+    : { count: 3, expected: 3, plugin: OURS } };
+  const lines = [];
+  try { await buildAll({ srv: fake, dirs: [d], pages: null, clean: true, say: (l) => lines.push(l) }); }
+  catch (e) { lines.push("threw " + e.message); }
+  check(lines.some((l) => l.indexOf("WARNING: this build came from plugin build " + OTHER + ", not " + OURS) >= 0) &&
+    !lines.some((l) => /WARNING: this (verify|clean)/.test(l)),
+    "build-lib warns when a report comes from another plugin build than the runner wrote, and only then", lines.join(" | ").slice(0, 300));
+  check(lines.some((l) => /2 ids now belonged to something else and were left alone/.test(l)) &&
+    lines.some((l) => /1 named id is no longer at the top of a page and was left alone/.test(l)),
+    "build-lib says apart which ids clean spared and which are no longer at the top of a page", lines.join(" | ").slice(0, 300));
 }
 
 // ============================================================================================
@@ -363,22 +476,42 @@ function hreq(port, method, path, headers, body) {
 {
   const said = [];
   const sec = newSecrets();
-  const srv = startJobServer(0, Object.assign({ log: (m) => said.push(m) }, sec));
+  const VER = distKeyed.version;
+  const srv = startJobServer(0, Object.assign({ log: (m) => said.push(m), pluginVersion: VER }, sec));
   await srv.ready;
   const P = srv.port;
-  const good = { Origin: "null", Authorization: "Bearer " + sec.token };
+  const good = { Origin: "null", Authorization: "Bearer " + sec.token, "X-PXF-Plugin": VER };
   const routes = [["GET", "/job?client=plugin"], ["GET", "/job/j1/payload"], ["GET", "/image/" + "ab".repeat(20) + "?b64=1"],
     ["POST", "/report"], ["GET", "/control?rev=0"], ["POST", "/start"], ["POST", "/alive"], ["GET", "/echo"]];
 
-  const noKey = [], wrongKey = [];
+  const noKey = [], wrongKey = [], nearKey = [], otherBuild = [];
+  // Keys that are nearly right: none at all after the scheme, the first half, the key and one more
+  // character. A comparison that only checked a prefix would let the first two through.
+  const near = ["Bearer ", "Bearer " + sec.token.slice(0, 32), "Bearer " + sec.token + "0", "Bearer " + sec.token.slice(0, 63)];
   for (const [m, p] of routes) {
-    const r = await hreq(P, m, p, { Origin: "null", "Content-Type": "application/json" }, m === "POST" ? "{}" : null);
+    const body = m === "POST" ? "{}" : null;
+    const r = await hreq(P, m, p, { Origin: "null", "Content-Type": "application/json", "X-PXF-Plugin": VER }, body);
     if (r.status !== 401 || r.headers["access-control-allow-origin"] !== "null") noKey.push(m + " " + p + " -> " + r.status);
-    const w = await hreq(P, m, p, { Origin: "null", Authorization: "Bearer " + "f".repeat(64) }, m === "POST" ? "{}" : null);
+    const w = await hreq(P, m, p, { Origin: "null", Authorization: "Bearer " + "f".repeat(64), "X-PXF-Plugin": VER }, body);
     if (w.status !== 401) wrongKey.push(m + " " + p + " -> " + w.status);
+    for (const a of near) {
+      const n = await hreq(P, m, p, { Origin: "null", Authorization: a, "X-PXF-Plugin": VER }, body);
+      if (n.status !== 401) nearKey.push(m + " " + p + " [" + a.length + " chars] -> " + n.status);
+    }
+    // The right key from a window of another build, or one that names none: 409, readable by it.
+    for (const v of ["0123456789ab", null]) {
+      const h = Object.assign({}, good); if (v) h["X-PXF-Plugin"] = v; else delete h["X-PXF-Plugin"];
+      const o = await hreq(P, m, p, h, body);
+      let ob = {}; try { ob = JSON.parse(o.body); } catch (e) {}
+      if (o.status !== 409 || o.headers["access-control-allow-origin"] !== "null" || ob.reopen !== true) otherBuild.push(m + " " + p + " (" + v + ") -> " + o.status);
+    }
   }
   check(!noKey.length, "no key: 401 on every route (" + routes.map((r) => r[1].split("?")[0].replace(/[0-9a-f]{40}$/, ":hash").replace("/j1/", "/:id/")).join(", ") + "), readable by the window", noKey.join("; "));
   check(!wrongKey.length, "a wrong key: 401 on every route", wrongKey.join("; "));
+  check(!nearKey.length, "an empty, half, one-short or one-long key: 401 on every route", nearKey.join("; "));
+  check(!otherBuild.length, "the right key from a window of another plugin build, or one naming none: 409 on every route, readable by the window", otherBuild.join("; "));
+  check(said.some((l) => /refused 409/.test(l) && /open it again/.test(l) && l.indexOf("runner " + VER) >= 0),
+    "a 409 says on the runner's console that the plugin must be closed and reopened");
 
   const evil = await hreq(P, "GET", "/control?rev=0", { Origin: "https://evil.example", Authorization: good.Authorization });
   const none = await hreq(P, "GET", "/control?rev=0", { Authorization: good.Authorization });
@@ -404,8 +537,8 @@ function hreq(port, method, path, headers, body) {
   const pre = await hreq(P, "OPTIONS", "/job?client=plugin", { Origin: "null", "Access-Control-Request-Method": "GET",
     "Access-Control-Request-Headers": "authorization", "Access-Control-Request-Private-Network": "true" });
   check(pre.status === 204 && pre.headers["access-control-allow-origin"] === "null" && /authorization/i.test(pre.headers["access-control-allow-headers"] || "") &&
-    pre.headers["access-control-allow-private-network"] === "true",
-    "the preflight passes without a key, allows the Authorization header and answers a private-network check");
+    /x-pxf-plugin/i.test(pre.headers["access-control-allow-headers"] || "") && pre.headers["access-control-allow-private-network"] === "true",
+    "the preflight passes without a key or a build id, allows the Authorization and X-PXF-Plugin headers and answers a private-network check");
 
   const ctl = await hreq(P, "GET", "/control?rev=0", good);
   const echo = await hreq(P, "GET", "/echo", good);
@@ -414,20 +547,26 @@ function hreq(port, method, path, headers, body) {
   check(ctl.status === 200 && JSON.parse(ctl.body).rev >= 1 && echo.status === 200 && echoed.headers && echoed.headers.origin === "null" &&
     echo.body.indexOf(sec.token) < 0, "with the key it answers, and /echo shows the Origin without echoing the key");
 
+  // /pair from a window of another build: 409 before the code is even looked at — no key, and no try
+  // spent (the wrong code below is then still the first of five).
+  const pairHdr = { Origin: "null", "Content-Type": "application/json", "X-PXF-Plugin": VER };
+  const p0 = await hreq(P, "POST", "/pair", Object.assign({}, pairHdr, { "X-PXF-Plugin": "0123456789ab" }), JSON.stringify({ code: sec.pairCode }));
+  check(p0.status === 409 && p0.body.indexOf(sec.token) < 0 && !srv.paired, "/pair from a window of another build: 409, and the right code gives it no key");
   // /pair: the right code once, never twice.
   const wrongCode = String((Number(sec.pairCode) + 1) % 1000000).padStart(6, "0");
-  const p1 = await hreq(P, "POST", "/pair", { Origin: "null", "Content-Type": "application/json" }, JSON.stringify({ code: wrongCode }));
-  const p2 = await hreq(P, "POST", "/pair", { Origin: "null", "Content-Type": "application/json" }, JSON.stringify({ code: sec.pairCode }));
-  const p3 = await hreq(P, "POST", "/pair", { Origin: "null", "Content-Type": "application/json" }, JSON.stringify({ code: sec.pairCode }));
+  const p1 = await hreq(P, "POST", "/pair", pairHdr, JSON.stringify({ code: wrongCode }));
+  const p2 = await hreq(P, "POST", "/pair", pairHdr, JSON.stringify({ code: sec.pairCode }));
+  const p3 = await hreq(P, "POST", "/pair", pairHdr, JSON.stringify({ code: sec.pairCode }));
   let got = {}; try { got = JSON.parse(p2.body); } catch (e) {}
   check(p1.status === 403 && JSON.parse(p1.body).left === 4 && p2.status === 200 && got.token === sec.token && p3.status === 410,
     "/pair trades the right code for the key once, and refuses it after", [p1.status, p2.status, p3.status].join(","));
   const pEvil = await hreq(P, "POST", "/pair", { Origin: "https://evil.example" }, JSON.stringify({ code: sec.pairCode }));
   check(pEvil.status === 403 && pEvil.body.indexOf(sec.token) < 0, "/pair from another Origin gets 403 and no key");
 
-  // Unknown kinds never reach the queue.
+  // Unknown kinds never reach the queue. A short deadline, so that a runner which queued it anyway
+  // fails this check in two seconds rather than holding the test for the default twenty minutes.
   let rejected = false;
-  try { await srv.post({ kind: "script" }, "{}"); } catch (e) { rejected = /unknown job kind/.test(e.message); }
+  try { await srv.post({ kind: "script" }, "{}", new Map(), 2000); } catch (e) { rejected = /unknown job kind/.test(e.message); }
   check(rejected && JOB_KINDS.join(",") === "build,verify,clean,render,probe", "the runner refuses to queue a kind outside build, verify, clean, render, probe");
   srv.close();
 
@@ -461,14 +600,15 @@ function hreq(port, method, path, headers, body) {
 // The window runs in its own context, as in Figma. Its fetch goes to the test server's port and
 // carries Origin "null", as a sandboxed frame's does; its postMessage reaches the plugin, and the
 // plugin's reaches it, each through a structured clone on a later turn.
-function wire(uiHtml, port) {
+function wire(uiHtml, port, code) {
   const figma = makeFigma();
   const els = {};
   const el = (id) => els[id] || (els[id] = { id, textContent: "", className: "", hidden: ["pairrow", "scoperow", "go"].indexOf(id) >= 0,
     disabled: false, onclick: null, onkeydown: null, value: id === "scope" ? "file" : "", style: {} });
-  let closed = false;
+  let closed = false, fetches = 0;
   const winFetch = (url, o) => {
     if (closed) return Promise.reject(new TypeError("window closed"));
+    fetches++;
     const u = new URL(String(url));
     const oo = Object.assign({}, o || {});
     oo.headers = Object.assign({ Origin: "null" }, oo.headers || {});
@@ -482,14 +622,14 @@ function wire(uiHtml, port) {
   });
   figma.ui.postMessage = (m) => { const c = structuredClone(m); setImmediate(() => { if (!closed && win.onmessage) win.onmessage({ data: { pluginMessage: c } }); }); };
   runInContext(uiHtml.slice(a + 8, b), win);
-  runInContext(CODE, createContext({ figma, __html__: "", setTimeout, clearTimeout, performance }));
-  return { figma, el, close() { closed = true; } };
+  runInContext(code || CODE, createContext({ figma, __html__: "", setTimeout, clearTimeout, performance }));
+  return { figma, el, fetches: () => fetches, close() { closed = true; } };
 }
 
 {
   const sec = newSecrets();
   const chainDist = buildPlugin({ outDir: join(scratch, "dist-chain"), token: sec.token });
-  const srv = startJobServer(0, Object.assign({ log: () => {} }, sec));
+  const srv = startJobServer(0, Object.assign({ log: () => {}, pluginVersion: chainDist.version }, sec));
   await srv.ready;
   const W = wire(readFileSync(chainDist.uiPath, "utf8"), srv.port);
   try {
@@ -536,7 +676,7 @@ function wire(uiHtml, port) {
 // the code, takes a wrong one gracefully, and works once given the right one.
 {
   const sec = newSecrets();
-  const srv = startJobServer(0, Object.assign({ log: () => {} }, sec));
+  const srv = startJobServer(0, Object.assign({ log: () => {}, pluginVersion: distBare.version }, sec));
   await srv.ready;
   const W = wire(UI_BARE, srv.port);
   try {
@@ -556,6 +696,56 @@ function wire(uiHtml, port) {
   } catch (e) { fail("pairing: " + e.message); }
   W.close();
   srv.close();
+}
+
+// A window opened before the runner was restarted from changed sources. It runs the plugin it was
+// opened with, so it must not be paired, whatever code is typed into it, and must get no job — it is
+// told to close and reopen. Its build differs from the runner's by one comment line in the host.
+{
+  const sec = newSecrets();
+  const said = [];
+  const srv = startJobServer(0, Object.assign({ log: (m) => said.push(m), pluginVersion: distKeyed.version }, sec));
+  await srv.ready;
+  const old = generatePlugin({ token: "", sources: { host: HOST_SRC + "\n// an edit made after this window was opened\n" } });
+  const W = wire(old.ui, srv.port, old.code);
+  try {
+    check(old.version !== distKeyed.version, "a window built from other sources carries another build id");
+    await until(() => /Закройте плагин и откройте его снова/.test(W.el("s").textContent), 5000, "the window to ask to be reopened");
+    check(W.el("pairrow").hidden === true && W.el("go").hidden === true,
+      "a window of another build asks to be closed and reopened, and shows no code field", W.el("s").textContent);
+    // An old window that already shows the code field may still have it typed in: it gets no key.
+    W.el("code").value = sec.pairCode;
+    await W.el("pairgo").onclick();
+    check(!srv.paired && /откройте его снова/.test(W.el("s").textContent) && W.el("pairmsg").textContent === "" && W.el("pairrow").hidden === true,
+      "the right code typed into it anyway does not pair it, and the window goes on asking to be reopened", W.el("pairmsg").textContent);
+    let got = null;
+    try { got = await srv.post({ kind: "render" }, JSON.stringify({ op: "ping" }), new Map(), 1500); } catch (e) {}
+    check(got === null && srv.lastPoll() === 0, "and it is given no job");
+    // Parked, not retrying: one 409 is the whole answer, and asking again cannot change it.
+    const f0 = W.fetches();
+    await sleep(1200);
+    check(W.fetches() - f0 <= 1, "having been told, it stops asking (" + (W.fetches() - f0) + " requests in 1.2 s)");
+    check(said.some((l) => /refused 409/.test(l) && /open it again/.test(l)), "the runner says on its console that the window must be reopened");
+  } catch (e) { fail("a window of another build: " + e.message); }
+  W.close();
+  srv.close();
+}
+
+// openSession wires the build it writes into the server it starts.
+{
+  const said = [];
+  let s = null;
+  try {
+    s = await openSession({ port: 0, distDir: join(scratch, "dist-session"), log: (m) => said.push(m) });
+    const ui = readFileSync(join(scratch, "dist-session", "ui.html"), "utf8");
+    const mine = await hreq(s.port, "GET", "/control?rev=0", { Origin: "null", "X-PXF-Plugin": s.pluginVersion });
+    const other = await hreq(s.port, "GET", "/control?rev=0", { Origin: "null", "X-PXF-Plugin": "0123456789ab" });
+    check(/^[0-9a-f]{12}$/.test(s.pluginVersion) && ui.indexOf("const PLUGIN = " + JSON.stringify(s.pluginVersion) + ";") >= 0 &&
+      ui.indexOf(s.token) >= 0 && mine.status === 401 && other.status === 409 && said.some((l) => l.indexOf(s.pluginVersion) >= 0),
+      "openSession starts the runner on the build it has just written: that build asks for the key, another is told to reopen",
+      [s.pluginVersion, mine.status, other.status].join(","));
+  } catch (e) { fail("openSession: " + e.message); }
+  if (s) s.close();
 }
 
 rmSync(scratch, { recursive: true, force: true });
