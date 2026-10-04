@@ -118,6 +118,10 @@ export class Reader {
   }
 }
 
+// Deeper than any real document nests (a node's overrides hold nodes, whose paths hold guids); a
+// hostile file could otherwise nest messages until the stack runs out.
+export const MAX_DEPTH = 256;
+
 export function parseSchema(buf) {
   const r = new Reader(buf);
   const defs = [];
@@ -159,24 +163,32 @@ export function validateSchema(defs) {
     }
   }
   // A struct has no terminator and no optional fields, so one that contains itself (other than
-  // through an array, which can be empty) has no finite encoding.
-  const state = new Array(defs.length).fill(0);
-  const visit = (t) => {
+  // through an array, which can be empty) has no finite encoding. Nor can a struct whose fields hold
+  // structs that hold structs more than MAX_DEPTH levels down ever be decoded: the decoder stops at
+  // that depth. Refusing it here also bounds this walk, and zeroWidthStructs() after it, to
+  // MAX_DEPTH frames, so a schema made of one long chain cannot run the stack out instead.
+  // height[t]: 0 not yet seen, -1 on the current path, otherwise the levels of struct t's longest
+  // chain (1 for a struct that holds no struct). Kept per struct, so the answer does not depend on
+  // the order the definitions come in.
+  const height = new Array(defs.length).fill(0);
+  const tooDeep = (d) => corrupt("struct " + JSON.stringify(d.name) + " nests structs more than " + MAX_DEPTH +
+    " levels deep, which nothing could decode");
+  const visit = (t, depth) => {
     const d = defs[t];
-    if (d.kind !== 1 || state[t] === 2) return;
-    if (state[t] === 1) throw corrupt("struct " + JSON.stringify(d.name) + " contains itself");
-    state[t] = 1;
-    for (const f of d.fields) if (!f.isArray && f.type >= 0) visit(f.type);
-    state[t] = 2;
+    if (d.kind !== 1) return 0;
+    if (height[t] > 0) return height[t];
+    if (height[t] < 0) throw corrupt("struct " + JSON.stringify(d.name) + " contains itself");
+    if (depth > MAX_DEPTH) throw tooDeep(d);
+    height[t] = -1;
+    let h = 1;
+    for (const f of d.fields) if (!f.isArray && f.type >= 0) h = Math.max(h, 1 + visit(f.type, depth + 1));
+    if (h > MAX_DEPTH) throw tooDeep(d);
+    return (height[t] = h);
   };
-  for (let t = 0; t < defs.length; t++) visit(t);
+  for (let t = 0; t < defs.length; t++) visit(t, 1);
 }
 
 export const KIND = ["enum", "struct", "message"];
-
-// Deeper than any real document nests (a node's overrides hold nodes, whose paths hold guids); a
-// hostile file could otherwise nest messages until the stack runs out.
-export const MAX_DEPTH = 256;
 
 // A decoder compiled from a schema: one closure per definition, so a message finds a field by
 // indexing an array with its id instead of searching the field list. No code is generated or
@@ -189,6 +201,9 @@ export const MAX_DEPTH = 256;
 // dropped. Values: enums come back as their number, int64/uint64 as BigInt, and byte[] as a Buffer
 // view into the input rather than an array of numbers.
 export function createDecoder(defs, opts = {}) {
+  // Callers normally pass what parseSchema() returned, already checked; checking again is cheap
+  // next to decoding, and the closures below rely on it.
+  validateSchema(defs);
   const keep = opts.keep || {};
   const readers = new Array(defs.length);
   const zeroWidth = zeroWidthStructs(defs);
@@ -245,7 +260,9 @@ export function createDecoder(defs, opts = {}) {
       };
       return;
     }
-    const wanted = keep[name] ? new Set(keep[name]) : null;
+    // The name comes from the file: a message called "constructor" or "__proto__" must not find
+    // what every plain object inherits, so only `keep`'s own keys count.
+    const wanted = Object.hasOwn(keep, name) ? new Set(keep[name]) : null;
     const names = [], fns = [], kept = [];
     for (const f of def.fields) {
       names[f.value] = f.name;
@@ -283,6 +300,8 @@ export function createDecoder(defs, opts = {}) {
 }
 
 // Structs whose encoding can be zero bytes long: no fields, or only fields that are such structs.
+// Recursive, one frame per struct in a chain; validateSchema() has already refused chains longer
+// than MAX_DEPTH, so it stays shallow.
 function zeroWidthStructs(defs) {
   const memo = new Array(defs.length);
   const zw = (t, stack) => {

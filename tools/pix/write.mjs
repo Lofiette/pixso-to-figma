@@ -58,7 +58,8 @@ export function parseKiwiText(src) {
     fields: d.fields.map((f) => {
       let type = 0;                                     // Kiwi writes 0 for an enum's members
       if (f.typeName !== null) {
-        type = f.typeName in BUILTIN ? BUILTIN[f.typeName] : index.get(f.typeName);
+        // Own keys only: a definition may be called "constructor" or "toString" (the tests make one).
+        type = Object.hasOwn(BUILTIN, f.typeName) ? BUILTIN[f.typeName] : index.get(f.typeName);
         if (type === undefined) throw new Error("schema text: unknown type " + f.typeName + " in " + d.name);
       }
       return { name: f.name, type, isArray: f.isArray, value: f.value };
@@ -142,6 +143,8 @@ export function encodeSchema(defs) {
 export function encodeMessage(defs, rootName, value) {
   const byName = new Map(defs.map((d, k) => [d.name, k]));
   const w = new Writer();
+  // A value's own field, never one every object inherits: a field may be called "constructor".
+  const own = (v, name) => (Object.hasOwn(v, name) ? v[name] : undefined);
   const one = (type, v, where) => {
     switch (type) {
       case BOOL: return w.byte(v ? 1 : 0);
@@ -162,7 +165,7 @@ export function encodeMessage(defs, rootName, value) {
     if (!v || typeof v !== "object") throw new Error(where + ": expected a " + d.name + " object");
     if (d.kind === 1) {
       for (const f of d.fields) {
-        if (v[f.name] === undefined) throw new Error(where + ": struct " + d.name + " needs " + f.name);
+        if (own(v, f.name) === undefined) throw new Error(where + ": struct " + d.name + " needs " + f.name);
         put(f, v[f.name], where + "." + f.name);
       }
       return;
@@ -171,7 +174,7 @@ export function encodeMessage(defs, rootName, value) {
       if (!d.fields.some((f) => f.name === k)) throw new Error(where + ": " + d.name + " has no field " + k);
     }
     for (const f of d.fields) {
-      if (v[f.name] === undefined || v[f.name] === null) continue;
+      if (own(v, f.name) === undefined || v[f.name] === null) continue;
       w.varuint(f.value);
       put(f, v[f.name], where + "." + f.name);
     }

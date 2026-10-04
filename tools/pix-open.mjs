@@ -19,8 +19,10 @@
 // would have lost sync within kilobytes.
 //
 // The reading itself lives in tools/pix/read.mjs, so the migration reads a .pix with the same code
-// this prints from. A damaged file stops here with a PIX_CORRUPT line and nothing else: it is
-// checked whole before anything is reported about it.
+// this prints from. A damaged file stops here with one PIX_CORRUPT line (PIX_UNSUPPORTED for a sound
+// file in a form this does not read) and nothing else: it is checked whole before anything is
+// reported about it. Images are the exception — they are read, and so checked, only when --out
+// writes them; a damaged one gets the same one line, is skipped, and the exit code is 1.
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { decodePath, pathToSVG } from "./kiwi.mjs";
@@ -36,10 +38,11 @@ if (!FILE) { console.error("usage: node pix-open.mjs <file.pix> [--out <dir>]");
 // Only the fields printed here are kept; every other field is still read and checked, then dropped.
 const KEEP = ["guid", "parentIndex", "type", "name", "size", "visible", "symbolData",
   "fillGeometry", "strokeGeometry", "derivedSymbolData"];
+const DAMAGED = /^PIX_(CORRUPT|UNSUPPORTED):/;
 let pix;
 try { pix = readPix(readFileSync(FILE), { keep: { PixsoNode: KEEP } }); }
 catch (e) {
-  if (!/^PIX_(CORRUPT|UNSUPPORTED):/.test(e.message)) throw e;
+  if (!DAMAGED.test(e.message)) throw e;
   console.error(e.message);
   process.exit(1);
 }
@@ -74,7 +77,9 @@ console.log("  decoded " + nodes.length + " nodes and " + blobs + " blobs in " +
   (pix.stats.decodeMs / 1000).toFixed(1) + "s — every byte consumed");
 
 const tname = pix.schema.enums.get("NodeType") || new Map();
-const counts = {};
+// No prototype: the type names come from the file, and one called "constructor" or "__proto__"
+// must count like any other.
+const counts = Object.create(null);
 for (const n of nodes) { const t = tname.get(n.type) || String(n.type); counts[t] = (counts[t] || 0) + 1; }
 console.log("");
 console.log("  " + Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([k, v]) => k + " " + v).join(", "));
@@ -171,7 +176,20 @@ if (OUT) {
   writeFileSync(join(OUT, "nodes.json"), JSON.stringify(nodes, null, 1), "utf8");
   writeFileSync(join(OUT, "schema.json"), JSON.stringify(defs, null, 1), "utf8");
   mkdirSync(join(OUT, "img"), { recursive: true });
-  for (const e of images) writeFileSync(join(OUT, "img", e.name), e.data());
+  let written = 0;
+  for (const e of images) {
+    let data;
+    try { data = e.data(); }
+    catch (err) {
+      if (!DAMAGED.test(err.message)) throw err;
+      console.error(err.message);
+      continue;
+    }
+    writeFileSync(join(OUT, "img", e.name), data);
+    written++;
+  }
+  const refused = images.length - written;
+  if (refused) process.exitCode = 1;
   // Shapes as SVG, so the decoding can be checked by eye and not only by arithmetic.
   mkdirSync(join(OUT, "svg"), { recursive: true });
   let k = 0;
@@ -184,5 +202,7 @@ if (OUT) {
     if (++k >= 40) break;
   }
   console.log("");
-  console.log("  written to " + OUT + ": nodes.json, schema.json, img/ (" + images.length + " images), svg/ (" + k + " shapes)");
+  console.log("  written to " + OUT + ": nodes.json, schema.json, img/ (" +
+    (refused ? written + " of " + images.length + " images, " + refused + " refused" : images.length + " images") +
+    "), svg/ (" + k + " shapes)");
 }

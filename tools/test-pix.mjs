@@ -11,11 +11,12 @@
 // still prints what it printed before the reading moved into tools/pix/read.mjs.
 import { deepStrictEqual } from "node:assert";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { zstdCompressSync } from "node:zlib";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Reader, parseSchema, createDecoder, decodePath, pathToSVG, MAX_DEPTH } from "./kiwi.mjs";
+import { Reader, parseSchema, createDecoder, decodePath, pathToSVG, MAX_DEPTH, UINT } from "./kiwi.mjs";
 import { readPix, childrenByParent, guidKey, hashHex } from "./pix/read.mjs";
 import { parseKiwiText, encodeSchema, encodeMessage, writeDocument, writePix, Writer } from "./pix/write.mjs";
 import { unzip } from "./pix/zip.mjs";
@@ -244,13 +245,34 @@ refuses("a zstd frame cut short inside a sound archive", () => {
 refuses("a document that is not a pixso document", () => {
   readPix(writePix({ schema: encodeSchema(defs), document: Buffer.from("not-pixso and some bytes"), docName: FIXTURE_DOC_NAME }));
 }, "PIX_CORRUPT:", /not a pixso document/);
-refuses("an image whose bytes fail their CRC", () => {
-  const f = Buffer.from(fx.pix);
+// The fixture with one byte of its PNG flipped: the document is sound, the image fails its CRC.
+function damageImage(pixBytes) {
+  const f = Buffer.from(pixBytes);
   const e = unzip(f).find((x) => x.name.endsWith(".png"));
   f[f.indexOf(e.data()) + 20] ^= 0xff;
-  readPix(f).images.get(hashHex(fx.image.hash)).data();
+  return f;
+}
+refuses("an image whose bytes fail their CRC", () => {
+  readPix(damageImage(fx.pix)).images.get(hashHex(fx.image.hash)).data();
 }, "PIX_CORRUPT:", /CRC/);
 refuses("an archive with no document", () => readPix(writePix({ schema: encodeSchema(defs), document: writeDocument(fx.message), docName: "x.bin" })), "PIX_CORRUPT:", /no document/);
+
+// After the document's one zstd frame. node's zstd stops at the end of the first frame whatever
+// follows, so these are caught by the reader or not at all.
+const withAfterFrame = (extra) => writePix({
+  schema: encodeSchema(defs), document: Buffer.concat([writeDocument(fx.message), extra]), docName: FIXTURE_DOC_NAME,
+});
+const skippableFrame = (n) => { const b = Buffer.alloc(8 + n, 0x5a); b.writeUInt32LE(0x184d2a53, 0); b.writeUInt32LE(n, 4); return b; };
+refuses("text after the document's zstd frame", () => readPix(withAfterFrame(Buffer.from("GARBAGE AFTER THE FRAME"))), "PIX_CORRUPT:", /not part of it/);
+refuses("zero padding that ends in a byte that is not zero", () => readPix(withAfterFrame(Buffer.from([0, 0, 0, 1]))), "PIX_CORRUPT:", /not part of it/);
+refuses("a second zstd frame after the first", () => readPix(withAfterFrame(zstdCompressSync(Buffer.from("more")))), "PIX_UNSUPPORTED:", /second zstd frame/);
+refuses("a skippable zstd frame cut short", () => readPix(withAfterFrame(skippableFrame(10).subarray(0, 12))), "PIX_CORRUPT:", /skippable/);
+check("zero padding and skippable frames after the frame are let through, and counted", () => {
+  if (pix.stats.bytesAfterFrame !== 0) return false;
+  const p = readPix(withAfterFrame(Buffer.concat([skippableFrame(10), Buffer.alloc(16)])));
+  deepStrictEqual(p.nodes, value.pixsoNodes);
+  return p.stats.bytesAfterFrame === 34 && "34 bytes";
+});
 
 // The reader's primitives, each made to read past the end.
 const R = (bytes) => new Reader(Buffer.from(bytes));
@@ -297,6 +319,68 @@ refuses("a schema naming a field __proto__", () => {
   parseSchema(encodeSchema(d));
 }, "PIX_CORRUPT:", /__proto__/);
 refuses("a schema cut short", () => parseSchema(schemaBytes("message M { uint a = 1; }").subarray(0, 6)));
+
+// Names every plain object already has. The schema comes from the file, so a definition, a field or
+// an enum member may be called any of these, and the reader must treat them as plain names.
+const HOSTILE_SCHEMA = `
+  enum NodeType { DOCUMENT = 0; CANVAS = 1; constructor = 2; __proto__ = 3; toString = 4; }
+  struct GUID { uint sessionID; uint localID; }
+  struct toString { uint valueOf; }
+  message constructor { uint hasOwnProperty = 1; toString toString = 2; }
+  message __proto__ { string constructor = 1; }
+  message hasOwnProperty { uint isPrototypeOf = 1; }
+  message PixsoNode { GUID guid = 1; NodeType type = 2; string name = 3; constructor constructor = 4;
+    __proto__ valueOf = 5; hasOwnProperty[] toString = 6; }
+  message Blob { byte[] bytes = 1; }
+  message PixsoMsg { PixsoNode[] pixsoNodes = 1; Blob[] blobs = 2; }
+`;
+const hostileDefs = parseKiwiTextLoose(HOSTILE_SCHEMA);
+const g = (localID) => ({ sessionID: 0, localID });
+const hostileNodes = [
+  { guid: g(0), type: 0, name: "Document" },
+  { guid: g(1), type: 2, name: "A", constructor: { hasOwnProperty: 7, toString: { valueOf: 3 } } },
+  { guid: g(2), type: 3, name: "B", valueOf: { constructor: "x" }, toString: [{ isPrototypeOf: 1 }] },
+  { guid: g(3), type: 4, name: "C" },
+];
+const hostilePix = writePix({
+  schema: encodeSchema(hostileDefs), docName: FIXTURE_DOC_NAME,
+  document: writeDocument(encodeMessage(hostileDefs, "PixsoMsg", { pixsoNodes: hostileNodes, blobs: [] })),
+});
+check("definitions, fields and enum members named constructor, __proto__, toString… read as plain names", () => {
+  deepStrictEqual(readPix(hostilePix).nodes, hostileNodes);
+  deepStrictEqual(readPix(hostilePix, { keep: { PixsoNode: ["guid", "name"] } }).nodes, hostileNodes.map((n) => ({ guid: n.guid, name: n.name })));
+  // JSON.parse, because "__proto__" in an object literal sets the prototype instead of a key.
+  const keep = JSON.parse('{"PixsoNode":["guid","constructor","valueOf"],"constructor":["toString"],"__proto__":[]}');
+  deepStrictEqual(readPix(hostilePix, { keep }).nodes, [
+    { guid: g(0) }, { guid: g(1), constructor: { toString: { valueOf: 3 } } }, { guid: g(2), valueOf: {} }, { guid: g(3) },
+  ]);
+  return "with and without keep";
+});
+
+// S0 holds S1 holds … S(n-1), which holds a uint (or nothing); message M holds S0. `reverse` lists
+// the definitions last-first, so a walk in the file's order meets the chain from its far end.
+function structChain(n, { reverse = false, empty = false } = {}) {
+  const at = (i) => (reverse ? n - 1 - i : i);
+  const d = new Array(n);
+  for (let i = 0; i < n; i++) {
+    d[at(i)] = {
+      name: "S" + i, kind: 1,
+      fields: i + 1 < n ? [{ name: "s", type: at(i + 1), isArray: false, value: 1 }]
+        : empty ? [] : [{ name: "x", type: UINT, isArray: false, value: 1 }],
+    };
+  }
+  d.push({ name: "M", kind: 2, fields: [{ name: "s", type: at(0), isArray: false, value: 1 }] });
+  return d;
+}
+check("structs nested " + MAX_DEPTH + " deep, as deep as the decoder goes, parse and decode", () => {
+  let v = createDecoder(parseSchema(encodeSchema(structChain(MAX_DEPTH)))).decode(Buffer.from([1, 5, 0]), "M");
+  for (let i = 0; i < MAX_DEPTH; i++) v = v.s;
+  return v.x === 5;
+});
+refuses("structs nested " + (MAX_DEPTH + 1) + " deep", () => parseSchema(encodeSchema(structChain(MAX_DEPTH + 1))), "PIX_CORRUPT:", /levels deep/);
+refuses("a chain of 20 000 structs, listed first to last", () => parseSchema(encodeSchema(structChain(20000))), "PIX_CORRUPT:", /levels deep/);
+refuses("a chain of 20 000 structs, listed last to first", () => parseSchema(encodeSchema(structChain(20000, { reverse: true }))), "PIX_CORRUPT:", /levels deep/);
+refuses("a chain of 20 000 empty structs handed straight to createDecoder", () => createDecoder(structChain(20000, { empty: true })), "PIX_CORRUPT:", /levels deep/);
 
 // Messages made to hurt.
 check("messages nested " + (MAX_DEPTH - 6) + " deep read", () => {
@@ -364,6 +448,26 @@ try {
       return readdirSync(join(out, "svg")).length === 2;
     });
   }
+  const badImage = join(tmp, "bad-image.pix");
+  writeFileSync(badImage, damageImage(fx.pix));
+  const r3 = run(badImage, "--out", join(tmp, "out-bad"));
+  const errs = r3.stderr.split(/\r?\n/).filter(Boolean);
+  if (r3.status === 1 && errs.length === 1 && /^PIX_CORRUPT: .*CRC/.test(errs[0]) &&
+      r3.stdout.split(/\r?\n/).some((l) => l.endsWith("img/ (0 of 1 images, 1 refused), svg/ (2 shapes)")) &&
+      existsSync(join(tmp, "out-bad", "nodes.json")) && readdirSync(join(tmp, "out-bad", "img")).length === 0) {
+    ok("pix-open --out skips an image that fails its CRC with one PIX_CORRUPT line, writes the rest and exits 1");
+  } else fail("pix-open --out on a damaged image: exit " + r3.status + ", stderr " + JSON.stringify(r3.stderr.slice(0, 300)));
+  const r4 = run(badImage);
+  if (r4.status === 0 && r4.stderr === "") ok("pix-open without --out does not read images, so the damaged one passes");
+  else fail("pix-open on a damaged image without --out: exit " + r4.status + ", stderr " + JSON.stringify(r4.stderr.slice(0, 300)));
+
+  const hostile = join(tmp, "hostile.pix");
+  writeFileSync(hostile, hostilePix);
+  const r5 = run(hostile);
+  if (r5.status === 0 && r5.stdout.split(/\r?\n/).includes("  DOCUMENT 1, constructor 1, __proto__ 1, toString 1")) {
+    ok("pix-open counts node types named constructor, __proto__ and toString like any other");
+  } else fail("pix-open on hostile names: exit " + r5.status + ", " + JSON.stringify((r5.stderr || r5.stdout).slice(0, 300)));
+
   const bad = join(tmp, "truncated.pix");
   writeFileSync(bad, makeFixture("truncated").pix);
   const r2 = run(bad);

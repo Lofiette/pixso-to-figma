@@ -9,6 +9,8 @@
 //   pix.entries    every zip entry, bytes unread until entry.data() is called
 //   pix.images     lowercase SHA-1 hex → its "<sha1>.png" entry
 //   pix.document   { name, size, version, tag, bytes }
+//   pix.stats      { decodeMs, bytesAfterFrame }: bytesAfterFrame counts the zero padding or skippable
+//                  zstd frames let through after the document's frame (see afterFrame)
 //
 // The format, measured on a 13 MB component library:
 //
@@ -17,10 +19,12 @@
 //   the document:   "pixso-kw", a version byte, "compress:zstd", then one zstd frame.
 //   inside that:    one Kiwi message, PixsoMsg { pixsoNodes: PixsoNode[], blobs: Blob[], ... }.
 //
-// Everything is decoded and checked before anything is returned. A damaged or hostile file throws
-// PIX_CORRUPT here — reading past the end, a field id the file's schema does not define, a document
-// that does not end on its last byte, a zip or zstd layer that does not add up — so nothing
-// downstream is ever built from half a file.
+// Everything is decoded and checked before anything is returned, except image entries, which are
+// checked when their data() is read. A damaged or hostile file throws PIX_CORRUPT here — reading
+// past the end, a field id the file's schema does not define, a document that does not end on its
+// last byte, a zip or zstd layer that does not add up, bytes after the zstd frame — so nothing
+// downstream is ever built from half a file. A sound file in a form this does not read (zip64,
+// another compression, a second zstd frame) throws PIX_UNSUPPORTED instead.
 import * as zlib from "node:zlib";
 import { BYTE, createDecoder, parseSchema, corrupt, unsupported } from "../kiwi.mjs";
 import { unzip } from "./zip.mjs";
@@ -64,7 +68,7 @@ export function readPix(buffer, opts = {}) {
     entries,
     images,
     document: { name: docEntry.name, size: docEntry.size, version: doc.version, tag: doc.tag, bytes: doc.bytes },
-    stats: { decodeMs },
+    stats: { decodeMs, bytesAfterFrame: doc.bytesAfterFrame },
   };
 }
 
@@ -98,6 +102,7 @@ export function openDocument(buf, opts = {}) {
   }
   const tag = buf.toString("latin1", 9, at).replace(/[^\x20-\x7e]/g, "");
   const frame = zstdFrame(buf.subarray(at));
+  const bytesAfterFrame = afterFrame(buf, at + frame.bytes.length);
   const max = opts.maxDocumentBytes || MAX_DOCUMENT_BYTES;
   const tooBig = () => unsupported("the document decompresses past the " + Math.round(max / 1048576) + " MB limit (maxDocumentBytes)");
   if (frame.contentSize !== null && frame.contentSize > max) throw tooBig();
@@ -113,7 +118,35 @@ export function openDocument(buf, opts = {}) {
   if (frame.contentSize !== null && bytes.length !== frame.contentSize) {
     throw corrupt("the document's zstd frame declares " + frame.contentSize + " bytes and gives " + bytes.length);
   }
-  return { version, tag, bytes };
+  return { version, tag, bytes, bytesAfterFrame };
+}
+
+// What may follow the document's one frame: nothing, zero padding, or zstd's own skippable frames
+// (magic 0x184D2A50..5F, a 4-byte length, then that many bytes), which every zstd decoder passes
+// over. Anything else is refused. node's zstd stops after the first frame and ignores whatever
+// follows — garbage or a second frame alike — so the old pix-open never saw such bytes; here they
+// mean the document was not understood, by the rule that nothing may be left over. A second frame
+// of data is well-formed zstd, just not this format, so it is PIX_UNSUPPORTED rather than CORRUPT.
+// Returns how many bytes were let through, for readPix's stats.
+export function afterFrame(b, p) {
+  const start = p;
+  while (p < b.length) {
+    if (p + 4 <= b.length && (b.readUInt32LE(p) & 0xfffffff0) === 0x184d2a50) {
+      if (p + 8 > b.length || b.readUInt32LE(p + 4) > b.length - p - 8) {
+        throw corrupt("a skippable zstd frame at byte " + p + " of the document runs past its end");
+      }
+      p += 8 + b.readUInt32LE(p + 4);
+      continue;
+    }
+    if (p + 4 <= b.length && b.subarray(p, p + 4).equals(ZSTD_MAGIC)) {
+      throw unsupported("a second zstd frame follows the document's first at byte " + p + "; this reader reads one");
+    }
+    for (let i = p; i < b.length; i++) {
+      if (b[i] !== 0) throw corrupt((b.length - p) + " bytes after the document's zstd frame, from byte " + p + ", are not part of it");
+    }
+    p = b.length;
+  }
+  return p - start;
 }
 
 // Walk a zstd frame's header and block headers without decompressing. Needed because node's zstd
