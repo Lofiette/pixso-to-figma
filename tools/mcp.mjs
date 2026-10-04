@@ -10,12 +10,13 @@
 //   - A failed call prints its FULL error text to stderr: the message, the chain of causes, the HTTP
 //     status and the whole body. The library run that lost 249 objects kept the last three lines of
 //     its output ("stderr: null | } | Node.js v24.19.0") and the real cause was gone for good.
-//   - A TRANSPORT failure exits with 75 (EX_TEMPFAIL), anything else that fails exits with 1. A
-//     transport failure means the channel did not carry the call: the connection was refused or
-//     reset, the reply did not arrive within MCP_TIMEOUT_MS, or the server said 502/503/504. Pixso
-//     answering with an error — a script that threw, a JSON-RPC error, a 4xx or a 500 — is not one:
-//     the channel worked. The extraction loop's circuit breaker counts only the first kind, so a
-//     script that fails on one object can never make the runner believe Pixso has gone away.
+//   - A TRANSPORT failure exits with 75 (EX_TEMPFAIL, named in mcp-codes.mjs), anything else that
+//     fails exits with 1. A transport failure means the channel did not carry the call: the
+//     connection was refused or reset, the reply did not arrive within MCP_TIMEOUT_MS, or the server
+//     said 502/503/504. Pixso answering with an error — a script that threw, a JSON-RPC error, a 4xx
+//     or a 500 — is not one: the channel worked. The extraction loop's circuit breaker counts only
+//     the first kind, so a script that fails on one object can never make the runner believe Pixso
+//     has gone away.
 //   - With PX_MCP_HEALTH set, every call appends one JSON line when it starts and one when it ends
 //     (ok / transport / error). That is how the extraction loop sees calls made by its grandchildren
 //     — px-*.mjs scripts it does not control — without parsing their output.
@@ -25,11 +26,12 @@
 // MCP_URL picks the endpoint (default Pixso's 127.0.0.1:3667), MCP_TIMEOUT_MS the deadline of each
 // request including its body (default 45 s, the per-request deadline docs/REWRITE.md §4 sets; Pixso
 // kills a script at about 15 s, so a call still silent at 45 s is not coming back).
+//
+// A script, not a module: it runs the moment it is started, from whatever path it is started by
+// (through a symlink or a junction too). The exit code the callers need is in mcp-codes.mjs.
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { EXIT_TRANSPORT } from "./mcp-codes.mjs";
 
-export const EXIT_TRANSPORT = 75;
 const ENDPOINT = process.env.MCP_URL || "http://127.0.0.1:3667/mcp";
 const TIMEOUT_MS = Number(process.env.MCP_TIMEOUT_MS) || 45000;
 const NL = String.fromCharCode(10);
@@ -37,7 +39,7 @@ let sessionId = null;
 let nextId = 1;
 
 // kind: "transport" | "http" | "rpc" | "protocol". Only "transport" is the channel's fault.
-export class McpError extends Error {
+class McpError extends Error {
   constructor(kind, message, extra) {
     super(message);
     this.kind = kind;
@@ -138,7 +140,7 @@ async function connect() {
 
 // The whole text, nothing shortened: the first line is the headline the loop records as the error,
 // the rest is what someone needs to find the cause afterwards.
-export function describeFailure(e) {
+function describeFailure(e) {
   const kind = (e && e.kind) || "internal";
   const lines = ["mcp " + kind + " failure: " + ((e && e.message) || String(e))];
   lines.push("  endpoint: " + ENDPOINT);
@@ -205,37 +207,36 @@ async function main(cmd, prep) {
   return r;
 }
 
-const isMain = !!process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
-if (isMain) {
-  const [, , cmd, ...rest] = process.argv;
-  const gate = process.env.PX_MCP_GATE;
-  let prep = null;
-  if (!["info", "tools", "resources", "call", "script"].includes(cmd)) {
-    console.log("commands: info | tools | resources | call <name> [jsonArgs] | script <file.js>");
-  } else {
-    try { prep = prepare(cmd, rest); }
-    catch (e) { process.stderr.write("mcp: cannot start the call: " + ((e && e.stack) || e) + NL); process.exitCode = 1; }
-  }
-  if (!prep) {
-    // usage printed, or a local mistake reported above: no call was made, nothing to record
-  } else if (gate && existsSync(gate)) {
-    health({ ev: "refused", cmd });
-    process.stderr.write("mcp transport failure: refused without trying: the circuit breaker is open (" + gate + ")" + NL);
-    process.exitCode = EXIT_TRANSPORT;
-  } else {
-    const t0 = Date.now();
-    health({ ev: "start", cmd });
-    try {
-      const r = await main(cmd, prep);
-      // isError is Pixso answering that the script failed: the channel worked, the caller decides.
-      health({ ev: "ok", cmd, ms: Date.now() - t0, isError: r && r.isError ? true : undefined });
-    } catch (e) {
-      const transport = !!e && e.kind === "transport";
-      const text = describeFailure(e);
-      health({ ev: transport ? "transport" : "error", cmd, kind: (e && e.kind) || "internal", ms: Date.now() - t0,
-        msg: text.split(NL)[0], text });
-      process.stderr.write(text + NL);
-      process.exitCode = transport ? EXIT_TRANSPORT : 1;
-    }
+const [, , cmd, ...rest] = process.argv;
+const gate = process.env.PX_MCP_GATE;
+let prep = null;
+if (!["info", "tools", "resources", "call", "script"].includes(cmd)) {
+  // Not a call, and not a success either: whoever ran this expected one.
+  console.log("commands: info | tools | resources | call <name> [jsonArgs] | script <file.js>");
+  process.exitCode = 1;
+} else {
+  try { prep = prepare(cmd, rest); }
+  catch (e) { process.stderr.write("mcp: cannot start the call: " + ((e && e.stack) || e) + NL); process.exitCode = 1; }
+}
+if (!prep) {
+  // usage printed, or a local mistake reported above: no call was made, nothing to record
+} else if (gate && existsSync(gate)) {
+  health({ ev: "refused", cmd });
+  process.stderr.write("mcp transport failure: refused without trying: the circuit breaker is open (" + gate + ")" + NL);
+  process.exitCode = EXIT_TRANSPORT;
+} else {
+  const t0 = Date.now();
+  health({ ev: "start", cmd });
+  try {
+    const r = await main(cmd, prep);
+    // isError is Pixso answering that the script failed: the channel worked, the caller decides.
+    health({ ev: "ok", cmd, ms: Date.now() - t0, isError: r && r.isError ? true : undefined });
+  } catch (e) {
+    const transport = !!e && e.kind === "transport";
+    const text = describeFailure(e);
+    health({ ev: transport ? "transport" : "error", cmd, kind: (e && e.kind) || "internal", ms: Date.now() - t0,
+      msg: text.split(NL)[0], text });
+    process.stderr.write(text + NL);
+    process.exitCode = transport ? EXIT_TRANSPORT : 1;
   }
 }

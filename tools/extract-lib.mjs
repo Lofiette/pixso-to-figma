@@ -11,14 +11,18 @@
 //     rewritten after every object and therefore is also the checkpoint;
 //   - a failure keeps the object's complete stdout and stderr, and the full text of every MCP call
 //     that failed while it ran, in <object dir>/extract-error.log;
+//   - an object during which any MCP call failed in transport is never kept, even when it finished
+//     with a payload: the px-*.mjs steps log a failed call and carry on without it, so its output may
+//     have holes. Everything it wrote is discarded and it is read again (once more at the end of the
+//     list, or first when the run resumes after an outage);
 //   - dirs.txt still lists only what can be built, but the verdict reads states.json as well, so a
 //     failed or skipped object is a failed object (build-lib.mjs verdict);
 //   - a circuit breaker watches the Pixso channel: three transport failures in a row, or 60 s of
-//     trying without one call getting through, stops the work. The object that was running is
-//     stopped, the checkpoint written, and the runner says so; then Pixso is asked every 5 s for up
-//     to 10 min. When it answers, the open file must be the one recorded at the start (name, key,
-//     page ids, from px-pages) — a different file stops the run with IDENTITY_CHANGED, the same one
-//     resumes with what is left, the interrupted object first;
+//     trying without one call getting through, stops the work. The object whose calls tripped it
+//     fails — stopped if it is still running — the checkpoint is written, and the runner says so;
+//     then Pixso is asked every 5 s for up to 10 min. When it answers, the open file must be the
+//     one recorded at the start (name, key, page ids, from px-pages) — a different file stops the
+//     run with IDENTITY_CHANGED, the same one resumes with what is left, the interrupted object first;
 //   - the same identity check runs before the first object, and after any object during which a
 //     call failed in transport however briefly: a Pixso that restarts between two calls trips
 //     nothing, and may come back on another file.
@@ -37,7 +41,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { EXIT_TRANSPORT } from "./mcp.mjs";
+import { EXIT_TRANSPORT } from "./mcp-codes.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MCP = join(HERE, "mcp.mjs");
@@ -127,36 +131,69 @@ export function identityDiff(was, now) {
 
 // ---------- the breaker ----------
 
-// Fed with mcp.mjs health events: { t, ev: "start" | "ok" | "error" | "transport" | "refused" }.
+// Fed with mcp.mjs health events: { t, pid, ev: "start" | "ok" | "error" | "transport" | "refused" }.
 // "ok" and "error" both mean Pixso answered — the channel works — and close the account. Only
-// "transport" counts toward the trip. "start" marks when the trying began, so a call that hangs
-// is measured from its start, not from whenever its timeout finally fires.
+// "transport" counts toward the trip.
+//
+// The silence rule measures time spent TRYING: from a call's start to its end, added up over the calls
+// that have not got through since the last one that did, plus the age of a call still waiting. Time
+// with no call in flight is the object's own work — packing a large payload takes minutes — and says
+// nothing about Pixso. Counting it once tripped the breaker on a healthy Pixso after a single dropped
+// call followed by a long pack. A call that hangs is measured from its start, not from whenever its
+// timeout finally fires.
 export class Breaker {
   constructor(t = {}) {
     this.tripAfter = t.transportTrip || TIMING.transportTrip;
     this.silenceMs = t.silenceMs || TIMING.silenceMs;
     this.reset();
   }
-  reset() { this.consecutive = 0; this.troubleSince = null; this.last = null; }
+  reset() {
+    this.consecutive = 0;
+    this.last = null;
+    this.inflight = new Map();   // pid of the mcp.mjs process -> when its call started
+    this.triedMs = 0;            // trying already over, since the last answer
+    this.busySince = null;       // since when at least one call has been in flight
+  }
   observe(ev) {
     if (!ev || typeof ev.t !== "number") return;
-    if (ev.ev === "ok" || ev.ev === "error") { this.consecutive = 0; this.troubleSince = null; this.last = null; return; }
-    if (ev.ev === "start") { if (this.troubleSince === null) this.troubleSince = ev.t; return; }
+    const who = ev.pid === undefined ? "?" : String(ev.pid);
+    if (ev.ev === "start") {
+      if (!this.inflight.size) this.busySince = ev.t;
+      this.inflight.set(who, ev.t);
+      return;
+    }
+    if (ev.ev === "ok" || ev.ev === "error") {
+      this.inflight.delete(who);
+      this.consecutive = 0;
+      this.last = null;
+      this.triedMs = 0;
+      // A call still in flight (there is rarely more than one) starts its account at this answer.
+      this.busySince = this.inflight.size ? ev.t : null;
+      return;
+    }
     if (ev.ev === "transport") {
       this.consecutive++;
       this.last = ev;
-      if (this.troubleSince === null) this.troubleSince = ev.t;
+      if (this.inflight.delete(who) && !this.inflight.size && this.busySince !== null) {
+        this.triedMs += Math.max(0, ev.t - this.busySince);
+        this.busySince = null;
+      }
     }
     // "refused" is a call the open breaker turned away; it says nothing about Pixso.
   }
+  // The object's processes have ended. A call they still had in flight was cut off with them — by the
+  // breaker, or by its own caller — and will never report; it is not Pixso's silence, so not counted.
+  settle() { this.inflight.clear(); this.busySince = null; }
+  tryingMs(now) { return this.triedMs + (this.busySince !== null ? Math.max(0, now - this.busySince) : 0); }
   check(now) {
     const lastMsg = this.last ? this.last.msg || "?" : null;
     const text = this.last ? this.last.text || null : null;
     if (this.consecutive >= this.tripAfter) {
       return { reason: "transport", detail: this.consecutive + " transport failures in a row, the last: " + lastMsg, text };
     }
-    if (this.troubleSince !== null && now - this.troubleSince >= this.silenceMs) {
-      return { reason: "silence", detail: "no MCP call got through for " + Math.round((now - this.troubleSince) / 1000) + " s" +
+    const tried = this.tryingMs(now);
+    if (tried >= this.silenceMs) {
+      return { reason: "silence", detail: "no MCP call got through in " + Math.round(tried / 1000) + " s of trying" +
         (lastMsg ? ", the last failure: " + lastMsg : " (a call was still waiting for its answer)"), text };
     }
     return null;
@@ -302,7 +339,7 @@ export function runnerLine(line) {
   // Parsed by hand rather than by pattern: the line shape is fixed and known, and a regular
   // expression written through three layers of shell quoting has eaten its own backslashes more
   // than once.
-  //   [12/34] FRAME 2161n  "Ресурсы/ Меню закрыто"   (382s elapsed)
+  //   [12/34] FRAME 2161n  "Объект 12"   (382s elapsed)
   if (line.charAt(0) === "[") {
     const close = line.indexOf("]");
     const q1 = line.indexOf(String.fromCharCode(34));
@@ -471,37 +508,51 @@ export async function extractAll(o) {
     clearInterval(timer);
     current = null;
     drain();
+    breaker.settle();
     st.current = null;
-    // The object may have ended on the very failure that completes the count, between two polls:
-    // it is the same trip, and its object failed for the same reason.
+    // An object quicker than one poll can end on the very failure that completes the count, and the
+    // poll never sees the trip while it runs. The trip is still this object's own — its calls are the
+    // ones that failed — so it fails below with them; the next object is not blamed for it.
     if (!tripped) tripped = breaker.check(Date.now());
 
-    const attempt = { at, res, events, killed, sawTransport: events.some((e) => e.ev === "transport") };
-    if (!killed && res.code === 0 && hasPayload(ob.dir)) {
+    const lost = events.filter((e) => e.ev === "transport");
+    const finished = !killed && res.code === 0 && hasPayload(ob.dir);
+    const attempt = { at, res, events, killed, finished, sawTransport: lost.length > 0, discarded: [] };
+    // Kept only if nothing went wrong on the way. Exit 0 and a payload do not mean complete: px-svg,
+    // px-images, px-paintsub and px-textruns log FAIL for an item whose call failed, write their
+    // output without it, and exit 0. Pixso answering with an error is the step's own business (it
+    // decides, as it always has, whether the item can be left out); a call the CHANNEL failed is a
+    // hole nobody decided on.
+    if (finished && !tripped && !attempt.sawTransport) {
       ob.state = "extracted";
       ob.reused = false;
       ob.ms = res.ms;
       rmQuiet(join(ob.dir, ERROR_LOG));
       save();
-      return { trip: tripped, attempt };
+      return { trip: null, attempt };
     }
 
     let lastEnd = null;
     for (const ev of events) if (ev.ev === "ok" || ev.ev === "error" || ev.ev === "transport") lastEnd = ev;
-    const transport = !!tripped || (!!lastEnd && lastEnd.ev === "transport");
+    const transport = !!tripped || attempt.sawTransport;
+    const calls = lost.length + " MCP " + (lost.length === 1 ? "call" : "calls") + " failed in transport";
     let error;
     if (tripped) error = "Pixso stopped answering while this object was read: " + tripped.detail;
-    else if (transport) error = lastEnd.msg || "transport failure";
-    else if (res.code === 0) error = "the extractor finished without writing payload.json";
-    else error = headline(res.stderr, res.stdout, res.code);
+    else if (finished) {
+      error = calls + " while this object was read, and it finished without " + (lost.length === 1 ? "it" : "them") +
+        ": what it wrote may have gaps, so it is discarded; the last: " + (lost[lost.length - 1].msg || "?");
+    } else if (lastEnd && lastEnd.ev === "transport") error = lastEnd.msg || "transport failure";
+    else {
+      error = res.code === 0 ? "the extractor finished without writing payload.json" : headline(res.stderr, res.stdout, res.code);
+      if (transport) error += " (after " + calls + ")";
+    }
 
-    // A failed attempt must not leave a payload.json a later run would take for a success. A killed
-    // one may also have been half-way through writing any of its step files, which the next attempt
-    // would otherwise skip as done; they are all redone.
-    const discarded = discardAttempt(ob.dir, at, killed);
-    fail(ob, attempt, transport ? "PIXSO_UNAVAILABLE" : "EXTRACT_FAILED", transport, error, discarded, killed
-      ? "stopped by the circuit breaker"
-      : null);
+    // A failed attempt must not leave a payload.json a later run would take for a success. One that was
+    // killed, or that the channel failed, may also have left step files cut short or with holes — and
+    // migrate.mjs skips a step whose file exists — so everything it wrote is redone.
+    attempt.discarded = discardAttempt(ob.dir, at, killed || transport);
+    fail(ob, attempt, transport ? "PIXSO_UNAVAILABLE" : "EXTRACT_FAILED", transport, error, attempt.discarded,
+      killed ? "stopped by the circuit breaker" : null);
     return { trip: tripped, attempt };
   }
 
@@ -558,18 +609,31 @@ export async function extractAll(o) {
     save();
   }
 
+  // A failed object this run will try again: the channel failed it, not its content.
+  const retryable = (ob) => ob.state === "failed" && ob.transport && ob.attempts < T.maxAttempts;
+  // What is left to do after an outage: the objects the channel failed, the interrupted one among
+  // them, then the rest of the list — in file order within each.
+  function requeue() {
+    const again = st.objects.filter(retryable).map((ob) => ob.n - 1);
+    return again.concat(queue.filter((k) => again.indexOf(k) < 0));
+  }
+
   async function waitForPixso(tr) {
     openGate();
     const ob = st.objects[tr.at];
-    const done = count().extracted, left = st.objects.length - done;
+    // "Left" is what this run will still try. An object that failed on its own content is not in it —
+    // the run does not try it again, the next run does — and is counted apart, not hidden in "left".
+    const done = count().extracted, left = requeue().length;
+    const failedHere = st.objects.filter((o) => o.state === "failed" && !retryable(o)).length;
     const rec = { at: new Date().toISOString(), object: ob.key, name: ob.name, reason: tr.reason, detail: tr.detail,
-      done, left, outcome: "waiting" };
+      done, left, failed: failedHere, outcome: "waiting" };
     if (tr.text) rec.text = tr.text;
     st.trips.push(rec);
     st.status = "waiting-for-pixso";
     // The checkpoint is on disk before anyone is told, so whatever happens next it is there.
     save();
-    tell("Pixso перестал отвечать на объекте «" + ob.name + "» (" + ob.n + " из " + st.objects.length + "): готово " + done + ", осталось " + left);
+    tell("Pixso перестал отвечать на объекте «" + ob.name + "» (" + ob.n + " из " + st.objects.length + "): готово " + done + ", осталось " + left +
+      (failedHere ? ", с ошибкой " + failedHere + " (" + (failedHere === 1 ? "его" : "их") + " повторит следующий запуск)" : ""));
     // reason: "transport" and "silence" come from the breaker; "identity-check" is the loop's own
     // question about which file is open, which a Pixso that is not there cannot answer either.
     tell(tr.reason === "silence"
@@ -578,7 +642,8 @@ export async function extractAll(o) {
         ? "Pixso не ответил на вопрос, какой файл в нём открыт."
         : T.transportTrip + " " + plural(T.transportTrip, "обращение", "обращения", "обращений") + " подряд не дошли до Pixso.");
     tell("Извлечённое сохранено. Проверяю Pixso каждые " + ru(T.probeEveryMs) + ", жду до " + ru(T.probeForMs) + ".");
-    log("circuit breaker open at " + ob.key + " " + JSON.stringify(ob.name) + ": " + tr.detail + "; " + done + " done, " + left + " left");
+    log("circuit breaker open at " + ob.key + " " + JSON.stringify(ob.name) + ": " + tr.detail + "; " + done + " done, " + left + " left" +
+      (failedHere ? ", " + failedHere + " failed on their own" : ""));
     const since = Date.now(), until = since + T.probeForMs;
     let last = tr.detail, lastText = tr.text || null, probes = 0;
     while (Date.now() < until) {
@@ -602,8 +667,9 @@ export async function extractAll(o) {
       // Whatever the killed processes and the shut gate wrote meanwhile belongs to the outage.
       reader.skipToEnd();
       st.status = "running";
+      queue = requeue();
       save();
-      tell("Pixso снова отвечает, файл тот же — продолжаю: осталось " + left);
+      tell("Pixso снова отвечает, файл тот же — продолжаю: осталось " + queue.length);
       log("Pixso answers again after " + Math.round(rec.waitedMs / 1000) + " s (" + probes + " probes), same file: resuming");
       return { code: "RESUMED" };
     }
@@ -688,15 +754,16 @@ export async function extractAll(o) {
     }
   }
 
-  // An extracted object whose reading straddled a change of file: everything its attempt wrote goes,
-  // and it is recorded as failed.
+  // An object that read to the end across a transport failure, after which another file turned out to
+  // be open: it may have been read from both. Its files are gone already (a transport failure
+  // discards them); this records why, so nobody goes looking for a fault in the object itself.
   function disown({ ob, attempt }, detail) {
     fail(ob, attempt, "IDENTITY_CHANGED", false,
       "discarded: the file open in Pixso changed while this object was read (IDENTITY_CHANGED: " + detail + ")",
-      discardAttempt(ob.dir, attempt.at, true), "read across a change of file");
+      attempt.discarded.concat(discardAttempt(ob.dir, attempt.at, true)), "read across a change of file");
   }
 
-  // An object that finished after a transport failure, right before the breaker tripped: if Pixso
+  // An object that finished despite a transport failure, right before the breaker tripped: if Pixso
   // then comes back on another file, it may have been read across the change.
   let suspect = null;
   for (;;) {
@@ -706,16 +773,15 @@ export async function extractAll(o) {
         if (r.code === "IDENTITY_CHANGED" && suspect) disown(suspect, r.detail);
         return finish(stop(r.code, r.detail, r.text, r.diff));
       }
+      // waitForPixso has put the interrupted object, and anything else the channel failed, first.
       trip = null;
       suspect = null;
-      // The interrupted object and anything else the channel failed go first, in file order.
-      const again = st.objects.filter((ob) => ob.state === "failed" && ob.transport && ob.attempts < T.maxAttempts).map((ob) => ob.n - 1);
-      queue = again.concat(queue.filter((k) => again.indexOf(k) < 0));
       continue;
     }
     if (!queue.length) {
-      // One more go for objects a passing blip failed without tripping the breaker: the channel
-      // failed them, not their content.
+      // One more go for objects a passing blip failed without tripping the breaker — those that gave
+      // up on it, and those that finished with a hole where the failed call was: the channel failed
+      // them, not their content.
       const blip = st.objects.filter((ob) => ob.state === "failed" && ob.transport && !ob.blipRetried && ob.attempts < T.maxAttempts);
       if (!blip.length) break;
       for (const ob of blip) ob.blipRetried = true;
@@ -725,16 +791,23 @@ export async function extractAll(o) {
     const k = queue.shift();
     const ob = st.objects[k];
     const r = await extractOne(ob);
-    // Where the run stopped: at this object if it failed, else at the next one.
-    const where = ob.state === "failed" || !queue.length ? k : queue[0];
-    const mixed = ob.state === "extracted" && r.attempt.sawTransport ? { ob, attempt: r.attempt } : null;
-    if (r.trip) { trip = Object.assign({ at: where }, r.trip); suspect = mixed; continue; }
+    // An attempt that got to the end and wrote its payload although a call failed in transport on the
+    // way. It is discarded already; if Pixso turns out to have another file open now, it may have been
+    // read across the switch, and is recorded as that.
+    const mixed = r.attempt.finished && r.attempt.sawTransport ? { ob, attempt: r.attempt } : null;
+    // A trip always comes from this object's own calls, and the object failed with it: the run stops
+    // here, and this object goes first when it resumes.
+    if (r.trip) { trip = Object.assign({ at: k }, r.trip); suspect = mixed; continue; }
     if (r.attempt.sawTransport) {
       // The channel failed at least once during this object, too briefly to trip the breaker, and
       // answered again. Pixso may have restarted in between, and not necessarily on the same file:
       // ask before reading anything else, and do not keep an object read across the switch.
       const id = await readIdentity();
-      if (id.transport) { trip = { reason: "identity-check", detail: id.error, text: id.text, at: where }; suspect = mixed; continue; }
+      if (id.transport) { trip = { reason: "identity-check", detail: id.error, text: id.text, at: k }; suspect = mixed; continue; }
+      // Pixso answered, whatever it said, so the failures before this are no longer "in a row": the
+      // next object starts on a clean count. (The loop's own calls do not reach the breaker through
+      // the health log, so it has to be told.)
+      breaker.reset();
       if (id.identity) {
         const d = identityDiff(baseline, id.identity);
         if (d) {

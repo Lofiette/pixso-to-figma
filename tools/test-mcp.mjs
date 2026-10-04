@@ -5,18 +5,25 @@
 // A fake Pixso MCP server runs inside this process and answers eval_script the way Pixso does — for
 // a few objects, then it drops every connection for a while, or hangs, or comes back with another
 // file open. Against it run the real mcp.mjs and the real extraction loop (extract-lib.mjs); the
-// only stand-in is the per-object program, which is this file started with --fake-extract: it reads
-// its object through mcp.mjs exactly as the px-*.mjs scripts do (a child process per call, retried
-// like px-export's halving loop, the error shortened to 160 characters on the way up the way
-// px-export shortens it) and writes a payload. Everything is synthetic and nothing leaves 127.0.0.1.
+// only stand-in is the per-object program, which is this file started with --fake-extract. It reads
+// its object through mcp.mjs as the px-*.mjs scripts do, a child process per call, in one of two
+// manners:
+//   - like px-export: a failed call is retried (FAKE_TRIES), and when it keeps failing the object
+//     gives up with the error shortened to 160 characters, the way px-export shortens it;
+//   - like px-svg, px-images, px-paintsub and px-textruns (FAKE_SWALLOW=<steps>): one call per step,
+//     a failed one logged as FAIL and left out, the step's file written anyway, exit 0. A step whose
+//     file is already there is skipped, as migrate.mjs skips it.
+// Everything is synthetic and nothing leaves 127.0.0.1.
 //
 // What it proves (docs/REWRITE.md §6, M0): every object ends in a recorded state; a failure keeps
 // its full error text; the breaker trips on three transport failures in a row and on silence, never
-// on a script error; the run resumes when Pixso comes back with the same file and stops with
-// IDENTITY_CHANGED when it comes back with another; and a run that lost objects can never read PASS.
+// on a script error or on time spent working between calls; the run resumes when Pixso comes back
+// with the same file and stops with IDENTITY_CHANGED when it comes back with another; an object
+// that lost a call is never kept, even when it ends with exit 0 and a payload; and a run that lost
+// objects can never read PASS.
 import http from "node:http";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,12 +33,30 @@ const HERE = dirname(SELF);
 const MCP = join(HERE, "mcp.mjs");
 const NL = String.fromCharCode(10);
 
+// ---------- never the real Pixso ----------
+// A live Pixso listens on 127.0.0.1:3667 on a designer's machine — and on the one this was written
+// on — and mcp.mjs falls back to that address when MCP_URL is unset. Every call here names its fake
+// Pixso; main() also points the fallback at a port nobody listens on before anything is started, so
+// a call site that forgets fails safe, and anything aimed at 3667 is refused outright.
+function guardEnv(env) {
+  const url = (env && env.MCP_URL) || process.env.MCP_URL;
+  let port = null;
+  try { const u = new URL(url); port = u.port || (u.protocol === "https:" ? "443" : "80"); } catch (e) {}
+  if (!url || port === null || port === "3667") {
+    throw new Error("test-mcp refuses to run against MCP_URL=" + JSON.stringify(url || null) + ": that could be the real Pixso");
+  }
+}
+
 // ---------- the stand-in for migrate.mjs ----------
-// node test-mcp.mjs --fake-extract <id> <dir>; FAKE_TRIES sets the tries per step (default 4).
+// node test-mcp.mjs --fake-extract <id> <dir>; FAKE_TRIES sets the tries per step (default 4);
+// FAKE_SWALLOW=<steps> switches to the carry-on manner, FAKE_LOCAL_MS adds that long a stretch
+// without calls after an attempt's calls if one of them was lost (the pack, which makes none).
 function fakeExtract(id, dir) {
+  try { guardEnv(process.env); } catch (e) { process.stderr.write(e.message + NL); process.exitCode = 1; return; }
   mkdirSync(dir, { recursive: true });
   const script = join(dir, "_read.js");
   writeFileSync(script, "// px:fake-object " + id + NL + "return { id: " + JSON.stringify(id) + " };" + NL, "utf8");
+  if (process.env.FAKE_SWALLOW) return fakeSwallow(id, dir, script, Number(process.env.FAKE_SWALLOW));
   const tries = Number(process.env.FAKE_TRIES) || 4;
   // One read per object (the real px-*.mjs make many; one is enough to fail, and every process
   // costs a fifth of a second on Windows).
@@ -47,6 +72,28 @@ function fakeExtract(id, dir) {
   console.log("extract-only: payload is at " + join(dir, "payload.json"));
 }
 
+// The carry-on manner. The payload counts the holes its steps left, including those of a step file
+// kept from an earlier attempt — which is exactly what a hole the loop failed to discard looks like.
+function fakeSwallow(id, dir, script, steps) {
+  let lostHere = 0;
+  for (let i = 0; i < steps; i++) {
+    const out = join(dir, "step-" + i + ".json");
+    if (existsSync(out)) { console.log("  step " + i + ": already in " + out + ", skipping"); continue; }
+    let r = null;
+    try { r = JSON.parse(execFileSync(process.execPath, [MCP, "script", script], { encoding: "utf8", cwd: HERE, stdio: ["ignore", "pipe", "pipe"] }).trim()); }
+    catch (e) { lostHere++; console.log("  FAIL step " + i + ": " + String(e.message).slice(0, 120)); }
+    writeFileSync(out, JSON.stringify(r ? { id, step: i } : { id, step: i, hole: true }), "utf8");
+  }
+  // The pack: a stretch with no calls. Only after a lost call, which is the case that matters, and
+  // asleep rather than spinning, so that it does not slow the calls of the groups running alongside.
+  const local = lostHere ? Number(process.env.FAKE_LOCAL_MS) || 0 : 0;
+  if (local) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, local);
+  let holes = 0;
+  for (let i = 0; i < steps; i++) if (JSON.parse(readFileSync(join(dir, "step-" + i + ".json"), "utf8")).hole) holes++;
+  writeFileSync(join(dir, "payload.json"), JSON.stringify({ id, holes }), "utf8");
+  console.log("extract-only: payload is at " + join(dir, "payload.json") + " (" + holes + " holes)");
+}
+
 // ---------- the fake Pixso ----------
 function fakePixso() {
   const S = {
@@ -58,6 +105,7 @@ function fakePixso() {
     resetNext: 0,              // reset this many requests, then answer again
     hung: [],                  // { res, at, closedAt } held open in hang mode
     onServe: null,
+    onIdentity: null,          // called after the identity script is answered
     body500: "",
     sockets: new Set(),
   };
@@ -117,7 +165,11 @@ function fakePixso() {
       }
       if (msg.method === "tools/call" && msg.params && msg.params.name === "eval_script") {
         const src = String((msg.params.arguments && msg.params.arguments.script) || "");
-        if (src.indexOf("px:identity") >= 0) { send(res, msg.id, text(JSON.stringify(S.identity)), true); return; }
+        if (src.indexOf("px:identity") >= 0) {
+          send(res, msg.id, text(JSON.stringify(S.identity)), true);
+          if (S.onIdentity) S.onIdentity();
+          return;
+        }
         if (src.indexOf("px:script-error") >= 0) { send(res, msg.id, { content: [{ type: "text", text: "Error: synthetic" }], isError: true }, true); return; }
         const m = /px:fake-object (\S+)/.exec(src);
         if (m) {
@@ -160,6 +212,7 @@ function fakePixso() {
 
 // ---------- helpers ----------
 function runNode(args, env) {
+  guardEnv(env);
   return new Promise((resolve) => {
     const t0 = Date.now();
     const e = Object.assign({}, process.env, env || {});
@@ -196,8 +249,11 @@ const exactResult = (name) => ({ name, rootId: "9:9", relocated: false, nodes: 3
 
 
 // Short timings for the loop. silenceMs is long here so that only the transport rule can trip; the
-// hung-Pixso group sets its own.
-const T = { pollMs: 50, silenceMs: 8000, probeEveryMs: 200, probeForMs: 15000, probeTimeoutMs: 1500, identityTimeoutMs: 3000, graceMs: 500 };
+// hung-Pixso group sets its own. The deadlines (here, and MCP_TIMEOUT_MS in each group) are generous
+// on purpose: an outage here is a dropped connection, which fails at once, so a long deadline costs
+// nothing — while a short one turns a call slowed by a busy machine into a transport failure the
+// test did not ask for.
+const T = { pollMs: 50, silenceMs: 8000, probeEveryMs: 200, probeForMs: 15000, probeTimeoutMs: 5000, identityTimeoutMs: 10000, graceMs: 500 };
 const EXTRACTOR = { script: SELF, args: ["--fake-extract"] };
 const FILE_A = { file: "Synthetic file A", fileKey: "synthetic-key-a", pageIds: ["0:1", "0:2"] };
 const FILE_B = { file: "Synthetic file B", fileKey: "synthetic-key-b", pageIds: ["7:1", "7:2"] };
@@ -240,7 +296,9 @@ async function groupPieces({ px, check, tmp, lib }) {
 
   px.mode = "hang";
   r = await runNode([MCP, "script", plain], Object.assign({}, H, { MCP_TIMEOUT_MS: "600" }));
-  check(r.code === 75 && /timed out/.test(first(r.stderr)) && r.ms < 5000,
+  // The bound is the whole process, start-up included, on a machine that may be busy: far above
+  // 600 ms, far below the 45 s the call would wait if the deadline were not applied.
+  check(r.code === 75 && /timed out/.test(first(r.stderr)) && r.ms < 20000,
     "mcp.mjs: no reply within MCP_TIMEOUT_MS is a transport failure", r.code + " " + r.ms + " ms " + first(r.stderr));
   hr.read();
 
@@ -292,12 +350,41 @@ async function groupPieces({ px, check, tmp, lib }) {
   check(c2 && c2.reason === "silence", "breaker: 60 s of trying with nothing through trips it", JSON.stringify(c2));
   b.observe({ t: 61500, ev: "ok" });
   check(b.check(200000) === null, "breaker: an answer clears the silence");
+  // Silence is time spent trying, not time passing: an object that loses one call and then packs for
+  // a while has not seen Pixso fall silent.
+  b = new Breaker({ transportTrip: 3, silenceMs: 1500 });
+  b.observe({ t: 0, pid: 1, ev: "start" });
+  b.observe({ t: 100, pid: 1, ev: "transport", msg: "dropped" });
+  check(b.check(5000) === null, "breaker: one failed call and then 5 s of work without calls is not silence", JSON.stringify(b.check(5000)));
+  b.observe({ t: 5000, pid: 2, ev: "start" });
+  check(b.check(6300) === null, "breaker: ...the next call's wait adds to the failed one's (1.4 s of 1.5 s)");
+  const c3 = b.check(6400);
+  check(c3 && c3.reason === "silence" && /in 2 s of trying, the last failure: dropped/.test(c3.detail),
+    "breaker: trying time adds up across the calls that do not get through", JSON.stringify(c3));
+  b.settle();
+  check(b.check(100000) === null, "breaker: a call cut off with its process is not Pixso's silence");
 
   // Reading a failure, and what reaches the plugin window.
   const crash = ["file:///C:/x/tools/px-export.mjs:42", "  throw new Error(\"boom \" + x);", "  ^", "", "Error: boom 7",
     "    at main (file:///x.mjs:42:9)", "", "Node.js v24.19.0"].join(NL);
   check(headline(crash, "", 1) === "Error: boom 7", "headline: Node's crash report gives its error line, not the source line", headline(crash, "", 1));
   check(headline("phase 1 failed: transport: x" + NL + crash, "", 1) === "phase 1 failed: transport: x", "headline: the first error line wins");
+  // mcp.mjs is a script and runs from whatever path starts it. Behind an "is this the main module?"
+  // guard it did nothing and exited 0 when started through a junction or a symlink. A copy, so the
+  // link never points into the repository.
+  const real = join(tmp, "real-tools"), link = join(tmp, "linked-tools");
+  mkdirSync(real, { recursive: true });
+  for (const f of ["mcp.mjs", "mcp-codes.mjs"]) copyFileSync(join(HERE, f), join(real, f));
+  let linked = null;
+  try { symlinkSync(real, link, "junction"); linked = link; } catch (e) { linked = null; check(true, "mcp.mjs through a junction — skipped, no link here: " + e.message); }
+  if (linked) {
+    r = await runNode([join(linked, "mcp.mjs"), "script", plain], { MCP_URL: px.url });
+    check(r.code === 0 && r.stdout.trim() === "1", "mcp.mjs started through a junction still makes its call", r.code + " " + JSON.stringify(r.stdout));
+    r = await runNode([join(linked, "mcp.mjs")], { MCP_URL: px.url });
+    check(r.code === 1 && /^commands:/.test(r.stdout), "mcp.mjs with no command prints its usage and does not claim success", r.code + " " + JSON.stringify(r.stdout));
+    try { rmSync(linked, { recursive: false, force: true }); } catch (e) {}
+  }
+
   check(runnerLine(">> Pixso перестал отвечать") === "Pixso перестал отвечать", "runner relays the designer's lines");
   check(runnerLine("[3/8] FRAME 10n  \"Объект 3\"   (4s elapsed)") === "  3 из 8   Объект 3", "runner shortens progress lines");
   check(runnerLine("phase 1: tree (budget 1200/call)") === null, "runner keeps technical lines in the console");
@@ -313,7 +400,7 @@ async function groupOutage({ px, check, tmp, lib, verdict }) {
   const { EXIT, extractAll, planJobs, readStates, unextracted } = lib;
   // FAKE_TRIES=3: the object gives up on its own after the third failure, so how quickly the loop
   // notices cannot change what happens.
-  const ENV = { MCP_URL: px.url, MCP_TIMEOUT_MS: "3000", FAKE_TRIES: "3" };
+  const ENV = { MCP_URL: px.url, MCP_TIMEOUT_MS: "10000", FAKE_TRIES: "3" };
   const doc = synthDoc("Synthetic file A", [4, 2]);
   const outDir = join(tmp, "obj");
   const jobs = planJobs(doc, outDir);
@@ -330,12 +417,14 @@ async function groupOutage({ px, check, tmp, lib, verdict }) {
   });
   const st = readStates(join(outDir, "states.json"));
   const trip = told.find((s) => s.startsWith("Pixso перестал отвечать"));
-  check(trip === "Pixso перестал отвечать на объекте «Объект 4» (4 из 6): готово 2, осталось 4",
-    "outage: the runner says where it stopped, how much is done and how much is left", trip);
+  // Left: objects 4 (interrupted), 5 and 6. Object 2 failed on its own script error: this run does not
+  // try it again, so it is not "left" — it is counted apart.
+  check(trip === "Pixso перестал отвечать на объекте «Объект 4» (4 из 6): готово 2, осталось 3, с ошибкой 1 (его повторит следующий запуск)",
+    "outage: the runner says where it stopped, how much is done, how much this run has left, and what failed on its own", trip);
   check(told.indexOf("3 обращения подряд не дошли до Pixso.") >= 0, "outage: the trip names its reason (3 transport failures in a row)", told.join(" | "));
   check(checkpoint && checkpoint.status === "waiting-for-pixso" && checkpoint.counts.extracted === 2,
     "outage: the checkpoint is on disk before the line is said", checkpoint && checkpoint.status);
-  check(told.indexOf("Pixso снова отвечает, файл тот же — продолжаю: осталось 4") >= 0, "outage: the same file → resumes", told.join(" | "));
+  check(told.indexOf("Pixso снова отвечает, файл тот же — продолжаю: осталось 3") >= 0, "outage: the same file → resumes", told.join(" | "));
   check(px.served.join(",") === "1:1,1:3,1:4,2:1,2:2",
     "outage: nothing issued while Pixso was away; the interrupted object went first on resume", px.served.join(","));
   check(res.exitCode === EXIT.SOME_FAILED && st.status === "complete", "outage: the run completes, exit 2 for the one failed object",
@@ -379,7 +468,7 @@ async function groupOutage({ px, check, tmp, lib, verdict }) {
 // ---------- 3. Pixso comes back with another file open ----------
 async function groupIdentity({ px, check, tmp, lib, verdict }) {
   const { EXIT, extractAll, planJobs, readStates, unextracted } = lib;
-  const ENV = { MCP_URL: px.url, MCP_TIMEOUT_MS: "3000", FAKE_TRIES: "3" };
+  const ENV = { MCP_URL: px.url, MCP_TIMEOUT_MS: "10000", FAKE_TRIES: "3" };
   const doc = synthDoc("Synthetic file A", [4, 0]);
   const outB = join(tmp, "b", "obj");
   px.outageAfter("1:2", "reset", { after: 3, ms: 400, file: FILE_B });
@@ -464,7 +553,7 @@ async function groupHung({ px, check, tmp, lib, verdict }) {
   const outDir = join(tmp, "obj");
   px.outageAfter("1:1", "hang", null);
   const told = [];
-  const TC = Object.assign({}, T, { silenceMs: 1200, probeEveryMs: 200, probeForMs: 1500, probeTimeoutMs: 300, identityTimeoutMs: 300 });
+  const TC = Object.assign({}, T, { silenceMs: 4000, probeEveryMs: 200, probeForMs: 1500, probeTimeoutMs: 300 });
   // The objects' own calls would wait 30 s: only the silence rule can stop them sooner.
   const res = await extractAll({ doc, jobs: planJobs(doc, outDir), outDir, extractor: EXTRACTOR,
     env: { MCP_URL: px.url, MCP_TIMEOUT_MS: "30000" }, timing: TC, log: () => {}, tell: (s) => told.push(s) });
@@ -485,7 +574,7 @@ async function groupHung({ px, check, tmp, lib, verdict }) {
     readIf(join(o2.dir, "extract-error.log")).indexOf("stopped by the circuit breaker") >= 0,
     "hung Pixso: the failure says why, and its log says the breaker stopped it", o2.error);
   check(told[0] === "Pixso перестал отвечать на объекте «Объект 2» (2 из 3): готово 1, осталось 2" &&
-    told.indexOf("Ни одно обращение к Pixso не прошло за 1.2 с.") >= 0 &&
+    told.indexOf("Ни одно обращение к Pixso не прошло за 4 с.") >= 0 &&
     told.some((s) => s.startsWith("Pixso так и не ответил за 1.5 с. Останавливаю извлечение: готово 1, осталось 2")),
     "hung Pixso: the runner's lines", told.join(" | "));
   check(!existsSync(join(outDir, "mcp-breaker.open")), "the breaker's gate is not left shut after the run");
@@ -502,7 +591,7 @@ async function groupBlip({ px, check, tmp, lib }) {
   const outDir = join(tmp, "obj");
   px.onServe = (id) => { if (id === "1:1") { px.onServe = null; px.resetNext = 1; } };
   const res = await extractAll({ doc, jobs: planJobs(doc, outDir), outDir, extractor: EXTRACTOR,
-    env: { MCP_URL: px.url, MCP_TIMEOUT_MS: "3000", FAKE_TRIES: "1" }, timing: T, log: () => {}, tell: () => {} });
+    env: { MCP_URL: px.url, MCP_TIMEOUT_MS: "10000", FAKE_TRIES: "1" }, timing: T, log: () => {}, tell: () => {} });
   const st = readStates(join(outDir, "states.json"));
   check(res.exitCode === EXIT.OK && st.trips.length === 0 && st.objects[1].attempts === 2 && st.objects[1].blipRetried === true &&
     px.served.join(",") === "1:1,1:3,1:2",
@@ -510,14 +599,120 @@ async function groupBlip({ px, check, tmp, lib }) {
     res.exitCode + " " + px.served.join(",") + " " + JSON.stringify(st.objects[1]));
 }
 
+// ---------- 6. steps that carry on past a failed call: the object is never kept with the hole ----------
+const holesOf = (o) => { try { return JSON.parse(readFileSync(join(o.dir, "payload.json"), "utf8")).holes; } catch (e) { return "no payload"; } };
+const stepFiles = (o) => { try { return readdirSync(o.dir).filter((n) => /^step-\d+\.json$/.test(n)); } catch (e) { return []; } };
+
+async function groupSwallow({ px, check, tmp, lib, verdict }) {
+  const { EXIT, extractAll, planJobs, readStates, unextracted } = lib;
+  const ENV = { MCP_URL: px.url, MCP_TIMEOUT_MS: "10000" };
+
+  // Three calls in a row lost by an object that then finishes — exit 0, a payload with three holes —
+  // before the loop's next look at the health log (1 s in production, 3 s here). The trip is found
+  // after it exits. It is that object's trip: it is not kept, it is named, and it goes first on resume.
+  const doc = synthDoc("Synthetic file A", [2, 0]);
+  px.onServe = (id) => { if (id === "1:1") { px.onServe = null; px.resetNext = 3; } };
+  const outA = join(tmp, "a", "obj");
+  const told = [];
+  const ra = await extractAll({ doc, jobs: planJobs(doc, outA), outDir: outA, extractor: EXTRACTOR,
+    env: Object.assign({}, ENV, { FAKE_SWALLOW: "4" }), timing: Object.assign({}, T, { pollMs: 3000 }),
+    log: () => {}, tell: (s) => told.push(s) });
+  const sa = readStates(join(outA, "states.json"));
+  const a1 = sa.objects[0];
+  check(sa.trips.length === 1 && sa.trips[0].object === a1.key && sa.trips[0].reason === "transport" &&
+    told[0] === "Pixso перестал отвечать на объекте «Объект 1» (1 из 2): готово 0, осталось 2",
+    "a trip completed by an object quicker than one poll is that object's, not the next one's",
+    told[0] + " " + JSON.stringify(sa.trips.map((t) => t.object + ":" + t.reason)));
+  check(a1.state === "extracted" && a1.attempts === 2 && a1.history && a1.history[0].transport === true &&
+    /^Pixso stopped answering while this object was read: 3 transport failures in a row/.test(a1.history[0].error) && holesOf(a1) === 0,
+    "...it is not kept with its three holes: it fails, and is read again, whole, when Pixso answers", holesOf(a1) + " " + JSON.stringify(a1));
+  const saidA = [];
+  verdict(listDirs(outA).map((d) => exactResult(basename(d))), (s) => saidA.push(s), unextracted(sa));
+  check(ra.exitCode === EXIT.OK && sa.objects[1].state === "extracted" && sa.objects[1].attempts === 1 && saidA[saidA.length - 1] === "PASS",
+    "...and the run ends clean only because both objects were read in full", ra.exitCode + " " + saidA[saidA.length - 1]);
+
+  // One object, a call lost on every attempt: it never gets to be kept, and the run cannot read PASS.
+  const one = synthDoc("Synthetic file A", [1, 0]);
+  px.onServe = (id) => { if (id === "1:1") px.resetNext = 1; };
+  const outC = join(tmp, "c", "obj");
+  const rc = await extractAll({ doc: one, jobs: planJobs(one, outC), outDir: outC, extractor: EXTRACTOR,
+    env: Object.assign({}, ENV, { FAKE_SWALLOW: "2" }), timing: T, log: () => {}, tell: () => {} });
+  px.onServe = null;
+  const sc = readStates(join(outC, "states.json"));
+  const c1 = sc.objects[0];
+  check(rc.exitCode === EXIT.SOME_FAILED && c1.state === "failed" && c1.reason === "PIXSO_UNAVAILABLE" && c1.transport === true &&
+    c1.attempts === 2 && sc.trips.length === 0 && /^1 MCP call failed in transport while this object was read, and it finished without it/.test(c1.error),
+    "an object that finishes with exit 0 past a lost call is recorded as failed, not extracted", rc.exitCode + " " + JSON.stringify(c1));
+  check(!existsSync(join(c1.dir, "payload.json")) && stepFiles(c1).length === 0 && listDirs(outC).length === 0 &&
+    readIf(join(c1.dir, "extract-error.log")).indexOf("discarded  written by this attempt and not to be trusted: ") >= 0,
+    "...everything its attempt wrote is discarded, step files included, and the log says so", stepFiles(c1).join(",") + " " + listDirs(outC).length);
+  const saidC = [];
+  verdict([], (s) => saidC.push(s), unextracted(sc));
+  check(saidC[saidC.length - 1] === "NOT CLEAN — nothing was built" && saidC.some((s) => s.startsWith("   0-000-Объект-1: 1 MCP call failed in transport")),
+    "...and the verdict names it as failed, never PASS", saidC.join(" | ").slice(0, 300));
+}
+
+// ---------- 7. what counts toward the breaker, and what does not ----------
+async function groupQuiet({ px, check, tmp, lib }) {
+  const { EXIT, extractAll, planJobs, readStates } = lib;
+  const ENV = { MCP_URL: px.url, MCP_TIMEOUT_MS: "10000" };
+
+  // One dropped call, then local work with no calls for longer than the silence limit set here.
+  // Pixso is fine; the breaker must not trip. The object is still not kept from that attempt: its
+  // step file with the hole is discarded, and the retry at the end reads it whole. The limit is
+  // seconds, not a fraction of one, so that an ordinary call on a busy machine cannot reach it.
+  const one = synthDoc("Synthetic file A", [1, 0]);
+  px.onServe = (id) => { if (id === "1:1") { px.onServe = null; px.resetNext = 1; } };
+  const outB = join(tmp, "b", "obj");
+  const rb = await extractAll({ doc: one, jobs: planJobs(one, outB), outDir: outB, extractor: EXTRACTOR,
+    env: Object.assign({}, ENV, { FAKE_SWALLOW: "2", FAKE_LOCAL_MS: "6000" }), timing: Object.assign({}, T, { silenceMs: 5000 }),
+    log: () => {}, tell: () => {} });
+  const sb = readStates(join(outB, "states.json"));
+  const b1 = sb.objects[0];
+  check(sb.trips.length === 0, "one dropped call, then work without calls longer than the silence limit: the breaker stays shut",
+    JSON.stringify(sb.trips.map((t) => t.detail)));
+  check(rb.exitCode === EXIT.OK && b1.state === "extracted" && b1.attempts === 2 && b1.blipRetried === true && holesOf(b1) === 0 &&
+    b1.history && /^1 MCP call failed in transport/.test(b1.history[0].error),
+    "an object that finished past one dropped call is read again, and its hole does not survive into the payload",
+    rb.exitCode + " holes " + holesOf(b1) + " " + JSON.stringify(b1));
+}
+
+async function groupCount({ px, check, tmp, lib }) {
+  const { EXIT, extractAll, planJobs, readStates } = lib;
+  const ENV = { MCP_URL: px.url, MCP_TIMEOUT_MS: "10000" };
+
+  // Two calls lost at the end of object 1, an answered identity check, one lost at the start of
+  // object 2: never three in a row, because Pixso answered in between. No trip.
+  const two = synthDoc("Synthetic file A", [2, 0]);
+  px.onServe = (id) => {
+    if (id !== "1:1") return;
+    px.onServe = null;
+    px.resetNext = 2;
+    px.onIdentity = () => { px.onIdentity = null; px.resetNext = 1; };
+  };
+  const outD = join(tmp, "d", "obj");
+  const rd = await extractAll({ doc: two, jobs: planJobs(two, outD), outDir: outD, extractor: EXTRACTOR,
+    env: Object.assign({}, ENV, { FAKE_SWALLOW: "3" }), timing: T, log: () => {}, tell: () => {} });
+  const sd = readStates(join(outD, "states.json"));
+  check(px.onIdentity === null && sd.trips.length === 0 && rd.exitCode === EXIT.OK &&
+    sd.objects.every((o) => o.state === "extracted" && o.attempts === 2 && holesOf(o) === 0),
+    "two lost calls, an answered identity check, one more lost: not three in a row, no trip; both objects read again whole",
+    rd.exitCode + " " + JSON.stringify(sd.trips.map((t) => t.detail)) + " " + shape(sd) + " " +
+    sd.objects.map((o) => o.attempts + "/" + holesOf(o)).join(","));
+}
+
 async function main() {
-  const lib = await import("./extract-lib.mjs");
+  // Before anything is imported or started: see guardEnv.
+  process.env.MCP_URL = "http://127.0.0.1:" + (await freePort()) + "/mcp";
+  const raw = await import("./extract-lib.mjs");
+  const lib = Object.assign({}, raw, { extractAll: (o) => { guardEnv(o.env); return raw.extractAll(o); } });
   const { verdict } = await import("./build-lib.mjs");
   const TMP = mkdtempSync(join(tmpdir(), "pxf-mcp-"));
   // Independent groups, each with its own fake Pixso and folder, run side by side: every object is a
   // few node processes, and one after another this took twenty seconds. Each group's lines are
   // printed together, in this order, once all are done.
-  const groups = [["pieces", groupPieces], ["outage", groupOutage], ["identity", groupIdentity], ["hung", groupHung], ["blip", groupBlip]];
+  const groups = [["pieces", groupPieces], ["outage", groupOutage], ["identity", groupIdentity], ["hung", groupHung], ["blip", groupBlip],
+    ["swallow", groupSwallow], ["quiet", groupQuiet], ["count", groupCount]];
   const results = await Promise.all(groups.map(async ([name, fn]) => {
     const lines = [];
     let failed = 0, passed = 0;
