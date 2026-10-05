@@ -587,6 +587,11 @@ export function validateIR(ir, options) {
     if (pr.strokeWeights !== undefined && !quad(pr.strokeWeights, nonNeg)) err(P + ".strokeWeights", "must be four finite numbers >= 0 [top, right, bottom, left]");
     if (pr.cornerRadii !== undefined && !quad(pr.cornerRadii, nonNeg)) err(P + ".cornerRadii", "must be four finite numbers >= 0 [topLeft, topRight, bottomRight, bottomLeft]");
     if (pr.cornerRadii !== undefined && pr.cornerRadius !== undefined) err(P + ".cornerRadius", "a record with cornerRadii carries no cornerRadius");
+    // Only when they differ (docs/IR.md §7): four equal sides are strokeWeight, four equal corners
+    // cornerRadius, so one record never says the same thing in two ways a builder could read apart.
+    const allSame = (q) => q.every((x) => x === q[0]);
+    if (quad(pr.strokeWeights, nonNeg) && allSame(pr.strokeWeights)) err(P + ".strokeWeights", "four equal sides are written as strokeWeight; strokeWeights only when the sides differ");
+    if (quad(pr.cornerRadii, nonNeg) && allSame(pr.cornerRadii)) err(P + ".cornerRadii", "four equal corners are written as cornerRadius; cornerRadii only when the corners differ");
     if (pr.oracleSides !== undefined && !quad(pr.oracleSides, (x) => typeof x === "boolean")) err(P + ".oracleSides", "must be four booleans [top, right, bottom, left]: does the stroke-area path draw that side");
 
     // Vectors: one build source per VECTOR record (docs/M1.md D3). The natively built types list no

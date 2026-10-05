@@ -15,6 +15,7 @@
 //   D.tree()           the document as plain data: { id, type, name, relativeTransform, width, height,
 //                      props, pluginData, sharedPluginData, children }
 //   D.node(id)         the node with that id (a Proxy), or null
+//   D.ui               { posted: [message] }: what the plugin code sent through figma.ui.postMessage
 //
 // Options:
 //   fonts     [{ family, style }] Figma has; loadFontAsync rejects any other (DEFAULT_FONTS when absent)
@@ -25,6 +26,8 @@
 //             methods } } }; list them in the pull request, F folds them into surface.mjs
 //   faults    { figmaCallName: message }: that figma call throws (or rejects) with the message, for
 //             fallback tests (a boolean operation Figma refuses)
+//   ui        (message) => void: called after each figma.ui.postMessage, so a test can play the
+//             plugin window (part E's probes move bytes through it)
 //
 // What the core models (docs/M1.md §5.4): a tree of pages and nodes; relative and absolute
 // transforms, sizes and bounding boxes; private and shared plugin data; the write log; layout reads
@@ -32,7 +35,8 @@
 // the sides differ), cornerRadius likewise for the corners; a vector network's regions producing
 // fillGeometry (lines and cubics), an open region-less network producing none, vectorPaths producing
 // it directly; RIGHT_ANGLE handle mirroring making setVectorNetworkAsync reject; a text write before
-// loadFontAsync of its font throwing; createImage hashing with SHA-1; booleans as a node over their
+// loadFontAsync of its font throwing; createImage hashing with SHA-1, its Image giving the bytes back
+// and, for a PNG, its size from the header; figma.ui.postMessage recorded; booleans as a node over their
 // operands with the operands' union box (no boolean geometry). It has NO layout engine and NO text
 // wrap model: auto layout props are stored and do nothing, and a text keeps the size it is given.
 // Tests that need those print "pending: E".
@@ -122,6 +126,34 @@ export function makeDouble(opts = {}) {
   const p19b = (verdicts.probes && verdicts.probes.P19B && verdicts.probes.P19B.verdicts) || {};
   const allow = opts.allow || {};
   const faults = opts.faults || {};
+  const uiPosted = [];
+  const ui = new Proxy({}, {
+    get(_, prop) {
+      if (typeof prop === "symbol" || prop === "then" || prop === "toJSON") return undefined;
+      if (SURFACE.ui.methods.indexOf(prop) < 0) throw outside("figma.ui." + String(prop));
+      return (m) => { uiPosted.push(clone(m)); if (typeof opts.ui === "function") opts.ui(clone(m)); };
+    },
+    set(_, prop) { throw outside("writing figma.ui." + String(prop) + " (the host, code.js, owns figma.ui.onmessage)"); },
+  });
+  // What figma.createImage returns: the hash, the bytes back, and a PNG's size from its header.
+  function imageOf(hash, bytes) {
+    const own = { hash,
+      getBytesAsync: () => Promise.resolve(new Uint8Array(bytes)),
+      getSizeAsync: () => {
+        const png = bytes.length >= 24 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+        if (!png) return Promise.reject(new Error("double: getSizeAsync reads a PNG header only (pending: E)"));
+        const u32 = (o) => ((bytes[o] << 24) >>> 0) + (bytes[o + 1] << 16) + (bytes[o + 2] << 8) + bytes[o + 3];
+        return Promise.resolve({ width: u32(16), height: u32(20) });
+      } };
+    return new Proxy({}, {
+      get(_, prop) {
+        if (typeof prop === "symbol" || prop === "then" || prop === "toJSON") return undefined;
+        if (SURFACE.image.read.indexOf(prop) < 0 && SURFACE.image.methods.indexOf(prop) < 0) throw outside("Image." + String(prop));
+        return own[prop];
+      },
+      set(_, prop) { throw outside("writing Image." + String(prop)); },
+    });
+  }
   const loaded = new Set();
   const writes = [];
   const reads = { total: 0, byPhase: {}, log: [] };
@@ -407,7 +439,7 @@ export function makeDouble(opts = {}) {
       if (!ArrayBuffer.isView(bytes) || !bytes.length) throw new Error("double: createImage takes non-empty bytes");
       const hash = createHash("sha1").update(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)).digest("hex");
       images.set(hash, bytes.length);
-      return { hash };
+      return imageOf(hash, Uint8Array.from(bytes));
     },
     createNodeFromSvg: () => { throw new Error("double: no SVG import in the double (pending: E)"); },
     union: booleanOp("UNION"), subtract: booleanOp("SUBTRACT"), intersect: booleanOp("INTERSECT"), exclude: booleanOp("EXCLUDE"),
@@ -430,6 +462,7 @@ export function makeDouble(opts = {}) {
       if (prop === "root") return doc.proxy;
       if (prop === "currentPage") return currentPage.proxy;
       if (prop === "mixed") return mixed;
+      if (prop === "ui") return ui;
       const inSurface = SURFACE.figma.calls.indexOf(prop) >= 0 || (allow.figma || []).indexOf(prop) >= 0;
       if (!inSurface || !calls[prop]) throw outside("figma." + prop);
       if (Object.prototype.hasOwnProperty.call(faults, prop)) {
@@ -447,7 +480,7 @@ export function makeDouble(opts = {}) {
   }
 
   return {
-    figma, writes, reads, images,
+    figma, writes, reads, images, ui: { posted: uiPosted },
     setPhase(name) { phase = name === undefined ? null : name; },
     tree: () => tree(),
     node: (id) => { const st = byId.get(String(id)); return st ? st.proxy : null; },

@@ -13,6 +13,9 @@
 //     The scratch node lives on the service page, is stamped pxScratch (shared and private, through
 //     ctx.stamp), its id is kept in ctx.S.scratchTextId, and it is removed at the end of the op that
 //     made it. ctx.measure(node, rec) calls this (or a test's host.measure).
+//     It depends on part B's IR.writeTextProps (figma-plugin/src/ir/text.js) and on part E's text
+//     model in the double, so its tests print "pending: B" or "pending: E" until those merge, and
+//     part F re-runs them.
 //
 // Until part C lands it throws: "IR.countLines is not in this build: part C implements it".
 if (typeof IR.countLines !== "function") IR.countLines = IR.util.notInThisBuild("IR.countLines", "C");

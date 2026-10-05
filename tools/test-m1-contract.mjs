@@ -1,6 +1,6 @@
 // The contract part P0 froze for parts A-E (docs/M1.md §5), checked offline: the task format, the
 // outside-the-repository guard, the plugin's IR bundle and its ctx, the headless double's core, the
-// surface, and the shapes the judge and pathgeom stubs promise. Owned by P0 alone (docs/M1.md §9):
+// surface, the shapes the judge stub promises, and pathgeom's bounds. Owned by P0 alone (docs/M1.md §9):
 // a part that finds it wrong says so in its pull request; it does not edit this file.
 //
 //   node tools/test-m1-contract.mjs
@@ -51,10 +51,10 @@ const buildTask = () => ({
   page: { index: 0, guid: "0:1", name: "Page 1", service: false, background: 0 },
   roots: [{ i: 0, attachTo: "page", place: null }],
   nodes: [
-    { i: 0, parent: -1, guid: "1:2", type: "FRAME", name: "F", props: Object.assign({ relativeTransform: T6(0, 0), width: 100, height: 50, clipsContent: true, layoutMode: "NONE" }, painted) },
+    { i: 0, parent: -1, guid: "1:2", type: "FRAME", name: "F", props: Object.assign({ relativeTransform: T6(0, 0), width: 100, height: 50, clipsContent: true, layoutMode: "NONE", primaryAxisSizingMode: "FIXED", counterAxisSizingMode: "FIXED" }, painted) },
     { i: 1, parent: 0, guid: "1:3", type: "INSTANCE", name: "I", props: { relativeTransform: T6(4, 4), width: 10, height: 10 } },
     { i: 2, parent: 0, guid: "1:4", type: "VECTOR", name: "V", props: Object.assign({ relativeTransform: T6(20, 4), width: 10, height: 8, fillGeometry: 3 }, painted) },
-    { i: 3, parent: 0, guid: "1:5", type: "TEXT", name: "T", props: Object.assign({ relativeTransform: T6(40, 4), width: 30, height: 14, characters: "Hi", fontName: 4, textAutoResize: "NONE" }, painted) },
+    { i: 3, parent: 0, guid: "1:5", type: "TEXT", name: "T", props: Object.assign({ relativeTransform: T6(40, 4), width: 30, height: 14, characters: "Hi", fontName: 4, fontSize: 12, textAutoResize: "NONE" }, painted) },
     { i: 4, parent: 0, guid: "1:6", type: "RECTANGLE", name: "R", props: Object.assign({ relativeTransform: T6(70, 4), width: 20, height: 20 }, painted, { fills: 5 }) },
   ],
   notes: [{ code: "VECTOR_FROM_GEOMETRY", i: 2, detail: null }],
@@ -92,7 +92,7 @@ taskOk("a verify task of the same records passes", tmut(buildTask, (t) => { t.op
 taskOk("a fonts task (settings and fonts only) passes", fontsTask());
 taskOk("a clean task carrying its root records only passes", tmut(buildTask, (t) => { t.op = "clean"; t.nodes = [t.nodes[0]]; t.notes = []; t.values = { "0": t.values["0"], "1": [] }; t.images = []; t.expect = null; t.page = null; }));
 taskOk("a split root attached to its built parent passes", tmut(buildTask, (t) => {
-  t.nodes.push({ i: 9, parent: 7, guid: "1:9", type: "FRAME", name: "Split", props: Object.assign({ relativeTransform: T6(0, 60), width: 10, height: 10, clipsContent: false, layoutMode: "NONE" }, painted) });
+  t.nodes.push({ i: 9, parent: 7, guid: "1:9", type: "FRAME", name: "Split", props: Object.assign({ relativeTransform: T6(0, 60), width: 10, height: 10, clipsContent: false, layoutMode: "NONE", primaryAxisSizingMode: "FIXED", counterAxisSizingMode: "FIXED" }, painted) });
   t.roots.push({ i: 9, attachTo: { i: 7 }, place: null }); t.expect = { count: 6, nonInstance: 5, placeholders: 1 };
 }));
 taskOk("an S2 master on the service page, attached to the page at its grid place, passes", tmut(buildTask, (t) => {
@@ -118,7 +118,7 @@ taskErr("an expected placeholder count that is not the INSTANCE records'", tmut(
 taskErr("a top-level record that is not a root", tmut(buildTask, (t) => { t.roots = []; }), "nodes[0]");
 taskErr("a root whose parent is in the task", tmut(buildTask, (t) => { t.roots.push({ i: 1, attachTo: { i: 0 }, place: null }); }), "roots[1].attachTo.i");
 taskErr("a split root attached to a parent that is not its own", tmut(buildTask, (t) => {
-  t.nodes.push({ i: 9, parent: 7, guid: "1:9", type: "FRAME", name: "Split", props: Object.assign({ relativeTransform: T6(0, 60), width: 10, height: 10, clipsContent: false, layoutMode: "NONE" }, painted) });
+  t.nodes.push({ i: 9, parent: 7, guid: "1:9", type: "FRAME", name: "Split", props: Object.assign({ relativeTransform: T6(0, 60), width: 10, height: 10, clipsContent: false, layoutMode: "NONE", primaryAxisSizingMode: "FIXED", counterAxisSizingMode: "FIXED" }, painted) });
   t.roots.push({ i: 9, attachTo: { i: 8 }, place: null }); t.expect = { count: 6, nonInstance: 5, placeholders: 1 };
 }), "roots[1].attachTo.i");
 taskErr("a grid place on an ordinary page", tmut(buildTask, (t) => { t.roots[0].place = [0, 0]; }), "roots[0].place");
@@ -129,11 +129,20 @@ taskErr("an unknown code in the task's notes", tmut(buildTask, (t) => { t.notes.
 taskErr("a task over its size cap", buildTask(), "", { maxChars: 500 });
 taskErr("a fonts task carrying nodes", tmut(fontsTask, (t) => { t.nodes = buildTask().nodes.slice(0, 1); t.roots = [{ i: 0, attachTo: "page", place: null }]; t.values = { "0": [], "1": [] }; }), "nodes");
 taskErr("a build task without a page", tmut(buildTask, (t) => { t.page = null; }), "page");
+taskOk("a clean task with page null for an S2 master (its page is not named, so any root attaches to \"page\")", tmut(buildTask, (t) => {
+  t.op = "clean"; t.nodes = [t.nodes[0]]; t.nodes[0].parent = 12; t.notes = []; t.values = { "0": t.values["0"], "1": [] }; t.images = []; t.expect = null; t.page = null;
+}));
+taskOk("a clean task naming its page passes", tmut(buildTask, (t) => { t.op = "clean"; t.nodes = [t.nodes[0]]; t.notes = []; t.values = { "0": t.values["0"], "1": [] }; t.images = []; t.expect = null; }));
+taskErr("a split root attached to index -1", tmut(buildTask, (t) => { t.roots[0].attachTo = { i: -1 }; }), "roots[0].attachTo.i");
+taskErr("a prop the record's type does not have (props.mjs KNOWN_PROPS)", tmut(buildTask, (t) => { t.nodes[1].props.fills = 0; }), "nodes[1].props.fills");
+taskErr("a prop of the wrong kind", tmut(buildTask, (t) => { t.nodes[0].props.layoutMode = "GRID"; }), "nodes[0].props.layoutMode");
+taskErr("a NEVER_OMIT prop left out", tmut(buildTask, (t) => { delete t.nodes[3].props.fontSize; }), "nodes[3].props.fontSize");
+check(/props is tools\/ir\/props\.mjs/.test(threw(() => taskMod.validateTask(buildTask(), { schema, props: {} }))), "validateTask with a props argument that is not the tables throws");
 {
   // The plugin runs the same check on the bundled text (PXF_TASK with PXF_SCHEMA): the same answers.
   const B = loadPluginBundle({ figma: makeDouble().figma });
-  const cases = [buildTask(), tmut(buildTask, (t) => { t.notes = []; t.values["9"] = [1]; }), fontsTask()];
-  const agree = cases.every((t) => same(B.PXF_TASK.validateTask(JSON.parse(JSON.stringify(t)), { schema: B.PXF_SCHEMA }), validateTask(t)));
+  const cases = [buildTask(), tmut(buildTask, (t) => { t.notes = []; t.values["9"] = [1]; t.nodes[0].props.opactiy = 1; delete t.nodes[3].props.fontSize; }), fontsTask()];
+  const agree = cases.every((t) => same(B.PXF_TASK.validateTask(JSON.parse(JSON.stringify(t)), { schema: B.PXF_SCHEMA, props: B.PXF_PROPS }), validateTask(t)));
   check(agree, "the bundled PXF_TASK gives the same answers as tools/ir/validate.mjs on valid and broken tasks");
 }
 
@@ -173,8 +182,8 @@ taskErr("a build task without a page", tmut(buildTask, (t) => { t.page = null; }
   const b = irBundle();
   const names = b.files;
   check(names[0] === "common.js" && names.slice(1).join() === names.slice(1).slice().sort().join() &&
-    ["build.js", "measure.js", "probes.js", "text.js", "verify.js"].every((f) => names.indexOf(f) >= 0),
-    "the bundle puts common.js first, then every other ir/*.js by name (" + names.join(", ") + ")");
+    ["build", "measure", "probes", "text", "verify"].every((p) => names.some((f) => f === p + ".js" || f.indexOf(p + "-") === 0)),
+    "the bundle puts common.js first, then every other ir/*.js by name, with each part's files present (" + names.join(", ") + ")");
   const text = b.text;
   check(["var PXF_PROPS = (function", "var PXF_SCHEMA = (function", "var PXF_TASK = (function", "var PXF_PATHGEOM = (function", "var PXF_IR = (function", "})(PXF_IR);"].every((s) => text.indexOf(s) >= 0) &&
     !/^export /m.test(text), "the bundle has the four modules as IIFEs, PXF_IR, and the wrapped ir files, and no export left");
@@ -220,8 +229,9 @@ taskErr("a build task without a page", tmut(buildTask, (t) => { t.page = null; }
   check(same(ctx.value(4), { family: "Inter", style: "Regular" }) && /values\[9\] is not in task 1/.test(threw(() => ctx.value(9))), "ctx.value resolves a carried value and throws on one the task does not carry");
   const eff = ctx.prop(task.nodes[0], "effects");
   eff.push("mutated");
-  check(same(ctx.prop(task.nodes[0], "fills"), task.values["0"]) && ctx.prop(task.nodes[0], "opacity") === 1 && same(ctx.prop(task.nodes[0], "effects"), []) &&
-    ctx.prop(task.nodes[0], "strokeWeight") === 1 && ctx.prop(task.nodes[3], "clipsContent") === undefined && same(ctx.prop(task.nodes[0], "constraints"), { horizontal: "MIN", vertical: "MIN" }),
+  const noTextProp = Object.keys(props.KNOWN_PROPS.FRAME).find((p) => !props.KNOWN_PROPS.TEXT[p] && Object.prototype.hasOwnProperty.call(props.DEFAULTS, p));
+  check(same(ctx.prop(task.nodes[0], "fills"), task.values["0"]) && same(ctx.prop(task.nodes[0], "opacity"), props.DEFAULTS.opacity) && same(ctx.prop(task.nodes[0], "effects"), props.DEFAULTS.effects) &&
+    ctx.prop(task.nodes[0], "strokeWeight") === 1 && noTextProp && ctx.prop(task.nodes[3], noTextProp) === undefined && same(ctx.prop(task.nodes[0], "constraints"), props.DEFAULTS.constraints),
     "ctx.prop resolves interned props, gives a copy of the default for an absent prop that applies, and nothing for one that does not");
   ctx.phase("create");
   const wroteIn = D.writes.length;
@@ -245,15 +255,18 @@ taskErr("a build task without a page", tmut(buildTask, (t) => { t.page = null; }
   check(ctx.stampOf(frame, "pxScratch") === "1" && frame.getPluginData("pxScratch") === "1" && frame.getSharedPluginData("pix2fig", "pxScratch") === "1" &&
     /is not a stamp/.test(threw(() => ctx.stamp(frame, "pxNote", "x"))), "ctx.stamp writes shared stamps in namespace pix2fig, pxScratch privately too, and refuses any other key");
   // findRoot: the registry first, then the stamps.
-  const stamped = (snap) => { const f = D.figma.createFrame(); ctx.stamp(f, "pxIdx", "0"); ctx.stamp(f, "pxSnap", snap); ctx.stamp(f, "pxIr", String(schema.VERSION)); return f; };
+  const stamped = (snap, src, run) => { const f = D.figma.createFrame(); ctx.stamp(f, "pxIdx", "0"); ctx.stamp(f, "pxSnap", snap); ctx.stamp(f, "pxIr", String(schema.VERSION));
+    ctx.stamp(f, "pxSrc", src || "1:2"); ctx.stamp(f, "pxRun", run || task.runId); return f; };
   const wrongSnap = stamped("pix:other");
   const right = stamped(SNAP);
+  stamped(SNAP, "1:2", "fedcba9876543210");     // an earlier run's build of the same root: this run's wins
+  stamped(SNAP, "7:7");                          // index 0 of an IR read with other settings: another guid
   const page2 = D.figma.createPage();
   const later = D.figma.createFrame(); page2.appendChild(later);
   ctx.stamp(later, "pxIdx", "0"); ctx.stamp(later, "pxSnap", SNAP); ctx.stamp(later, "pxIr", "1");
   ctx.S.nodes["0"] = wrongSnap.id;
   const found = await ctx.findRoot(0);
-  check(found && found.id === right.id && ctx.S.nodes["0"] === right.id, "ctx.findRoot skips a remembered id whose stamps do not match, finds the root by pxIdx, pxSnap and pxIr, and remembers it");
+  check(found && found.id === right.id && ctx.S.nodes["0"] === right.id, "ctx.findRoot skips a remembered id whose stamps do not match, finds the root by pxIdx, pxSnap, pxIr and pxSrc (the record's guid), prefers this run's, and remembers it");
   check((await ctx.findRoot(3)) === null, "ctx.findRoot answers null when nothing carries the stamps");
   const ctx2 = IR.makeCtx(D.figma, task, { id: "j2" });
   const ctx3 = IR.makeCtx(D.figma, Object.assign(buildTask(), { runId: "fedcba9876543210" }), { id: "j3" });
@@ -384,10 +397,21 @@ taskErr("a build task without a page", tmut(buildTask, (t) => { t.page = null; }
   check(m1.every((c) => SURFACE.figma.calls.indexOf(c) >= 0) && SURFACE.nodes.VECTOR.methods.indexOf("setVectorNetworkAsync") >= 0 && SURFACE.nodes.VECTOR.write.indexOf("vectorPaths") >= 0 &&
     SURFACE.nodes.VECTOR.read.fillGeometry && SURFACE.nodes.TEXT.methods.indexOf("setRangeFontName") >= 0 && SURFACE.nodes.FRAME.methods.indexOf("setSharedPluginData") >= 0 &&
     Object.isFrozen(SURFACE) && Object.isFrozen(SURFACE.nodes.FRAME.write), "the surface has M1's additions and is frozen");
+  // Part E's probes: the window round trip (P4) and the image's bytes and size (P4, P8).
+  const seen = [];
+  const DU = makeDouble({ ui: (m) => seen.push(m) });
+  DU.figma.ui.postMessage({ t: "probe", n: 1 });
+  const png = new Uint8Array(32); png.set([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0x10, 0, 0, 0, 0x10, 1]);
+  const im = DU.figma.createImage(png);
+  const size = await im.getSizeAsync(), back = await im.getBytesAsync();
+  check(SURFACE.figma.read.indexOf("ui") >= 0 && SURFACE.ui.methods.indexOf("postMessage") >= 0 && SURFACE.image.methods.indexOf("getSizeAsync") >= 0 &&
+    DU.ui.posted.length === 1 && seen.length === 1 && seen[0].n === 1 && size.width === 4096 && size.height === 4097 && back.length === 32 &&
+    /outside the surface/.test(threw(() => { DU.figma.ui.onmessage = () => {}; })) && /outside the surface/.test(threw(() => im.getSomething)),
+    "figma.ui.postMessage and the Image's hash, bytes and PNG size are in the surface and the double (part E's P4 and P8); onmessage stays the host's");
 }
 
 // ============================================================================================
-// 7. the judge's and pathgeom's frozen shapes (stubs until part C)
+// 7. the judge's frozen shapes (a stub until part C)
 // ============================================================================================
 {
   check(judge.checkJShape(judge.emptyJ()).length === 0 && judge.checkJShape(judge.emptyTotals(), judge.TOTALS_SHAPE).length === 0,
@@ -400,13 +424,38 @@ taskErr("a build task without a page", tmut(buildTask, (t) => { t.page = null; }
   check(judge.ROW.length === 11 && judge.ROW.lines === 10 && judge.VECTOR_DIFF_KINDS.length === 4, "a VERIFY row has eleven fields, lines last");
   if (judge.JUDGE_IMPLEMENTED === false) check(/not in this build; part C/.test(threw(() => judge.judgeTask({}))) && /not in this build; part C/.test(threw(() => judge.judgeRun([]))),
     "judgeTask and judgeRun refuse until part C lands");
-  if (pathgeom.PATHGEOM_IMPLEMENTED === false) check(/^pathBounds: not in this build/.test(threw(() => pathgeom.pathBounds("M 0 0 L 1 1"))) && /^unionBounds: not in this build/.test(threw(() => pathgeom.unionBounds([]))),
-    "pathBounds and unionBounds refuse until part C lands");
-  else check(Array.isArray(pathgeom.pathBounds("M 0 0 L 1 1")), "pathBounds answers a list of boxes");
 }
 
 // ============================================================================================
-// 8. the runner's side of the seam
+// 8. pathgeom: exact bounds (P0 wrote it, for part A's network-bounds class; part C owns it after)
+// ============================================================================================
+{
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+  const box = (b, x0, y0, x1, y1) => b && near(b.x0, x0) && near(b.y0, y0) && near(b.x1, x1) && near(b.y1, y1);
+  check(pathgeom.PATHGEOM_IMPLEMENTED === true && box(pathgeom.pathBounds("M 0 0 L 10 0 L 10 5 Z")[0], 0, 0, 10, 5), "pathBounds bounds a polygon by its points");
+  // A quadratic from (0,0) to (10,0) through control (5,10) peaks at t = 1/2, y = 5 (the hull reaches 10).
+  check(box(pathgeom.pathBounds("M 0 0 Q 5 10 10 0 Z")[0], 0, 0, 10, 5), "a quadratic's extremum, not its control point", JSON.stringify(pathgeom.pathBounds("M 0 0 Q 5 10 10 0 Z")));
+  // The cubic (0,0) (0,10) (10,10) (10,0) peaks at t = 1/2, y = 7.5; the hull reaches 10.
+  check(box(pathgeom.pathBounds("M 0 0 C 0 10 10 10 10 0")[0], 0, 0, 10, 7.5), "a cubic's extremum, not its control hull");
+  // Its x bulges past the end points when the controls cross: x runs 0, 40, -30, 10, and reaches
+  // about 12.84 at t = 0.239 and -2.83 at t = 0.761, inside the hull -30..40.
+  const bulge = pathgeom.pathBounds("M 0 0 C 40 1 -30 1 10 0")[0];
+  check(Math.abs(bulge.x1 - 12.84) < 0.01 && Math.abs(bulge.x0 + 2.835) < 0.01, "a cubic that bulges past its end points is bounded past them, inside the hull", JSON.stringify(bulge));
+  const two = pathgeom.pathBounds("M 0 0 L 1 1 Z M 5 5 L 6 7 Z");
+  check(two.length === 2 && box(two[1], 5, 5, 6, 7) && box(pathgeom.unionBounds(two), 0, 0, 6, 7) && pathgeom.unionBounds([]) === null && pathgeom.pathBounds("  ").length === 0,
+    "one box per subpath, their union, null for no boxes, [] for an empty path");
+  // A matrix maps the control points, so a rotated curve is bounded exactly: the quadratic above
+  // turned 90 degrees and moved by (100, 0) spans x 95..100, y 0..10.
+  check(box(pathgeom.pathBounds("M 0 0 Q 5 10 10 0", [[0, -1, 100], [1, 0, 0]])[0], 95, 0, 100, 10), "a matrix is applied before bounding",
+    JSON.stringify(pathgeom.pathBounds("M 0 0 Q 5 10 10 0", [[0, -1, 100], [1, 0, 0]])));
+  check(/^pathBounds: /.test(threw(() => pathgeom.pathBounds("M0,0 L10,0"))) && /^pathBounds: /.test(threw(() => pathgeom.pathBounds("L 0 0"))),
+    "a string that is not a Figma path throws, naming pathBounds");
+  const B = loadPluginBundle({ figma: makeDouble().figma });
+  check(same(B.PXF_PATHGEOM.pathBounds("M 0 0 C 0 10 10 10 10 0 Z M 3 3 L 4 4"), pathgeom.pathBounds("M 0 0 C 0 10 10 10 10 0 Z M 3 3 L 4 4")), "the bundled PXF_PATHGEOM gives the same boxes");
+}
+
+// ============================================================================================
+// 9. the runner's side of the seam
 // ============================================================================================
 check(checkPostOpts(undefined) === null && checkPostOpts({ liveness: { warnMs: 60000, failMs: 300000 }, ceilingMs: 140000, onProgress: () => {} }) === null &&
   /below failMs/.test(checkPostOpts({ liveness: { warnMs: 5, failMs: 5 } })) && /unknown option/.test(checkPostOpts({ heartbeat: 1 })) &&

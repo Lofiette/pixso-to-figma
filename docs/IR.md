@@ -64,9 +64,11 @@ IR is a documented format and not the channel. Tasks (at most 4 MB each) are cut
   real file checks it.
 - **Defaults.** A property may be left out only when its value equals its entry in `DEFAULTS`
   (`tools/ir/props.mjs`); the builder writes `DEFAULTS` explicitly wherever the prop applies to the type. The
-  `NEVER_OMIT` props (`fills`, `strokes`, `strokeAlign`, `strokeWeight`, `clipsContent`, `blendMode`,
-  `textAutoResize`, `layoutMode`) are written on every record whose type has them, even at their default, because
-  Figma's defaults for them differ by node type; empty paint lists travel too.
+  `NEVER_OMIT` props are written on every record whose type has them, even at their default: `fills`, `strokes`,
+  `strokeAlign`, `strokeWeight`, `clipsContent`, `blendMode`, `textAutoResize`, `layoutMode`,
+  `primaryAxisSizingMode` and `counterAxisSizingMode`, because Figma's defaults for them differ by node type (a new
+  Figma frame's axis sizing is not the source's absent FIXED), and `characters`, `fontName`, `fontSize`,
+  `booleanOperation`, `pointCount` and `innerRadius`, which have no IR default at all. Empty paint lists travel too.
 - **Closed records.** Every record has a fixed set of keys, and an unknown key is an error, so a misspelt key cannot
   be silently ignored. Since version 2 `props` are closed too: `KNOWN_PROPS` in `tools/ir/props.mjs` lists, per node
   type, the props it may carry and the kind of each (`num`, `int`, `bool`, `str`, `enum:A|B|…`, `value`, `style`, or
@@ -465,7 +467,8 @@ at most 200 errors are listed. `validateIR` without the tables throws: a caller 
 - props (version 2): every record has `relativeTransform` (six finite numbers) and a finite `width` and `height` of
   at least 0; every prop is known for the type and of its kind, and the `NEVER_OMIT` ones are present; no superseded
   prop, and no `cornerRadius` next to `cornerRadii`; `strokeWeights` and `cornerRadii` are four finite numbers of at
-  least 0 and `oracleSides` four booleans;
+  least 0 that are not all equal (four equal ones are `strokeWeight` or `cornerRadius`) and `oracleSides` four
+  booleans;
 - vectors: geometry props only on vector types (and in derived boxes); one build source per `VECTOR` record, a
   geometry-built one with its note, `strokeGeometry` only next to `fillGeometry`, `oracleFillGeometry` only next to
   a network or on a natively built type; geometry values and networks of the shapes in §6, with closed loops;
@@ -540,7 +543,8 @@ dropped or decided. `tools/test-ir.mjs` validates this block.
   "nodes": [
     { "parent": -1, "page": 0, "guid": "1:10", "type": "FRAME", "name": "Screen",
       "props": { "relativeTransform": [1, 0, 0, 0, 1, 0], "width": 360, "height": 200, "fills": 0, "strokes": 5,
-        "strokeWeight": 1, "strokeAlign": "INSIDE", "blendMode": "PASS_THROUGH", "clipsContent": true, "layoutMode": "NONE" } },
+        "strokeWeight": 1, "strokeAlign": "INSIDE", "blendMode": "PASS_THROUGH", "clipsContent": true, "layoutMode": "NONE",
+        "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" } },
     { "parent": 0, "guid": "1:11", "type": "INSTANCE", "name": "Button",
       "props": { "relativeTransform": [1, 0, 16, 0, 1, 16], "width": 120, "height": 40 },
       "instance": {
@@ -562,24 +566,28 @@ dropped or decided. `tools/test-ir.mjs` validates this block.
         "textRanges": [{ "start": 0, "end": 5, "fields": { "fills": 1 } }] } },
     { "parent": -1, "page": 1, "guid": "2:20", "type": "COMPONENT_SET", "name": "Button",
       "props": { "relativeTransform": [1, 0, 0, 0, 1, 0], "width": 280, "height": 40, "fills": 5, "strokes": 5,
-        "strokeWeight": 1, "strokeAlign": "INSIDE", "blendMode": "PASS_THROUGH", "clipsContent": false, "layoutMode": "NONE" } },
+        "strokeWeight": 1, "strokeAlign": "INSIDE", "blendMode": "PASS_THROUGH", "clipsContent": false, "layoutMode": "NONE",
+        "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" } },
     { "parent": 4, "guid": "2:21", "type": "COMPONENT", "name": "State=Default",
       "props": { "relativeTransform": [1, 0, 0, 0, 1, 0], "width": 120, "height": 40, "fills": 0, "strokes": 5,
-        "strokeWeight": 1, "strokeAlign": "INSIDE", "blendMode": "PASS_THROUGH", "clipsContent": true, "layoutMode": "NONE" } },
+        "strokeWeight": 1, "strokeAlign": "INSIDE", "blendMode": "PASS_THROUGH", "clipsContent": true, "layoutMode": "NONE",
+        "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" } },
     { "parent": 5, "guid": "2:22", "type": "TEXT", "name": "Label", "overrideKey": "5:22",
       "props": { "relativeTransform": [1, 0, 16, 0, 1, 10], "width": 88, "height": 20, "characters": "Button",
         "fontName": 3, "fontSize": 14, "fills": 4, "strokes": 5, "strokeWeight": 1, "strokeAlign": "OUTSIDE",
         "blendMode": "PASS_THROUGH", "textAutoResize": "NONE", "componentPropertyReferences": { "characters": "Label#0:1" } } },
     { "parent": 4, "guid": "2:23", "type": "COMPONENT", "name": "State=Hover",
       "props": { "relativeTransform": [1, 0, 160, 0, 1, 0], "width": 120, "height": 40, "fills": 0, "strokes": 5,
-        "strokeWeight": 1, "strokeAlign": "INSIDE", "blendMode": "PASS_THROUGH", "clipsContent": true, "layoutMode": "NONE" } },
+        "strokeWeight": 1, "strokeAlign": "INSIDE", "blendMode": "PASS_THROUGH", "clipsContent": true, "layoutMode": "NONE",
+        "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" } },
     { "parent": 7, "guid": "2:24", "type": "TEXT", "name": "Label", "overrideKey": "5:24",
       "props": { "relativeTransform": [1, 0, 16, 0, 1, 10], "width": 88, "height": 20, "characters": "Button",
         "fontName": 3, "fontSize": 14, "fills": 4, "strokes": 5, "strokeWeight": 1, "strokeAlign": "OUTSIDE",
         "blendMode": "PASS_THROUGH", "textAutoResize": "NONE", "componentPropertyReferences": { "characters": "Label#0:1" } } },
     { "parent": -1, "page": 1, "guid": "2:30", "type": "COMPONENT", "name": "Badge",
       "props": { "relativeTransform": [1, 0, 0, 0, 1, 100], "width": 24, "height": 24, "fills": 5, "strokes": 5,
-        "strokeWeight": 1, "strokeAlign": "INSIDE", "blendMode": "PASS_THROUGH", "clipsContent": true, "layoutMode": "NONE" } },
+        "strokeWeight": 1, "strokeAlign": "INSIDE", "blendMode": "PASS_THROUGH", "clipsContent": true, "layoutMode": "NONE",
+        "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" } },
     { "parent": 9, "guid": "2:31", "type": "ELLIPSE", "name": "Dot",
       "props": { "relativeTransform": [1, 0, 8, 0, 1, 8], "width": 8, "height": 8, "fills": 1, "strokes": 5,
         "strokeWeight": 1, "strokeAlign": "INSIDE", "blendMode": "PASS_THROUGH",

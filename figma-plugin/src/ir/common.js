@@ -17,7 +17,7 @@
 //   probes[NAME] = { args(raw) -> args, run(args) -> Promise<result> }   upper-case names (P19B);
 //                                           args validates the probe's own arguments from the probe
 //                                           job's payload and throws on a bad one; run gets them merged
-//                                           with the common ones (n, deadlineMs, maxMsPerSeries)
+//                                           with the common ones (n, maxMsPerSeries, deadlineMs, sizesMB)
 //   setHost(host)                           the host's side, given once before any op runs:
 //     host.images()         -> { sourceHash: figmaHash }   images created this session
 //     host.imageErrors()    -> { sourceHash: message }      images Figma refused this session
@@ -57,8 +57,11 @@
 //                               throws. pxScratch is written as private plugin data too
 //   ctx.stampOf(node, key)      the shared stamp, or "" (also when the node cannot be read)
 //   ctx.findRoot(i)             -> Promise<node|null>: S.nodes[i] if that node still carries pxIdx = i,
-//                               pxSnap = task.snapshot and pxIr = the IR version; else the newest node on
-//                               any page carrying those three (pages are loaded first); else null
+//                               pxSnap = task.snapshot, pxIr = the IR version and, when record i is in the
+//                               task, pxSrc = its guid; else a node on any page carrying those (pages are
+//                               loaded first), one stamped pxRun = task.runId preferred, else the last
+//                               found; else null. The guid check matters because IR indices depend on
+//                               the reader's settings and scope, which the snapshot does not hold
 //   ctx.log(message)
 //   ctx.report                  { op, taskNo, runId, ms: {}, codes: {}, coded: [], failures: [] }; an op
 //                               adds its own fields and returns it
@@ -209,9 +212,12 @@ var PXF_IR = (function () {
       },
       stampOf: stampOf,
       findRoot: async function (i) {
-        var want = String(i), snap = String(task.snapshot), irv = String(PXF_SCHEMA.VERSION);
+        var want = String(i), snap = String(task.snapshot), irv = String(PXF_SCHEMA.VERSION), guid = null;
+        var recs = Array.isArray(task.nodes) ? task.nodes : [];
+        for (var r = 0; r < recs.length; r++) if (recs[r] && recs[r].i === i) guid = String(recs[r].guid);
         var is = function (n) {
-          return !!n && !n.removed && stampOf(n, "pxIdx") === want && stampOf(n, "pxSnap") === snap && stampOf(n, "pxIr") === irv;
+          return !!n && !n.removed && stampOf(n, "pxIdx") === want && stampOf(n, "pxSnap") === snap && stampOf(n, "pxIr") === irv &&
+            (guid === null || stampOf(n, "pxSrc") === guid);
         };
         if (own(session.nodes, want)) {
           var known = await figma.getNodeByIdAsync(String(session.nodes[want]));
@@ -224,7 +230,11 @@ var PXF_IR = (function () {
           var cands = typeof page.findAllWithCriteria === "function"
             ? page.findAllWithCriteria({ sharedPluginData: { namespace: NS, keys: ["pxIdx"] } })
             : page.children;
-          for (var c = 0; c < cands.length; c++) if (is(cands[c])) found = cands[c];
+          for (var c = 0; c < cands.length; c++) {
+            if (!is(cands[c])) continue;
+            // This run's build wins over an earlier run's; among equals the last found.
+            if (!found || stampOf(cands[c], "pxRun") === String(task.runId) || stampOf(found, "pxRun") !== String(task.runId)) found = cands[c];
+          }
         }
         if (found) session.nodes[want] = found.id;
         return found;

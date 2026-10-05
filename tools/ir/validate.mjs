@@ -1,5 +1,6 @@
 // The one way Node code validates an IR or a task: schema.mjs, props.mjs and task.mjs stay
-// import-free (the plugin bundles them), so the tables are passed in here, once, for every caller.
+// import-free (the plugin bundles them), so the tables are passed in here, once, for every caller;
+// a task's records are checked against the same per-type prop tables as the IR's.
 //
 //   import { validate, validateTask } from "./ir/validate.mjs";
 //   validate(ir, { maxErrors })                  -> { ok, errors: [{ path, message }] }   (docs/IR.md §14)
@@ -15,5 +16,5 @@ export function validate(ir, opts) {
 }
 
 export function validateTask(t, opts) {
-  return task.validateTask(t, { schema, maxChars: opts && opts.maxChars, maxErrors: opts && opts.maxErrors });
+  return task.validateTask(t, { schema, props, maxChars: opts && opts.maxChars, maxErrors: opts && opts.maxErrors });
 }

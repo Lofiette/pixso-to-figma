@@ -5,12 +5,16 @@
 //   import { validateTask } from "./ir/validate.mjs";          // Node: the schema is passed for you
 //   validateTask(task, { maxChars })  -> { ok, errors: [{ path, message }] }
 //
-//   PXF_TASK.validateTask(task, { schema: PXF_SCHEMA })        // the plugin (tools/build-plugin.mjs)
+//   PXF_TASK.validateTask(task, { schema: PXF_SCHEMA, props: PXF_PROPS })   // the plugin (tools/build-plugin.mjs)
 //
-// validateTask(task, { schema, maxChars, maxErrors }): `schema` is tools/ir/schema.mjs (its codes,
-// node types, interned props and enums), passed as data because this file imports nothing: the
+// validateTask(task, { schema, props, maxChars, maxErrors }): `schema` is tools/ir/schema.mjs (its
+// codes, node types, interned props and enums), passed as data because this file imports nothing: the
 // plugin bundles it as PXF_TASK, ES2015, no Node built-in. Without `schema` it throws a TypeError,
 // because "ok" from a check that could not run would be a lie. It never throws on the task itself.
+// `props` is tools/ir/props.mjs (optional, and always given by validate.mjs and by the plugin): with
+// it, every record's props are closed to KNOWN_PROPS for its type, of their kinds, with the
+// NEVER_OMIT ones present, exactly as the IR validator checks them, so a planner bug cannot hand the
+// builder a prop it would silently skip.
 // maxChars is the size cap in characters of the task's JSON (MAX_TASK_CHARS by default; a value
 // above MAX_TASK_CHARS_CEILING is taken as the ceiling). At most maxErrors (200) errors are listed.
 //
@@ -47,8 +51,11 @@
 //   "none" means the builder draws IMAGE_PLACEHOLDER.
 // - expect: what VERIFY should find, for build and verify; count = nodes, placeholders = INSTANCE
 //   records, nonInstance = the rest.
+//   attachTo { i } names an IR index (>= 0); a top-level record attaches to the page.
 // Per op: fonts carries only settings and fonts (page null, everything else empty); clean carries the
-// root records only (no expect); build and verify carry a page, roots, nodes and expect.
+// root records only (no expect) and either their page or page null; build and verify carry a page,
+// roots, nodes and expect. A clean task with page null does not say where its roots are, so attachTo
+// "page" is taken for any of its roots (S2 masters included) and the builder looks on every page.
 
 export const TASK_FORMAT = "pix2fig.task";
 export const TASK_VERSION = 1;
@@ -94,6 +101,10 @@ export function validateTask(task, deps) {
   const S = deps && deps.schema;
   if (!S || typeof S.REASON_CODES !== "object" || !Array.isArray(S.INTERNED_PROPS)) {
     throw new TypeError("validateTask(task, { schema }) needs tools/ir/schema.mjs; call validateTask from tools/ir/validate.mjs, or pass PXF_SCHEMA");
+  }
+  const PT = deps && deps.props;
+  if (PT !== undefined && (!PT || typeof PT.KNOWN_PROPS !== "object" || !Array.isArray(PT.NEVER_OMIT))) {
+    throw new TypeError("validateTask(task, { props }): props is tools/ir/props.mjs (or PXF_PROPS)");
   }
   const maxErrors = (deps && deps.maxErrors) || 200;
   let maxChars = (deps && deps.maxChars) || MAX_TASK_CHARS;
@@ -197,6 +208,19 @@ export function validateTask(task, deps) {
     const pr = n.props;
     if (!isObj(pr)) { err(P + ".props", "must be an object"); return; }
     for (const k of S.ORACLE_PROPS) if (own(pr, k)) err(P + ".props." + k, "Pixso's oracle never travels to the plugin; the planner strips it");
+    // The IR's per-type prop tables, when given: closed, of their kinds, NEVER_OMIT present.
+    const kinds = PT && own(BUILT_TYPE, n.type) && own(PT.KNOWN_PROPS, n.type) ? PT.KNOWN_PROPS[n.type] : null;
+    if (kinds) {
+      for (const k of Object.keys(pr)) {
+        if (S.ORACLE_PROPS.indexOf(k) >= 0) continue;
+        if (!own(kinds, k)) { err(P + ".props." + k, "unknown prop " + show(k) + " for a " + n.type + " record (props.mjs KNOWN_PROPS)"); continue; }
+        const kind = kinds[k], v = pr[k];
+        const bad = kind === "num" ? !isNum(v) : kind === "int" ? !isInt(v) : kind === "bool" ? typeof v !== "boolean" : kind === "str" ? !isStr(v)
+          : isStr(kind) && kind.indexOf("enum:") === 0 ? kind.slice(5).split("|").indexOf(v) < 0 : false;
+        if (bad) err(P + ".props." + k, k + " is not of its kind " + kind + "; got " + show(v));
+      }
+      for (const k of PT.NEVER_OMIT) if (own(kinds, k) && pr[k] === undefined) err(P + ".props." + k, "missing; " + k + " is never left out of a " + n.type + " record (props.mjs NEVER_OMIT)");
+    }
     if (!(Array.isArray(pr.relativeTransform) && pr.relativeTransform.length === 6 && pr.relativeTransform.every(isNum))) err(P + ".props.relativeTransform", "six finite numbers");
     for (const k of ["width", "height"]) if (!(isNum(pr[k]) && pr[k] >= 0)) err(P + ".props." + k, "a finite number >= 0; got " + show(pr[k]));
     const fields = (f, FP) => {
@@ -227,9 +251,11 @@ export function validateTask(task, deps) {
     if (rootSet.has(r.i)) err(P + ".i", "root " + r.i + " twice");
     rootSet.add(r.i);
     if (r.attachTo === "page") {
-      if (n.parent !== -1 && !(isObj(page) && page.service === true)) err(P + ".attachTo", "only a top-level record, or an S2 master on the service page, attaches to the page");
+      const anyPage = op === "clean" && page === null;
+      if (n.parent !== -1 && !anyPage && !(isObj(page) && page.service === true)) err(P + ".attachTo", "only a top-level record, or an S2 master on the service page, attaches to the page");
     } else if (isObj(r.attachTo) && Object.keys(r.attachTo).length === 1 && isInt(r.attachTo.i)) {
-      if (r.attachTo.i !== n.parent) err(P + ".attachTo.i", "a split root attaches to its IR parent " + show(n.parent) + "; got " + r.attachTo.i);
+      if (r.attachTo.i < 0) err(P + ".attachTo.i", "an IR index; a top-level record attaches to \"page\"");
+      else if (r.attachTo.i !== n.parent) err(P + ".attachTo.i", "a split root attaches to its IR parent " + show(n.parent) + "; got " + r.attachTo.i);
       else if (at.has(r.attachTo.i)) err(P + ".attachTo.i", "the parent is in this task, so the record is not a root");
     } else err(P + ".attachTo", "\"page\" or { i }; got " + show(r.attachTo));
     if (r.place !== null) {

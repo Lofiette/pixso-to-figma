@@ -8,6 +8,10 @@
 //
 // SURFACE.figma.calls   functions on `figma`
 // SURFACE.figma.read    plain properties of `figma`
+// SURFACE.ui            figma.ui: methods [name]. The probes move bytes through the plugin window
+//                       themselves (P4, docs/M1.md §6 E); the host (code.js) keeps figma.ui.onmessage
+// SURFACE.image         what figma.createImage returns: read [prop], methods [name] (P4's hash
+//                       equality, P8's image sizes)
 // SURFACE.nodes[TYPE]   per Figma node type the M1 plugin creates or walks:
 //   read     { prop: { layout: true|false } }; layout: true marks a getter that forces Figma to lay
 //            out (LAYOUT_GETTERS); the double counts those per phase, and the builder may read
@@ -18,7 +22,8 @@
 // It covers builder4's API use (tools/builder4.js) plus what M1 adds: createVector,
 // setVectorNetworkAsync, vectorPaths, fillGeometry, union / subtract / intersect / exclude,
 // createComponent, createStar, createPolygon, createLine, the setRange* family, shared plugin data,
-// loadFontAsync, listAvailableFontsAsync, createImage and getNodeByIdAsync. The Figma property names
+// loadFontAsync, listAvailableFontsAsync, createImage and getNodeByIdAsync, and for part E's probes
+// figma.ui.postMessage and the Image's hash, getBytesAsync and getSizeAsync. The Figma property names
 // of tools/ir/props.mjs KNOWN_PROPS (everything but the IR's own props) are writable on the node type
 // BUILT_TYPE maps each IR type to, so a prop the reader adds there is writable here without an edit.
 import { KNOWN_PROPS } from "../ir/props.mjs";
@@ -34,7 +39,9 @@ const FIGMA_CALLS = ["createFrame", "createRectangle", "createEllipse", "createP
   "createVector", "createText", "createComponent", "createSection", "createPage", "createImage", "createNodeFromSvg",
   "union", "subtract", "intersect", "exclude", "loadFontAsync", "listAvailableFontsAsync", "getNodeByIdAsync",
   "loadAllPagesAsync", "setCurrentPageAsync", "base64Decode", "base64Encode"];
-const FIGMA_READ = ["root", "currentPage", "mixed"];
+const FIGMA_READ = ["root", "currentPage", "mixed", "ui"];
+const UI = { methods: ["postMessage"] };
+const IMAGE = { read: ["hash"], methods: ["getBytesAsync", "getSizeAsync"] };
 
 const STAMPS = ["setPluginData", "getPluginData", "setSharedPluginData", "getSharedPluginData"];
 const SCENE_READ = ["id", "type", "name", "parent", "removed", "visible", "locked", "opacity", "blendMode", "isMask",
@@ -122,7 +129,7 @@ function deepFreeze(o) {
   return o;
 }
 
-export const SURFACE = deepFreeze({ figma: { calls: FIGMA_CALLS, read: FIGMA_READ }, nodes: NODES });
+export const SURFACE = deepFreeze({ figma: { calls: FIGMA_CALLS, read: FIGMA_READ }, ui: UI, image: IMAGE, nodes: NODES });
 
 export function canRead(type, prop) { const e = SURFACE.nodes[type]; return !!(e && Object.prototype.hasOwnProperty.call(e.read, prop)); }
 export function isLayoutRead(type, prop) { return canRead(type, prop) && SURFACE.nodes[type].read[prop].layout === true; }

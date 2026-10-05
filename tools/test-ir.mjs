@@ -49,7 +49,7 @@ function header(kind) {
 const T0 = [1, 0, 0, 0, 1, 0];
 const PAINTED = { fills: 0, strokes: 0, strokeWeight: 1, strokeAlign: "INSIDE", blendMode: "PASS_THROUGH" };
 const frameProps = (w, h, more) => Object.assign({ relativeTransform: T0.slice(), width: w, height: h }, PAINTED,
-  { clipsContent: true, layoutMode: "NONE" }, more || {});
+  { clipsContent: true, layoutMode: "NONE", primaryAxisSizingMode: "FIXED", counterAxisSizingMode: "FIXED" }, more || {});
 const shapeProps = (w, h, more) => Object.assign({ relativeTransform: T0.slice(), width: w, height: h }, PAINTED, more || {});
 
 // The smallest useful IR: one page, one frame.
@@ -259,6 +259,20 @@ if (example) expectError("an int prop given a fraction", mut(rich, (ir) => { ir.
 expectError("strokeWeights of three sides", mut(minimal, (ir) => { ir.nodes[0].props.strokeWeights = [1, 1, 1]; }), "nodes[0].props.strokeWeights", true);
 expectError("a negative side weight", mut(minimal, (ir) => { ir.nodes[0].props.strokeWeights = [1, -1, 1, 1]; }), "nodes[0].props.strokeWeights", true);
 expectError("cornerRadii with a string", mut(minimal, (ir) => { ir.nodes[0].props.cornerRadii = [1, "2", 3, 4]; }), "nodes[0].props.cornerRadii", true);
+expectError("strokeWeights with four equal sides (that is strokeWeight)", mut(minimal, (ir) => { ir.nodes[0].props.strokeWeights = [2, 2, 2, 2]; }), "nodes[0].props.strokeWeights", true);
+expectError("cornerRadii with four equal corners (that is cornerRadius)", mut(minimal, (ir) => { ir.nodes[0].props.cornerRadii = [3, 3, 3, 3]; }), "nodes[0].props.cornerRadii", true);
+expectValid("strokeWeights and cornerRadii that differ", mut(minimal, (ir) => { Object.assign(ir.nodes[0].props, { strokeWeights: [0, 0, 2, 0], cornerRadii: [4, 4, 0, 0] }); }));
+// The props with no IR default (props.mjs NEVER_OMIT): the builder cannot guess them.
+for (const [type, k, more] of [["BOOLEAN_OPERATION", "booleanOperation", { booleanOperation: "UNION" }], ["STAR", "pointCount", { pointCount: 5, innerRadius: 0.4 }],
+  ["STAR", "innerRadius", { pointCount: 5, innerRadius: 0.4 }], ["POLYGON", "pointCount", { pointCount: 3 }]]) {
+  expectError("a " + type + " without " + k + " (NEVER_OMIT, no IR default)", mut(minimal, (ir) => {
+    const p = shapeProps(5, 5, more); delete p[k];
+    ir.nodes.push({ parent: 0, guid: "1:3", type, name: "N", props: p });
+  }), "nodes[1].props." + k, true);
+}
+if (example) for (const k of ["characters", "fontName", "fontSize"]) {
+  expectError("a TEXT without " + k + " (NEVER_OMIT, no IR default)", mut(rich, (ir) => { delete ir.nodes[3].props[k]; if (k === "characters") delete ir.nodes[3].props.textRanges; }), "nodes[3].props." + k, true);
+}
 expectError("cornerRadius next to cornerRadii", mut(minimal, (ir) => { ir.nodes[0].props.cornerRadii = [1, 2, 3, 4]; ir.nodes[0].props.cornerRadius = 2; }), "nodes[0].props.cornerRadius", true);
 expectError("oracleSides that are not booleans", mut(minimal, (ir) => { ir.nodes[0].props.oracleSides = [true, 1, true, true]; }), "nodes[0].props.oracleSides", true);
 if (example) expectError("oracleSides on a TEXT", mut(rich, (ir) => { ir.nodes[3].props.oracleSides = [true, true, true, true]; }), "nodes[3].props.oracleSides", true);
@@ -301,7 +315,7 @@ expectError("an oracle next to a geometry source", mut(vec, (ir) => {
   delete ir.nodes[1].props.vectorNetwork; ir.nodes[1].props.fillGeometry = 2; ir.notes = [{ code: "VECTOR_FROM_GEOMETRY", node: 1 }];
 }), "nodes[1].props.oracleFillGeometry", true);
 expectError("vector geometry on a RECTANGLE", mut(vec, (ir) => { ir.nodes[1].type = "RECTANGLE"; }), "nodes[1].props.vectorNetwork");
-expectError("a STAR with build-source geometry", mut(vec, (ir) => { ir.nodes[1].type = "STAR"; }), "nodes[1].props.vectorNetwork", true);
+expectError("a STAR with build-source geometry", mut(vec, (ir) => { ir.nodes[1].type = "STAR"; Object.assign(ir.nodes[1].props, { pointCount: 5, innerRadius: 0.4 }); }), "nodes[1].props.vectorNetwork", true);
 expectValid("a BOOLEAN_OPERATION over its operands, with its stored result as the oracle", mut(vec, (ir) => {
   ir.nodes[1] = { parent: 0, guid: "1:3", type: "BOOLEAN_OPERATION", name: "B", props: shapeProps(10, 8, { booleanOperation: "EXCLUDE", oracleFillGeometry: 2 }) };
   ir.nodes.push({ parent: 1, guid: "1:4", type: "RECTANGLE", name: "R", props: shapeProps(6, 6) });

@@ -26,8 +26,13 @@
 // hyperlinks, styles).
 //
 // NEVER_OMIT props are written by the reader on every record whose type lists them, even at their
-// default, because Figma's defaults for them differ by node type. They have no DEFAULTS entry, and
-// the validator refuses a record that lacks one.
+// default. Two kinds: props whose Figma default differs by node type (fills, strokes, strokeAlign,
+// strokeWeight, clipsContent, blendMode, textAutoResize, layoutMode, and the two axis sizing modes,
+// where a new Figma frame's default is not the source's absent value, FIXED), and props that have
+// no IR default because no single value is right (a text's characters, fontName and fontSize; a
+// boolean's operation; a star's or polygon's pointCount, a star's innerRadius). They have no
+// DEFAULTS entry, and the validator refuses a record that lacks one. The builder writes each where
+// Figma takes it (the axis sizing modes act only on an auto-layout frame).
 //
 // RANGE_FIELDS[field] is the kind of a text range field (a TEXT record's textRanges[].fields): the
 // per-character properties Figma sets with setRange*.
@@ -114,7 +119,8 @@ export const RANGE_FIELDS = { fontName: "value", fontSize: "num", fills: "value"
   listOptions: "value", indentation: "int", listSpacing: "num", paragraphIndent: "num", paragraphSpacing: "num" };
 
 export const NEVER_OMIT = ["fills", "strokes", "strokeAlign", "strokeWeight", "clipsContent", "blendMode", "textAutoResize",
-  "layoutMode"];
+  "layoutMode", "primaryAxisSizingMode", "counterAxisSizingMode", "characters", "fontName", "fontSize", "booleanOperation",
+  "pointCount", "innerRadius"];
 
 export const DEFAULTS = {
   visible: true, locked: false, opacity: 1, isMask: false, maskType: "ALPHA", effects: [], exportSettings: [],
@@ -122,7 +128,7 @@ export const DEFAULTS = {
   layoutPositioning: "AUTO", layoutAlign: "INHERIT", layoutGrow: 0,
   strokeJoin: "MITER", strokeCap: "NONE", strokeMiterLimit: 4, dashPattern: [],
   cornerRadius: 0, cornerSmoothing: 0,
-  layoutWrap: "NO_WRAP", primaryAxisAlignItems: "MIN", counterAxisAlignItems: "MIN", paddingLeft: 0, paddingRight: 0,
+  layoutWrap: "NO_WRAP", counterAxisAlignContent: "AUTO", primaryAxisAlignItems: "MIN", counterAxisAlignItems: "MIN", paddingLeft: 0, paddingRight: 0,
   paddingTop: 0, paddingBottom: 0, itemSpacing: 0, counterAxisSpacing: 0, itemReverseZIndex: false,
   strokesIncludedInLayout: false, layoutGrids: [], overflowDirection: "NONE",
   arcData: { startingAngle: 0, endingAngle: 6.283185, innerRadius: 0 },

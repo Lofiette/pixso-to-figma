@@ -450,7 +450,7 @@ PXF_IR.setHost({
 
 async function cmdIr(P, j) {
   // The ceiling, not the planner's cap: the runner already cut the task to its --max-task-mb.
-  var v = PXF_TASK.validateTask(P, { schema: PXF_SCHEMA, maxChars: PXF_TASK.MAX_TASK_CHARS_CEILING, maxErrors: 20 });
+  var v = PXF_TASK.validateTask(P, { schema: PXF_SCHEMA, props: PXF_PROPS, maxChars: PXF_TASK.MAX_TASK_CHARS_CEILING, maxErrors: 20 });
   if (!v.ok) {
     refuse("ir: the task is refused: " + v.errors.slice(0, 5).map(function (e) { return (e.path || "(task)") + ": " + e.message; }).join("; ") +
       (v.errors.length > 5 ? " (and " + (v.errors.length - 5) + " more)" : ""));
