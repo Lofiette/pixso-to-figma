@@ -27,6 +27,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { fakePixso } from "./test/fake-pixso.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
 const HERE = dirname(SELF);
@@ -94,121 +95,7 @@ function fakeSwallow(id, dir, script, steps) {
   console.log("extract-only: payload is at " + join(dir, "payload.json") + " (" + holes + " holes)");
 }
 
-// ---------- the fake Pixso ----------
-function fakePixso() {
-  const S = {
-    mode: "up",                // up | reset | hang | http500 | http503 | rpcerror
-    identity: { file: "Synthetic file A", fileKey: "synthetic-key-a", pageIds: ["0:1", "0:2"] },
-    fails: {},                 // object id -> the error its script answers with
-    served: [],                // object ids answered, one entry per call, in order
-    calls: 0,                  // requests received
-    resetNext: 0,              // reset this many requests, then answer again
-    hung: [],                  // { res, at, closedAt } held open in hang mode
-    onServe: null,
-    onIdentity: null,          // called after the identity script is answered
-    body500: "",
-    sockets: new Set(),
-  };
-  const send = (res, id, result, sse, extra) => {
-    const msg = JSON.stringify({ jsonrpc: "2.0", id, result });
-    if (sse) {
-      res.writeHead(200, Object.assign({ "Content-Type": "text/event-stream" }, extra || {}));
-      res.end("event: message" + NL + "data: " + msg + NL + NL);
-    } else {
-      res.writeHead(200, Object.assign({ "Content-Type": "application/json" }, extra || {}));
-      res.end(msg);
-    }
-  };
-  const text = (s) => ({ content: [{ type: "text", text: s }] });
-  const server = http.createServer((req, res) => {
-    let body = "";
-    req.setEncoding("utf8");
-    req.on("data", (c) => { body += c; });
-    req.on("end", () => {
-      S.calls++;
-      if (S.resetNext > 0) { S.resetNext--; req.socket.destroy(); return; }
-      if (S.mode === "reset") {
-        // Back only after enough refusals and enough time since: the outage ends on events, not on a
-        // clock that a slow machine could outrun before the breaker has seen anything.
-        const cb = S.comeBack;
-        if (cb && S.refused >= cb.after && Date.now() - S.refusedEnoughAt >= cb.ms) {
-          S.mode = "up";
-          if (cb.file) S.identity = cb.file;
-          S.comeBack = null;
-        } else {
-          S.refused++;
-          if (cb && S.refused === cb.after) S.refusedEnoughAt = Date.now();
-          req.socket.destroy();
-          return;
-        }
-      }
-      if (S.mode === "hang") {
-        const h = { res, at: Date.now(), closedAt: null };
-        req.socket.on("close", () => { h.closedAt = Date.now(); });
-        S.hung.push(h);
-        return;
-      }
-      if (S.mode === "http500") { res.writeHead(500, { "Content-Type": "text/plain" }); res.end(S.body500); return; }
-      if (S.mode === "http503") { res.writeHead(503, { "Content-Type": "text/plain" }); res.end("synthetic: busy"); return; }
-      let msg;
-      try { msg = JSON.parse(body); } catch (e) { res.writeHead(400); res.end("not json"); return; }
-      if (msg.id === undefined) { res.writeHead(202); res.end(); return; }
-      if (msg.method === "initialize") {
-        send(res, msg.id, { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "fake-pixso", version: "0" } }, false,
-          { "Mcp-Session-Id": "fake-session" });
-        return;
-      }
-      if (S.mode === "rpcerror") {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: "synthetic failure", data: "d".repeat(3000) + "RPC-END-MARKER" } }));
-        return;
-      }
-      if (msg.method === "tools/call" && msg.params && msg.params.name === "eval_script") {
-        const src = String((msg.params.arguments && msg.params.arguments.script) || "");
-        if (src.indexOf("px:identity") >= 0) {
-          send(res, msg.id, text(JSON.stringify(S.identity)), true);
-          if (S.onIdentity) S.onIdentity();
-          return;
-        }
-        if (src.indexOf("px:script-error") >= 0) { send(res, msg.id, { content: [{ type: "text", text: "Error: synthetic" }], isError: true }, true); return; }
-        const m = /px:fake-object (\S+)/.exec(src);
-        if (m) {
-          const id = m[1];
-          if (S.fails[id]) { send(res, msg.id, text(JSON.stringify({ error: S.fails[id] })), true); return; }
-          S.served.push(id);
-          send(res, msg.id, text(JSON.stringify({ id, ok: true })), true);
-          if (S.onServe) S.onServe(id);
-          return;
-        }
-        send(res, msg.id, text("1"), true);
-        return;
-      }
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "method not found" } }));
-    });
-  });
-  server.on("connection", (s) => { S.sockets.add(s); s.on("close", () => S.sockets.delete(s)); });
-  S.listen = () => new Promise((r) => server.listen(0, "127.0.0.1", () => { S.url = "http://127.0.0.1:" + server.address().port + "/mcp"; r(); }));
-  S.close = () => new Promise((r) => {
-    for (const h of S.hung) { try { h.res.destroy(); } catch (e) {} }
-    for (const s of S.sockets) s.destroy();
-    server.close(() => r());
-  });
-  // Once `objectId` has been answered, Pixso goes away (mode "reset" or "hang"). With comeBack
-  // { after, ms, file } a reset outage ends on the first request that arrives at least `ms` after
-  // the `after`-th refused one — maybe with another file open; without it, it never ends.
-  S.outageAfter = (objectId, mode, comeBack) => {
-    S.onServe = (id) => {
-      if (id !== objectId) return;
-      S.onServe = null;
-      S.mode = mode;
-      S.refused = 0;
-      S.refusedEnoughAt = 0;
-      S.comeBack = comeBack || null;
-    };
-  };
-  return S;
-}
+// ---------- the fake Pixso: tools/test/fake-pixso.mjs ----------
 
 // ---------- helpers ----------
 function runNode(args, env) {
