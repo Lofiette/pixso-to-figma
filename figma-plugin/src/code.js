@@ -28,7 +28,7 @@ figma.showUI(__html__, { width: 380, height: 300 });
 // frame stayed latched on "busy" and went on heartbeating, and the runner saw a live plugin that
 // would never take another job.
 var SLICE = 400000;
-var buf = [], ibuf = [], job = null, images = {}, imageErrors = {};
+var buf = [], ibuf = [], ibinary = false, job = null, images = {}, imageErrors = {};
 
 function log(m) { figma.ui.postMessage({ t: "log", m: String(m) }); }
 function own(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
@@ -54,8 +54,10 @@ async function choosePage(j) {
   if (!j.page) return;
   var target = figma.root.children.filter(function (p) { return p.name === j.page; })[0];
   if (!target) { target = figma.createPage(); target.name = j.page; log("created page " + JSON.stringify(j.page)); }
-  if (j.pageBg) { try { target.backgrounds = j.pageBg; } catch (eb) { log("page background: " + (eb.message || eb)); } }
+  // Under documentAccess "dynamic-page" (manifest.json) a page is loaded when it becomes current, so
+  // it is made current before anything on it is written.
   if (figma.currentPage !== target) await figma.setCurrentPageAsync(target);
+  if (j.pageBg) { try { target.backgrounds = j.pageBg; } catch (eb) { log("page background: " + (eb.message || eb)); } }
 }
 
 function checkPayload(PAY, what) {
@@ -183,6 +185,9 @@ async function renderExport(P) {
   // to something else entirely on two objects out of 45 — so photographing whatever answers to a
   // number would quietly compare the wrong pair of pictures, which is worse than failing.
   if (want && (!n || n.removed || stampOf(n) !== want)) {
+    // The stamp is searched on every page, and under documentAccess "dynamic-page" a page that is not
+    // loaded lists no children: load them all first (docs/M1.md §6 E).
+    if (!P.loadAll) await figma.loadAllPagesAsync();
     var f = [];
     var pages = figma.root.children;
     for (var pi = 0; pi < pages.length; pi++) {
@@ -386,10 +391,13 @@ async function probeP3(A) {
   return { pluginToUi: down, uiToPlugin: up, largestDownMB: largest(down), largestUpMB: largest(up) };
 }
 
-// P1-P3 are functions of the common arguments. The IR layer's probes (PXF_IR.probes, upper-case names
-// such as P19B) are { args(raw) -> their own arguments, run(args) }: args sees the whole payload and
-// throws on a bad argument, which refuses the job before anything runs.
+// P1-P3 are functions of the common arguments. The IR layer's probes (PXF_IR.probes, upper-case names:
+// P4, P8, P19B, figma-plugin/src/ir/probes-*.js) are { args(raw) -> their own arguments, run(args, io) }:
+// args sees the whole payload and throws on a bad argument, which refuses the job before anything
+// runs; io.ask(message, deadlineMs) is this host's round trip to the window, because the IR layer owns
+// no timer and figma.ui.onmessage is this host's (P4 moves image bytes through it).
 var PROBES = Object.assign({ P1: probeP1, P2: probeP2, P3: probeP3 }, PXF_IR.probes);
+var PROBE_IO = { ask: function (m, deadlineMs) { return askUI(Object.assign({}, m), deadlineMs); } };
 
 function numberIn(v, dflt, lo, hi, what) {
   if (v === undefined) return dflt;
@@ -424,7 +432,7 @@ async function cmdProbe(P) {
     var t0 = clockNow();
     try {
       var probe = PROBES[list[p]];
-      out.probes[list[p]] = typeof probe === "function" ? await probe(A) : await probe.run(Object.assign({}, A, own2[list[p]]));
+      out.probes[list[p]] = typeof probe === "function" ? await probe(A) : await probe.run(Object.assign({}, A, own2[list[p]]), PROBE_IO);
     }
     catch (e) { out.probes[list[p]] = { error: String((e && e.message) || e) }; }
     if (!out.probes[list[p]] || typeof out.probes[list[p]] !== "object") out.probes[list[p]] = { result: out.probes[list[p]] === undefined ? null : out.probes[list[p]] };
@@ -464,6 +472,14 @@ async function cmdIr(P, j) {
 
 var COMMANDS = { build: cmdBuild, verify: cmdVerify, clean: cmdClean, render: cmdRender, probe: cmdProbe, ir: cmdIr };
 
+function joinBytes(parts) {
+  var n = 0, i;
+  for (i = 0; i < parts.length; i++) n += parts[i].length;
+  var out = new Uint8Array(n), o = 0;
+  for (i = 0; i < parts.length; i++) { out.set(parts[i], o); o += parts[i].length; }
+  return out;
+}
+
 function sendReport(id, report) {
   var text = "";
   try { text = JSON.stringify(report); }
@@ -499,21 +515,26 @@ figma.ui.onmessage = async function (msg) {
   // runner substitutes with a render.
   //
   // The bytes arrive as base64 in slices. They used to arrive as an array of numbers, one per
-  // byte, and an object carrying 102 MB of photographs never finished being handed over.
-  if (msg.t === "image-begin") { ibuf = []; return; }
-  if (msg.t === "image-chunk") { if (typeof msg.d === "string") ibuf.push(msg.d); return; }
+  // byte, and an object carrying 102 MB of photographs never finished being handed over. A job whose
+  // transport is "binary" (probe P4's verdict, docs/M1.md §6 E) sends them as Uint8Array slices of at
+  // most 4 MB instead, and no decode is needed here.
+  if (msg.t === "image-begin") { ibuf = []; ibinary = msg.binary === true; return; }
+  if (msg.t === "image-chunk") {
+    if (ibinary ? !!msg.d && typeof msg.d === "object" && typeof msg.d.length === "number" : typeof msg.d === "string") ibuf.push(msg.d);
+    return;
+  }
   if (msg.t === "image-end") {
     // A refusal is remembered by hash for the IR builder (ctx.S.imageErrors()), which then draws a
     // counted placeholder instead of an IMAGE paint Figma has no image for.
     try {
-      var im = figma.createImage(figma.base64Decode(ibuf.join("")));
+      var im = figma.createImage(ibinary ? joinBytes(ibuf) : figma.base64Decode(ibuf.join("")));
       images[String(msg.hash)] = im.hash;
       delete imageErrors[String(msg.hash)];
     } catch (e) {
       imageErrors[String(msg.hash)] = String((e && e.message) || e);
       log("image " + String(msg.hash).slice(0, 8) + " failed: " + (e.message || e));
     }
-    ibuf = [];
+    ibuf = []; ibinary = false;
     return;
   }
 
