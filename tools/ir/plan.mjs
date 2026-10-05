@@ -381,6 +381,9 @@ export function balanceOf(ir, stats, ctx) {
 
 // The clean task the runner sends before a build task: its roots' records only, on its page, so that
 // roots an earlier run left (another pxRun) are removed before they are built again (part B's clean).
+// The roots' notes go with them: a root VECTOR built from geometry is a valid record only next to its
+// note (docs/M1.md §5.2), and the plugin validates a clean task like any other (part F: without
+// them the plugin refused the clean, and the runner failed the build behind it).
 export function cleanTaskFor(build, ir) {
   const N = ir.nodes, V = ir.values || [];
   const rootSet = new Set(build.roots.map((r) => r.i));
@@ -397,6 +400,7 @@ export function cleanTaskFor(build, ir) {
     walkImages(v, hashes);
   }
   const imgs = new Map(build.images.map((m) => [m.hash, m]));
-  return Object.assign({}, build, { op: "clean", nodes, notes: [], values, fonts, roots: build.roots.map((r) => ({ i: r.i, attachTo: r.attachTo, place: r.place })),
+  const notes = (build.notes || []).filter((n) => rootSet.has(n.i)).map((n) => ({ code: n.code, i: n.i, detail: n.detail }));
+  return Object.assign({}, build, { op: "clean", nodes, notes, values, fonts, roots: build.roots.map((r) => ({ i: r.i, attachTo: r.attachTo, place: r.place })),
     images: [...hashes].sort().map((h) => imgs.get(h)), expect: null });
 }

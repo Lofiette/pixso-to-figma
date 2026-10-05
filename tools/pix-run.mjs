@@ -135,6 +135,15 @@ export function balanceLines(B) {
   ];
 }
 
+// The judge the run calls per verify task: part C's judgeTask on the IR, with part A's lost-border
+// population (stats.populations.lostBorder), which only the reader can name (docs/M1.md §8.3); null
+// while the judge is not in the build.
+export function judgeWith(ir, stats) {
+  if (!judge.JUDGE_IMPLEMENTED) return null;
+  const lost = stats && stats.populations && Array.isArray(stats.populations.lostBorder) ? stats.populations.lostBorder : null;
+  return (a) => judge.judgeTask(Object.assign({ ir, lostBorder: lost }, a));
+}
+
 async function loadReader() {
   const p = join(HERE, "pix", "ir", "index.mjs");
   if (!existsSync(p)) throw new Error("part A's reader (tools/pix/ir/index.mjs, pixToIR) is not in this build; use --from-ir with an IR made elsewhere");
@@ -206,7 +215,7 @@ export async function main(argv) {
 
   // ---------- Figma ----------
   const statesFile = join(runDir, "states.json");
-  const { states, resumed } = resumeStates(loadStates(statesFile), fresh);
+  const { states, resumed } = resumeStates(loadStates(statesFile), fresh, plan.tasks);
   if (resumed) say("resuming: " + resumed + " tasks already built in this run folder");
   // A judgement on disk belongs to a verify task that is kept; any other is stale and goes.
   for (const t of states.tasks) if (t.op === "verify" && t.state === "pending") rmSync(join(runDir, "judge", t.taskNo + ".json"), { force: true });
@@ -220,7 +229,7 @@ export async function main(argv) {
     { liveness, ceilingMs: p.ceilingMs, onProgress: () => {} });
   const imagesFor = (task) => { const m = new Map(); for (const im of task.images) if (im.source !== "none" && bytes.has(im.hash)) m.set(im.hash, bytes.get(im.hash)); return m; };
   const r = await runTasks({ states, tasks: plan.tasks, post, imagesFor, clean: (t) => cleanTaskFor(t, ir),
-    judge: judge.JUDGE_IMPLEMENTED ? (a) => judge.judgeTask(Object.assign({ ir }, a)) : null,
+    judge: judgeWith(ir, stats),
     save: (s) => saveStates(statesFile, s), onReport: (t, rep) => jsonOut(join(runDir, "reports", t.taskNo + "-" + t.op + ".json"), rep),
     log: say, missingFonts: o.missingFonts, yes: o.yes, only: o.only });
   srv.close();

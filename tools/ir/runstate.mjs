@@ -72,23 +72,53 @@ export function newStates({ snapshot, irVersion, runId, settings, probes, pixso,
 
 // A fresh state for this plan, keeping what an earlier state of the same snapshot, settings and plan
 // already built: a build and its verify are kept only together; failed and skipped go back to pending.
-export function resumeStates(old, fresh) {
+// With the plan's tasks (part F), a root split across tasks is kept only whole: a resume runs under a
+// new runId, so the session that knew a split root's built parent is gone, and the parent carries
+// no stamp until a later task attaches to it (figma-plugin/src/ir/build.js boundaryParent). When any
+// build of a chain (a task and the tasks whose roots attach to its records, transitively) is not
+// kept, every build of the chain and its verify run again; the clean before each build removes the
+// earlier top-level root with whatever was attached to it.
+export function resumeStates(old, fresh, tasks) {
   const sameTask = (a, b) => a && b && a.op === b.op && a.taskNo === b.taskNo && a.nodes === b.nodes && JSON.stringify(a.roots) === JSON.stringify(b.roots);
   if (!old || old.version !== STATES_VERSION || old.snapshot !== fresh.snapshot || JSON.stringify(old.settings) !== JSON.stringify(fresh.settings) ||
     !Array.isArray(old.tasks) || old.tasks.length !== fresh.tasks.length || !old.tasks.every((t, k) => sameTask(t, fresh.tasks[k]))) {
     return { states: fresh, resumed: 0 };
   }
   const done = (t) => t.state === "built" || t.state === "built-with-fallbacks";
+  const keep = fresh.tasks.map((t, k) => {
+    const o = old.tasks[k];
+    if (t.op === "build") return done(o) && !!old.tasks[k + 1] && old.tasks[k + 1].op === "verify" && done(old.tasks[k + 1]);
+    if (t.op === "verify") return done(o) && done(old.tasks[k - 1]);
+    return false;
+  });
+  for (const group of splitChains(tasks || [])) {
+    const ks = group.map((no) => fresh.tasks.findIndex((t) => t.taskNo === no)).filter((k) => k >= 0);
+    if (ks.every((k) => keep[k])) continue;
+    for (const k of ks) { keep[k] = false; if (fresh.tasks[k + 1] && fresh.tasks[k + 1].op === "verify") keep[k + 1] = false; }
+  }
   let resumed = 0;
   fresh.tasks.forEach((t, k) => {
     const o = old.tasks[k];
-    let keep = false;
-    if (t.op === "build") keep = done(o) && old.tasks[k + 1] && old.tasks[k + 1].op === "verify" && done(old.tasks[k + 1]);
-    else if (t.op === "verify") keep = done(o) && done(old.tasks[k - 1]);
-    if (keep) { Object.assign(t, { state: o.state, codes: o.codes, ms: o.ms, error: null, failures: o.failures || 0 }); resumed++; }
+    if (keep[k]) { Object.assign(t, { state: o.state, codes: o.codes, ms: o.ms, error: null, failures: o.failures || 0 }); resumed++; }
   });
   fresh.fonts = old.fonts || fresh.fonts;
   return { states: fresh, resumed };
+}
+
+// The build tasks that hold one split root, as lists of taskNo: a task whose root attaches to a record
+// ({ i }) is in the chain of the task that holds that record. Chains of one task are left out.
+export function splitChains(tasks) {
+  const holder = new Map(), up = new Map();
+  const find = (a) => { while (up.get(a) !== a) a = up.get(a); return a; };
+  for (const t of tasks) if (t.op === "build") { up.set(t.taskNo, t.taskNo); for (const n of t.nodes || []) holder.set(n.i, t.taskNo); }
+  for (const t of tasks) if (t.op === "build") for (const r of t.roots || []) {
+    if (!r || typeof r.attachTo !== "object" || r.attachTo === null || !holder.has(r.attachTo.i)) continue;
+    const a = find(t.taskNo), b = find(holder.get(r.attachTo.i));
+    if (a !== b) up.set(a, b);
+  }
+  const groups = new Map();
+  for (const no of up.keys()) { const g = find(no); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(no); }
+  return [...groups.values()].filter((g) => g.length > 1).map((g) => g.sort((a, b) => a - b));
 }
 
 export function transition(states, taskNo, to, rec) {

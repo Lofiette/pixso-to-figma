@@ -21,7 +21,7 @@ import { cleanTaskFor, derivePopulations, planM1, PLAN_DEFAULTS, CEILING_BASE_MS
 import { imageInfo, p8Cases, refusedBy, resolveImages, tableFromIR, carriers, parseLinks } from "./ir/images.mjs";
 import { SCRIPTS, assertReadOnlyScript, makeMcpClient, readOnlyProblems } from "./ir/mcp-readonly.mjs";
 import { checkIdentity, compareIdentity, sampleGuids } from "./ir/identity.mjs";
-import { count, newStates, probeStatus, resumeStates, runTasks, saveStates, transition, defaultDataDir } from "./ir/runstate.mjs";
+import { count, newStates, probeStatus, resumeStates, runTasks, saveStates, splitChains, transition, defaultDataDir } from "./ir/runstate.mjs";
 import { GATES, m1Gates, m1Verdict, sumJs, BUILT_NOT_AUDITED } from "./ir/verdict.mjs";
 import { emptyJ, checkJShape, TOTALS_SHAPE } from "./ir/judge.mjs";
 import { REPO_ROOT } from "./ir/outside-repo.mjs";
@@ -237,6 +237,25 @@ function syntheticIR(opts) {
   const scope = new Set(bp.scope.built);
   check(built.size === scope.size && [...scope].every((i) => built.has(i)) && bp.tasks.filter((t) => t.op === "build").reduce((s, t) => s + t.nodes.length, 0) === scope.size,
     "every record in scope is built exactly once across the split tasks");
+  {
+    // Part F: a resume keeps a split root only whole (B's request: after a plugin restart the split
+    // pieces' parent carries no stamp, so its task runs again with them).
+    const chain = splitChains(bp.tasks).find((g) => g.indexOf(firstWithBig.taskNo) >= 0) || [];
+    const mk = () => newStates({ snapshot: bp.tasks[0].snapshot, irVersion: 2, runId: RUN, settings: { m1Scope: "default" }, probes: probeStatus(VERDICTS),
+      pixso: null, balance: JSON.parse(JSON.stringify(bp.balance)), ledger: bp.ledger });
+    const old = mk();
+    for (const t of old.tasks) t.state = "built";
+    const lastPiece = split[split.length - 1].taskNo;
+    old.tasks.find((t) => t.taskNo === lastPiece).state = "failed";
+    old.tasks.find((t) => t.taskNo === lastPiece + 1).state = "skipped";
+    const r = resumeStates(old, mk(), bp.tasks);
+    const st = (no) => r.states.tasks.find((t) => t.taskNo === no).state;
+    const outside = bp.tasks.filter((t) => t.op === "build" && chain.indexOf(t.taskNo) < 0);
+    check(chain.length === split.length + 1 && chain.every((no) => st(no) === "pending" && st(no + 1) === "pending") && outside.length > 0 && outside.every((t) => st(t.taskNo) === "built"),
+      "a resume runs a split root's whole chain again (the task that builds it and every piece) when one piece did not build; other tasks stay built",
+      JSON.stringify({ chain, states: r.states.tasks.map((t) => t.taskNo + ":" + t.state) }));
+    check(resumeStates(old, mk()).states.tasks.filter((t) => t.state === "built").length === old.tasks.filter((t) => t.op !== "fonts").length - 2, "without the plan's tasks, a resume keeps pairs as before");
+  }
   const long = syntheticIR({});
   long.ir.nodes.find((n) => n.type === "TEXT").props.characters = "x".repeat(30000);
   check(/IR record [0-9]+ alone is over the task size cap/.test(threw(() => planM1(long.ir, long.stats, { runId: RUN, maxChars: cap }))) &&
