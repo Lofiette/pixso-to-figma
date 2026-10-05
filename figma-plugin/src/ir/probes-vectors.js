@@ -91,7 +91,11 @@ function operands(box) {
 function booleanCase(box, op, want) {
   var o = operands(box), beforeA = absBox(o.a), beforeB = absBox(o.b);
   var node = figma[op]([o.a, o.b], box);
-  var d = drawn(node), out = { type: node.type, op: node.booleanOperation, paths: d.paths, box: boxOf(d.box), operandsKept: sameBox(absBox(o.a), beforeA) && sameBox(absBox(o.b), beforeB) };
+  // winding: the rule of each result path, measured, not part of the verdict; the judge compares a
+  // native boolean's winding with Pixso's stored result (docs/M1.md §8.3), so the live run records it.
+  var g = node.fillGeometry || [], windings = [];
+  for (var k = 0; k < g.length; k++) windings.push(g[k].windingRule);
+  var d = drawn(node), out = { type: node.type, op: node.booleanOperation, paths: d.paths, box: boxOf(d.box), winding: windings, operandsKept: sameBox(absBox(o.a), beforeA) && sameBox(absBox(o.b), beforeB) };
   return { verdict: !d.paths ? "empty" : near(d.box, want) && out.operandsKept ? "ok" : "differs", m: out };
 }
 

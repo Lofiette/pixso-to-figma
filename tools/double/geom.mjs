@@ -20,6 +20,10 @@
 // opposite ways, so NONZERO fills them). Every traced coordinate within one cell of an operand's
 // own coordinate (a vertex, or an edge of its exact box) is snapped to it, so a result made of
 // straight edges that lie on the operands' edges comes out exact; curved edges stay within a cell.
+// The result is labelled NONZERO, except an EXCLUDE result, labelled EVENODD as Pixso stores its XOR
+// results (the traced loops draw the same under either rule). Which rule Figma gives a boolean's
+// fillGeometry is an assumption (A) until P19B's boolean cases record it (their m.winding; part F,
+// docs/M1.md §15).
 import { pathBounds, unionBounds } from "../ir/pathgeom.mjs";
 
 const r4 = (n) => { const v = Math.round(n * 10000) / 10000; return String(Object.is(v, -0) ? 0 : v); };
@@ -282,5 +286,5 @@ export function booleanResult(op, operands) {
   });
   const data = formatPath(subs);
   const box = op === "UNION" ? total : pathBox(data);
-  return { paths: [{ windingRule: "NONZERO", data }], box };
+  return { paths: [{ windingRule: op === "EXCLUDE" ? "EVENODD" : "NONZERO", data }], box };
 }
