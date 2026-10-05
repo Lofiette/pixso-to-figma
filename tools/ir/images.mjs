@@ -83,7 +83,10 @@ export function p8Cases(info) {
   if (info.format === "webp") out.push("webpAsPng");
   const big = Math.max(info.w || 0, info.h || 0), small = Math.min(info.w || 0, info.h || 0);
   if (big > MAX_SIDE) out.push(small * STRIP_RATIO <= big ? "longStrip" : "png4097");
-  else if (info.format === "png") out.push("png4096");
+  // png4096 is a PNG of exactly MAX_SIDE on its longer side, the size P8 probes and the double models
+  // (part F, docs/M1.md §15: it was every PNG up to MAX_SIDE, so a P8 png4096 verdict other than ok
+  // would have sent every ordinary PNG to the next link).
+  else if (info.format === "png" && big === MAX_SIDE) out.push("png4096");
   return out;
 }
 

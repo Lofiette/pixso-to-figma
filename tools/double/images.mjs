@@ -4,11 +4,13 @@
 //   sniffImage(bytes) -> { format: "png"|"jpeg"|"gif"|"webp"|"unknown", width, height }  (0 when unread)
 //   p8Case(info)      -> the P8 case the bytes fall in, or null for an ordinary image:
 //                        webp -> "webpAsPng"; jpeg -> "jpegAsPng"; png with a side over 4 096 px ->
-//                        "longStrip" when the other side is at most 64 px, else "png4097"; a png of
-//                        exactly 4 096 px on its longer side -> "png4096"; anything else -> null.
-//                        (The case names say "as PNG" because the archive stores them under .png; to
-//                        createImage only the bytes matter.)
+//                        "longStrip" when that side is at least STRIP_RATIO times the other, else
+//                        "png4097"; a png of exactly 4 096 px on its longer side -> "png4096"; anything
+//                        else -> null. (The case names say "as PNG" because the archive stores them
+//                        under .png; to createImage only the bytes matter.) The strip rule is the
+//                        runner's (tools/ir/images.mjs p8Cases); part F aligned the two (docs/M1.md §15).
 export const MAX_SIDE = 4096;
+export const STRIP_RATIO = 8;
 
 const u16be = (b, o) => (b[o] << 8) | b[o + 1];
 const u16le = (b, o) => b[o] | (b[o + 1] << 8);
@@ -58,7 +60,7 @@ export function p8Case(info) {
   if (info.format === "jpeg") return "jpegAsPng";
   if (info.format !== "png") return null;
   const long = Math.max(info.width, info.height), short = Math.min(info.width, info.height);
-  if (long > MAX_SIDE) return short <= 64 ? "longStrip" : "png4097";
+  if (long > MAX_SIDE) return short * STRIP_RATIO <= long ? "longStrip" : "png4097";
   if (long === MAX_SIDE) return "png4096";
   return null;
 }

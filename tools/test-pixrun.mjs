@@ -319,11 +319,13 @@ function syntheticIR(opts) {
   check(same(imageInfo(small), { format: "png", w: 7, h: 9 }) && same(imageInfo(syntheticJpeg(321, 123)), { format: "jpeg", w: 321, h: 123 }) &&
     same(imageInfo(webpX), { format: "webp", w: 100, h: 50 }) && same(imageInfo(gif), { format: "gif", w: 10, h: 20 }) && imageInfo(Buffer.from("nope")).format === "unknown",
     "imageInfo reads PNG, JPEG, WebP and GIF sizes from their headers");
-  check(same(p8Cases(imageInfo(small)), ["png4096"]) && same(p8Cases(imageInfo(png)), ["png4097"]) && same(p8Cases(imageInfo(strip)), ["longStrip"]) &&
+  const edge = syntheticPng(4096, 300, 2);
+  check(same(p8Cases(imageInfo(small)), []) && same(p8Cases(imageInfo(edge)), ["png4096"]) && same(p8Cases(imageInfo(png)), ["png4097"]) &&
+    same(p8Cases(imageInfo(strip)), ["longStrip"]) &&
     same(p8Cases(imageInfo(syntheticJpeg(10, 10))), ["jpegAsPng"]) && same(p8Cases(imageInfo(webpX)), ["webpAsPng"]),
-    "the bytes fall into P8's cases (png4096, png4097, longStrip, jpegAsPng, webpAsPng)");
+    "the bytes fall into P8's cases (png4096 at exactly 4 096 px, png4097, longStrip, jpegAsPng, webpAsPng); an ordinary PNG falls in none");
   const v = (k, val) => ({ probes: { P8: { verdicts: Object.assign({ png4096: "ok", png4097: "pending", longStrip: "pending", jpegAsPng: "pending", webpAsPng: "pending" }, { [k]: val }) } } });
-  check(refusedBy(imageInfo(png), v("png4097", "drop")) && refusedBy(imageInfo(syntheticJpeg(4, 4)), v("jpegAsPng", "throw")) && refusedBy(imageInfo(small), v("png4096", "empty")) &&
+  check(refusedBy(imageInfo(png), v("png4097", "drop")) && refusedBy(imageInfo(syntheticJpeg(4, 4)), v("jpegAsPng", "throw")) && refusedBy(imageInfo(edge), v("png4096", "empty")) && !refusedBy(imageInfo(small), v("png4096", "throw")) &&
     !refusedBy(imageInfo(png), v("png4097", "ok")) && !refusedBy(imageInfo(png), VERDICTS) && refusedBy(imageInfo(Buffer.from("nope")), VERDICTS),
     "P8 verdicts are data: throw, drop and empty move on, ok and pending let the bytes through, unknown bytes never go");
   check(same(parseLinks("archive,render"), ["archive", "render"]) && /not one of/.test(threw(() => parseLinks("archive,disk"))) && /twice/.test(threw(() => parseLinks("mcp,mcp"))),
