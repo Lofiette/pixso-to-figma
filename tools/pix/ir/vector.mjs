@@ -7,6 +7,13 @@
 // - a network with no region but with stored fill geometry (an auto-closed loop): no network, its
 //   fillGeometry and strokeGeometry, VECTOR_FROM_GEOMETRY. The stroke is drawn on the fill path, so
 //   the closing segment of an open loop is stroked too; the note's detail counts the open ends.
+// - a network-built record with no region whose segments close a loop, and no stored fill path:
+//   Figma fills such a loop (P19B regionlessFill, 2026-10-05) where Pixso drew no fill. Under an
+//   invisible fill paint (every such record in D, K, M and P: 3, 1 479, 0, 0) neither draws a fill;
+//   Figma still reports the loop in its fillGeometry, which the judge counts as unfilled, not as a
+//   difference (tools/ir/judge.mjs). Under a visible fill paint (none measured) the record gets
+//   fills [] and SOURCE_FEATURE_UNSUPPORTED "unfilled loop", so Figma does not fill what Pixso did
+//   not; the network, and so the stroke, stay as stored.
 // RIGHT_ANGLE handle mirroring has no Figma value: stripped, SOURCE_FEATURE_UNSUPPORTED.
 // Per-region fills (the node's vectorPaints, [{ regionId, paints }], regionId the region's index in
 // the stored network) become the regions' `fills`; without them every region would draw the node's
@@ -84,7 +91,8 @@ export function networkToIR(cx, net, sx, sy, table, opts) {
   // Pixso fills a region whose loop is open as if it were closed (D 108, K 1 131, M 61 vectors);
   // Figma takes closed loops only. Under a visible fill the loop is closed with straight segments
   // (Figma then strokes them too: counted); under no visible fill the open loop draws nothing and is
-  // dropped, so the stroke stays exact.
+  // dropped with no segment added, so the stroke stays exact (a closing segment left behind would be
+  // stroked, and, with no region, filled: P19B regionlessFill).
   let closedLoops = 0, droppedLoops = 0;
   const regions = [];
   let filledRegions = 0;
@@ -93,9 +101,8 @@ export function networkToIR(cx, net, sx, sy, table, opts) {
     const loops = [];
     for (const l of r.loops) {
       if (!l.length) continue;
-      const closed = closeLoop(segments, l);
-      if (closed === l) { loops.push(l.slice()); continue; }
-      if (opts && opts.fillVisible) { loops.push(closed); closedLoops++; }
+      if (isClosedLoop(segments, l)) { loops.push(l.slice()); continue; }
+      if (opts && opts.fillVisible) { loops.push(closeLoop(segments, l)); closedLoops++; }
       else droppedLoops++;
     }
     if (!loops.length) continue;
@@ -107,17 +114,22 @@ export function networkToIR(cx, net, sx, sy, table, opts) {
   return { value: { vertices, segments, regions }, rightAngle, bad, closedLoops, droppedLoops, filledRegions };
 }
 
-// A loop walked segment by segment; where one segment does not meet the next (or the last the
-// first), a straight segment is appended to `segments` and put between them. Returns the loop itself
-// when it is closed already.
-export function closeLoop(segments, loop) {
+// Whether a loop is closed: every vertex on it met an even number of times, and each segment meets
+// the next (the last the first). Reads `segments` only.
+export function isClosedLoop(segments, loop) {
   const deg = new Map();
   for (const k of loop) { const s = segments[k]; deg.set(s.start, (deg.get(s.start) || 0) + 1); deg.set(s.end, (deg.get(s.end) || 0) + 1); }
   const meets = (a, b) => a.start === b.start || a.start === b.end || a.end === b.start || a.end === b.end;
-  let closed = true;
-  for (const d of deg.values()) if (d % 2) closed = false;
-  for (let a = 0; a < loop.length && loop.length > 1 && closed; a++) if (!meets(segments[loop[a]], segments[loop[(a + 1) % loop.length]])) closed = false;
-  if (closed) return loop;
+  for (const d of deg.values()) if (d % 2) return false;
+  for (let a = 0; a < loop.length && loop.length > 1; a++) if (!meets(segments[loop[a]], segments[loop[(a + 1) % loop.length]])) return false;
+  return true;
+}
+
+// A loop walked segment by segment; where one segment does not meet the next (or the last the
+// first), a straight segment is appended to `segments` and put between them. Returns the loop itself
+// when it is closed already (and then appends nothing).
+export function closeLoop(segments, loop) {
+  if (isClosedLoop(segments, loop)) return loop;
   const out = [];
   const first = segments[loop[0]];
   // Start the walk at the end of the first segment that leads into the second.
@@ -149,6 +161,21 @@ export function networkBox(v) {
     box = unionBox(box, unionBounds(pathBounds(d)));
   }
   return box;
+}
+
+// The closed loops of a network's segments, regions aside: how many independent cycles they hold
+// (segments - vertices on them + connected pieces; a segment from a vertex to itself is one).
+export function closedLoopCount(net) {
+  const up = new Map();
+  const root = (v) => { while (up.get(v) !== v) v = up.get(v); return v; };
+  let loops = 0;
+  for (const s of net.segments) {
+    for (const v of [s.start, s.end]) if (!up.has(v)) up.set(v, v);
+    const a = root(s.start), b = root(s.end);
+    if (a === b) loops++;
+    else up.set(a, b);
+  }
+  return loops;
 }
 
 // Open ends of a network: vertices met by an odd number of segments.
@@ -201,6 +228,15 @@ export function vectorProps(cx, n, put, size) {
       // will draw, so it is no oracle (none means 0 paths, which the network gives).
       if (!fill || onlyOpen) {
         if (ir.value.regions.length) { V.classes["region-no-fill"]++; cx.note(CODE.VECTOR_ORACLE_DIFFERS, "region-no-fill: " + ir.value.regions.length + " regions, no stored fill path"); }
+        else if (visiblePaint(n.fillPaints)) {
+          // No region, but a closed loop under a visible fill: Figma fills it (P19B regionlessFill),
+          // Pixso drew no fill. Its fill paint goes, so Figma draws none either.
+          const loops = closedLoopCount(ir.value);
+          if (loops) {
+            put("fills", []);
+            cx.feature("unfilled loop", loops + " closed loop" + (loops === 1 ? "" : "s") + " with no region and no stored fill path; fills [] so Figma draws none, as Pixso");
+          }
+        }
         return true;
       }
       put("oracleFillGeometry", fill);

@@ -330,8 +330,16 @@ function syntheticIR(opts) {
     "the bytes fall into P8's cases (png4096 at exactly 4 096 px, png4097, longStrip, jpegAsPng, webpAsPng); an ordinary PNG falls in none");
   const v = (k, val) => ({ probes: { P8: { verdicts: Object.assign({ png4096: "ok", png4097: "pending", longStrip: "pending", jpegAsPng: "pending", webpAsPng: "pending" }, { [k]: val }) } } });
   check(refusedBy(imageInfo(png), v("png4097", "drop")) && refusedBy(imageInfo(syntheticJpeg(4, 4)), v("jpegAsPng", "throw")) && refusedBy(imageInfo(edge), v("png4096", "empty")) && !refusedBy(imageInfo(small), v("png4096", "throw")) &&
-    !refusedBy(imageInfo(png), v("png4097", "ok")) && !refusedBy(imageInfo(png), VERDICTS) && refusedBy(imageInfo(Buffer.from("nope")), VERDICTS),
+    !refusedBy(imageInfo(png), v("png4097", "ok")) && !refusedBy(imageInfo(png), v("png4097", "pending")) && refusedBy(imageInfo(Buffer.from("nope")), VERDICTS),
     "P8 verdicts are data: throw, drop and empty move on, ok and pending let the bytes through, unknown bytes never go");
+  // P8 as recorded in Figma (2026-10-05): over 4 096 px, a long strip and WebP throw; 4 096 px and JPEG are kept.
+  const p8 = VERDICTS.probes.P8.verdicts;
+  check(/^run \d{4}-\d{2}-\d{2}/.test(VERDICTS.probes.P8.status) && p8.png4097 === "throw" && p8.longStrip === "throw" && p8.webpAsPng === "throw" &&
+    refusedBy(imageInfo(png), VERDICTS) === "P8 png4097: throw" && refusedBy(imageInfo(strip), VERDICTS) === "P8 longStrip: throw" &&
+    refusedBy(imageInfo(webpX), VERDICTS) === "P8 webpAsPng: throw" && !refusedBy(imageInfo(edge), VERDICTS) && !refusedBy(imageInfo(syntheticJpeg(10, 10)), VERDICTS) &&
+    !refusedBy(imageInfo(small), VERDICTS),
+    "with P8 as recorded, a PNG over 4 096 px, a long strip and WebP move on to the next link; a 4 096 px PNG, a JPEG and an ordinary PNG go to Figma",
+    JSON.stringify([refusedBy(imageInfo(png), VERDICTS), refusedBy(imageInfo(strip), VERDICTS), refusedBy(imageInfo(webpX), VERDICTS)]));
   check(same(parseLinks("archive,render"), ["archive", "render"]) && /not one of/.test(threw(() => parseLinks("archive,disk"))) && /twice/.test(threw(() => parseLinks("mcp,mcp"))),
     "--images takes an ordered subset of archive, mcp, render");
 }
@@ -628,11 +636,21 @@ function goodRun() {
   const failG = JSON.parse(JSON.stringify(T)); failG.geometry.visibleOver1 = 3;
   check(!/PASS/.test(m1Gates(failG, G.states, { audit: audit(true) }).verdict) && !/PASS/.test(m1Verdict(T, G.states, {}).join("\n")),
     "no PASS with a failing gate, and none without an audit");
-  const pend = JSON.parse(JSON.stringify(G.states)); pend.probes = probeStatus(VERDICTS);
+  // Every gating probe pending, as before the live session (planted), and as recorded: P4 and P8 run on
+  // 2026-10-05, and P5, P6 and P18 after that day's live rebuilds: nothing gating is pending.
+  const before = JSON.parse(JSON.stringify(VERDICTS));
+  for (const p of ["P4", "P5", "P6", "P8", "P18", "P19B"]) before.probes[p].status = "pending";
+  const pend = JSON.parse(JSON.stringify(G.states)); pend.probes = probeStatus(before);
   const lines = m1Verdict(T, pend, {});
+  const now = JSON.parse(JSON.stringify(G.states)); now.probes = probeStatus(VERDICTS);
+  const nowLines = m1Verdict(T, now, {}), nowLast = nowLines[nowLines.length - 1];
+  const pendingNamed = (/\(pending: ([^)]*)\)/.exec(nowLast) || [])[1] || "";
   check(lines.some((l) => /^probes: P4 pending, P5 pending, P6 pending, P8 pending, P18 pending, P19B pending$/.test(l)) && /creation order not frozen/.test(lines[lines.length - 1]) &&
+    nowLines.some((l) => /^probes: P4 run 2026-10-05, P5 run 2026-10-05, P6 run 2026-10-05, P8 run 2026-10-05, P18 run 2026-10-05, P19B run 2026-10-05$/.test(l)) &&
+    !/creation order not frozen/.test(nowLast) && pendingNamed === "" &&
     !/creation order/.test(m1Verdict(T, G.states, {}).slice(-1)[0]),
-    "the probe status line names each gating probe; while one is pending the verdict says the creation order is not frozen");
+    "the probe status line names each gating probe, the recorded ones as run; while one is pending the verdict says the creation order is not frozen, naming only the pending ones",
+    JSON.stringify(nowLines.filter((l) => /^probes: |^VERDICT: /.test(l))));
   check(probeStatus(VERDICTS).P2 === undefined && probeStatus({ probes: { P8: { status: "run 2026-10-07" }, P4: { status: "pending" } } }).P8 === "run 2026-10-07",
     "probe status comes from verdicts.json: run <date> or pending");
 }
@@ -682,7 +700,7 @@ function acceptGroup() {
 
 function pixRunGroup() {
   const o = parseArgs(["x.pix"]);
-  check(o.scope === "file" && o.m1Scope === "default" && o.booleans === "auto" && o.spaceEvenlySingle === "between" && o.textFit === "widen" && o.layoutOrder === "creation" &&
+  check(o.scope === "file" && o.m1Scope === "default" && o.booleans === "auto" && o.spaceEvenlySingle === "center" && o.textFit === "widen" && o.layoutOrder === "deepestFirst" &&
     o.textRead === "measure" && o.images === "archive,mcp,render" && o.missingFonts === "ask" && o.fallbackFont === "Inter/Regular" && o.maxTaskMb === 4 &&
     o.livenessWarnS === 60 && o.livenessFailS === 300 && o.ceilingMsPerNode === 20 && !o.noPixso && !o.yes && !o.dry,
     "pix-run's defaults are docs/M1.md §3's");

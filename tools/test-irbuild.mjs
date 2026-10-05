@@ -56,6 +56,8 @@ const NET_SQUARE = { vertices: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 
   segments: [{ start: 0, end: 1 }, { start: 1, end: 2 }, { start: 2, end: 3 }, { start: 3, end: 0 }],
   regions: [{ windingRule: "NONZERO", loops: [[0, 1, 2, 3]] }] };
 const GEO_TRI = [{ windingRule: "EVENODD", data: "M 0 0 L 10 0 L 5 8 Z" }];
+// The same path as Figma reads it back: each command glued to its first number (P19B, 2026-10-05).
+const GEO_TRI_READ = [{ windingRule: "EVENODD", data: "M0 0L10 0L5 8Z" }];
 
 // Interns every interned prop (node props, range fields, the page background) into values, as the
 // planner does, collects the fonts, lists the roots, and fills expect. Raw values in, a task out.
@@ -218,11 +220,18 @@ const mixedNodes = () => [
     const { ctx: c2 } = await build(E2, mkTask({ nodes: [frame(0, -1, [T6(0, 0), 100, 100]), rec(1, 0, "ELLIPSE", [T6(0, 0), 20, 20], painted()),
       rec(2, 0, "ELLIPSE", [T6(30, 0), 20, 20], painted({ arcData: { startingAngle: 0, endingAngle: 6.283185, innerRadius: 0.5 } }))] }));
     const full = E2.D.node(c2.S.nodes["1"]), donut = E2.D.node(c2.S.nodes["2"]);
-    const raw = E2.D.figma.createEllipse(); raw.resize(20, 20); raw.arcData = { startingAngle: 0, endingAngle: 6.283185, innerRadius: 0 };
+    // 6.283185 written as is: Figma closes it (P19B arcFullSweep ok, recorded 2026-10-05), so the
+    // default double draws the whole ellipse; with P19B planted pending, the pre-session assumption
+    // ("arc") draws a pie, which starts at the centre and draws a line out ("M10 10L…", glued).
+    const sweep = (D) => { const e = D.figma.createEllipse(); e.resize(20, 20); e.arcData = { startingAngle: 0, endingAngle: 6.283185, innerRadius: 0 }; return e.fillGeometry[0].data; };
+    const vPend = loadVerdicts();
+    vPend.probes.P19B.status = "pending";
+    for (const k of Object.keys(vPend.probes.P19B.verdicts)) vPend.probes.P19B.verdicts[k] = "pending";
+    const raw = sweep(E2.D), rawPending = sweep(makeDouble({ verdicts: vPend }));
     check(full.arcData.endingAngle === 2 * Math.PI && donut.arcData.endingAngle === 2 * Math.PI && donut.arcData.innerRadius === 0.5 &&
-      !/^M 10 10 L/.test(full.fillGeometry[0].data) && /^M 10 10 L/.test(raw.fillGeometry[0].data),
-      "a full sweep is written as exactly 2π, so the ellipse stays closed (6.283185 written as is draws a pie in the double, as it would in Figma)",
-      JSON.stringify([full.arcData, donut.arcData]));
+      !/^M10 10L/.test(full.fillGeometry[0].data) && raw === full.fillGeometry[0].data && /^M10 10L/.test(rawPending),
+      "a full sweep is written as exactly 2π, so the ellipse stays closed whatever Figma makes of 6.283185 (closed, as P19B recorded; a pie under the assumption, planted pending)",
+      JSON.stringify([full.arcData, donut.arcData, full.fillGeometry[0].data.slice(0, 24), raw.slice(0, 24), rawPending.slice(0, 24)]));
   }
   const cmp = findTree(tr, ctx.S.nodes["12"]);
   check(cmp.type === "COMPONENT" && (cmp.sharedPluginData.pix2fig || {}).pxDef === "1:112", "a COMPONENT record is a component stamped pxDef (its guid)");
@@ -245,8 +254,10 @@ const mixedNodes = () => [
     check(back.regions.length === 1 && Array.isArray(back.regions[0].fills) && back.regions[0].fills.length === 1 && back.regions[0].fills[0].color.r === 1,
       "a region's own fills are written with the network (a white region on a green vector)", JSON.stringify(back.regions));
   }
-  check(same(v4.vectorPaths, GEO_TRI) && R.counters.vectorsGeometry === 1 && writesOf(E, v4.id).every((w) => w.prop !== "resize()"),
-    "a geometry record is built from its fillGeometry as vectorPaths (vectorsGeometry), and a vector is never resized");
+  // Written as the IR holds it (spaced), read back as Figma writes it (glued).
+  check(writesOf(E, v4.id).some((w) => w.prop === "vectorPaths" && same(w.value, GEO_TRI)) && same(v4.vectorPaths, GEO_TRI_READ) &&
+    R.counters.vectorsGeometry === 1 && writesOf(E, v4.id).every((w) => w.prop !== "resize()"),
+    "a geometry record is built from its fillGeometry as vectorPaths (vectorsGeometry), and a vector is never resized", JSON.stringify(v4.vectorPaths));
   // Determinism: the same task on a fresh double writes the same things in the same order.
   const E2 = env({ images: { [H1]: H1 } });
   await build(E2, mkTask({ nodes: mixedNodes(), notes: [{ code: "VECTOR_FROM_GEOMETRY", i: 4, detail: null }], images: [{ hash: H1, source: "archive", format: "png", reason: null }] }));
@@ -352,6 +363,21 @@ const mixedNodes = () => [
   const got = mul6(abs, [1, 0, stored.x, 0, 1, stored.y]);
   check(stored.x === 0 && R4.detail.vectorOriginShifted === 1 && near(got[2], want[2], 1e-9) && near(got[5], want[5], 1e-9),
     "a vector whose origin Figma moves keeps its drawing in place (the wanted transform takes the shift, on a rotated vector too)", JSON.stringify([got[2], got[5], want[2], want[5]]));
+
+  // The same for a vector built from its stored geometry: the builder finds the shift from the first
+  // point it wrote (the IR's spaced form) and the first point Figma reads back (glued, "M0 0L…", P19B
+  // 2026-10-05). A double with P19B offsetNetwork ok (recorded 2026-10-05, and planted here so the
+  // check does not lean on the record) moves the origin as Figma does.
+  const vOk = loadVerdicts(); vOk.probes.P19B.verdicts.offsetNetwork = "ok";
+  const t5 = mkTask({ nodes: [frame(0, -1, [T6(100, 100), 50, 50]), vector(1, 0, [ROT90(30, 5), 10, 8], { fillGeometry: [{ windingRule: "EVENODD", data: "M 3 2 L 13 2 L 8 10 Z" }] })],
+    notes: [{ code: "VECTOR_FROM_GEOMETRY", i: 1, detail: null }] });
+  valid("offset geometry", t5);
+  const E5 = env({ double: { verdicts: vOk } });
+  const { R: R5, ctx: c5 } = await build(E5, t5);
+  const vg = E5.D.node(c5.S.nodes["1"]), read = vg.vectorPaths[0].data;
+  const gotG = flat(vg.absoluteTransform), wantG = mul6(mul6(T6(100, 100), ROT90(30, 5)), [1, 0, 3, 0, 1, 2]);
+  check(read === "M0 0L10 0L5 8Z" && R5.detail.vectorOriginShifted === 1 && near(gotG[2], wantG[2], 1e-9) && near(gotG[5], wantG[5], 1e-9),
+    "a geometry-built vector whose origin Figma moves keeps its drawing in place, its paths read back in Figma's glued form", JSON.stringify([read, R5.detail.vectorOriginShifted, gotG[2], gotG[5], wantG[2], wantG[5]]));
 }
 
 // ============================================================================================
@@ -487,16 +513,51 @@ const mixedNodes = () => [
     "the judge holds the baked leaf to its swapped size in the same box: no finding", JSON.stringify([J.geometry, J.count]));
 }
 {
+  // P19B regionlessFill ok (2026-10-05): Figma fills a closed loop with no region, so a stroke-only
+  // square built from its network reads one fill path where Pixso stored none, and draws nothing under
+  // no visible fill: the judge counts it unfilled. Under a visible fill it would draw one, a count
+  // finding (the reader writes fills [] there, tools/pix/ir/vector.mjs). An open chain with no region
+  // draws no fill (P19) and matches its 0 paths. With P19B planted pending, the assumption draws none.
+  const sq = { vertices: NET_SQUARE.vertices, segments: NET_SQUARE.segments, regions: [] };
+  const chain = { vertices: NET_SQUARE.vertices, segments: NET_SQUARE.segments.slice(0, 3), regions: [] };
+  const judged = async (fills, verdicts) => {
+    const nodes = [frame(0, -1, [T6(0, 0), 100, 100]), vector(1, 0, [T6(10, 10), 10, 10], { fills, strokes: [SOLID(0, 0, 0)], vectorNetwork: sq }),
+      vector(2, 0, [T6(30, 10), 10, 10], { fills, strokes: [SOLID(0, 0, 0)], vectorNetwork: chain })];
+    const task = mkTask({ nodes });
+    valid("region-less loop", task);
+    const E = env(verdicts ? { double: { verdicts } } : {});
+    const { R, ctx } = await build(E, task);
+    const vt = Object.assign({}, task, { op: "verify" });
+    const V = await E.IR.ops.verify(E.IR.makeCtx(E.figma, vt, { id: "v" }), vt);
+    const values = []; for (const k of Object.keys(task.values)) values[Number(k)] = task.values[k];
+    const ir = { nodes: task.nodes.map((t) => ({ parent: t.parent, guid: t.guid, type: t.type, name: t.name, props: t.props })), values, notes: [] };
+    return { J: judgeTask({ ir, task, build: R, verify: JSON.parse(JSON.stringify(V)) }), loop: nodeOf(E, ctx, 1), open: nodeOf(E, ctx, 2) };
+  };
+  const vPend = loadVerdicts();
+  vPend.probes.P19B.status = "pending";
+  for (const k of Object.keys(vPend.probes.P19B.verdicts)) vPend.probes.P19B.verdicts[k] = "pending";
+  const none = await judged([]), painted = await judged([SOLID(0.5, 0.5, 0.5)]), assumed = await judged([], vPend);
+  check(none.loop.fillGeometry.length === 1 && none.open.fillGeometry.length === 0 && none.J.vectors.checked === 2 && none.J.vectors.unfilled === 1 &&
+    none.J.vectors.match === 1 && !none.J.vectors.differs.length && same(painted.J.vectors.differs, [{ i: 1, kind: "count" }]) &&
+    assumed.loop.fillGeometry.length === 0 && assumed.J.vectors.match === 2,
+    "a closed loop with no region reads one fill path in Figma (P19B regionlessFill ok): unfilled under no visible fill, a count finding under a visible one; an open chain matches; planted pending, none",
+    JSON.stringify([none.J.vectors, painted.J.vectors.differs, assumed.J.vectors]));
+}
+{
   // Review figma F4: a 32 px child saying STRETCH in a 36 px row hugging its counter axis, which
-  // Pixso centres (y = 2). Figma ignores a child's MIN / CENTER / MAX (docs/FINDINGS.md: 0 aligned),
-  // so the flow pass takes it out of the flow onto its place, and it stays there.
+  // Pixso centres (y = 2). Figma ignores a child's MIN / CENTER / MAX (docs/FINDINGS.md: 0 aligned).
+  // Since the first live build of P (2026-10-05) the flow pass tries the row's own counter alignment
+  // before taking the child out of the flow: CENTER puts it at its place and the 36 px sibling stays,
+  // so it stays in the flow.
   const nodes = [frame(0, -1, [T6(0, 0), 200, 36], { layoutMode: "HORIZONTAL", primaryAxisSizingMode: "FIXED", counterAxisSizingMode: "AUTO", itemSpacing: 8 }),
     rect(1, 0, [T6(0, 0), 40, 36]), rect(2, 0, [T6(48, 2), 32, 32], { layoutAlign: "STRETCH" })];
   const E = env();
   const { R, ctx } = await build(E, mkTask({ nodes }));
   const n = nodeOf(E, ctx, 2);
-  check(near(n.relativeTransform[1][2], 2, 0.5) && near(n.relativeTransform[0][2], 48, 0.5) && R.counters.flowAligned === 0 && R.counters.flowAbsolute === 1,
-    "a child Pixso centres in a hugging row ends at its place out of the flow; no per-child alignment is counted as done", JSON.stringify([n.relativeTransform, R.counters.flowAligned, R.counters.flowAbsolute]));
+  check(near(n.relativeTransform[1][2], 2, 0.5) && near(n.relativeTransform[0][2], 48, 0.5) && R.counters.flowAligned === 0 && R.counters.flowAbsolute === 0 &&
+    R.detail.flowParentAligned === 1 && nodeOf(E, ctx, 0).counterAxisAlignItems === "CENTER" && n.layoutPositioning === "AUTO",
+    "a child Pixso centres in a hugging row ends at its place in the flow, by the row's counter alignment; no per-child alignment is counted as done",
+    JSON.stringify([n.relativeTransform, R.counters.flowAligned, R.counters.flowAbsolute, R.detail.flowParentAligned]));
 }
 {
   // Review figma F7 and F9: native booleans in an auto-layout flow. One ABSOLUTE at (250, 40), one
@@ -862,6 +923,95 @@ check(DOUBLE_FEATURES.layout === true && DOUBLE_FEATURES.text === true, "the dou
     const { ctx } = await build(E, task);
     const x4 = E.D.node(ctx.S.nodes["4"]).absoluteBoundingBox.x;
     check(near(x4, 40, 0.5), "flow: the visible sibling of a hidden flow child is put back at its source position", x4);
+  }
+}
+
+// ============================================================================================
+// 13. the first live builds of P and K (2026-10-05): each case built, verified and judged on the double
+// ============================================================================================
+{
+  const judged = async (nodes) => {
+    const task = mkTask({ nodes });
+    valid("live-build case", task);
+    const E = env();
+    const { R, ctx } = await build(E, task);
+    const vt = Object.assign({}, task, { op: "verify" });
+    const V = await E.IR.ops.verify(E.IR.makeCtx(E.figma, vt, { id: "v" }), vt);
+    const values = []; for (const k of Object.keys(task.values)) values[Number(k)] = task.values[k];
+    const ir = { nodes: task.nodes.map((t) => ({ parent: t.parent, guid: t.guid, type: t.type, name: t.name, props: t.props })), values, notes: [] };
+    return { E, R, ctx, J: judgeTask({ ir, task, build: R, verify: JSON.parse(JSON.stringify(V)) }) };
+  };
+  const row = (p) => frameProps(Object.assign({ layoutMode: "HORIZONTAL", primaryAxisSizingMode: "FIXED", paddingTop: 6, paddingBottom: 6, itemSpacing: 6, clipsContent: false }, p));
+  const filler = (i, parent, box) => frame(i, parent, box, { layoutGrow: 1, layoutMode: "HORIZONTAL", primaryAxisSizingMode: "FIXED", counterAxisSizingMode: "AUTO", clipsContent: false });
+  {
+    // P: a flow child that fills the row but sits where the row's alignment does not put it (Pixso
+    // centres it in a hugging MIN row). Figma ignores the child's own alignment, and the child cannot
+    // leave the flow alone (it grows along it, so its sibling would take its place): the row's own
+    // counter alignment that puts it right, with every sibling staying, is taken.
+    const nodes = [frame(0, -1, [T6(0, 0), 700, 100]),
+      rec(1, 0, "FRAME", [T6(0, 0), 588, 36], row({ counterAxisSizingMode: "AUTO" })),
+      rect(2, 1, [T6(0, 6), 20, 24], { visible: false }),
+      filler(3, 1, [T6(0, 8), 562, 20]),
+      rect(4, 3, [T6(0, 0), 140, 20]),
+      rect(5, 1, [T6(568, 6), 20, 24])];
+    const { E, R, ctx, J } = await judged(nodes);
+    const p = nodeOf(E, ctx, 1), c = nodeOf(E, ctx, 3);
+    check(J.geometry.visibleOver05 === 0 && R.detail.flowParentAligned === 1 && p.counterAxisAlignItems === "CENTER" && c.layoutPositioning === "AUTO" &&
+      nodeOf(E, ctx, 5).layoutPositioning === "AUTO" && R.counters.flowGroups === 0,
+      "flow: a fill child off its row's alignment is put right by the row's own counter alignment, everything kept in the flow",
+      JSON.stringify([J.geometry.visibleOver05, J.geometry.worst.slice(0, 3), R.detail, p.counterAxisAlignItems]));
+  }
+  {
+    // P: the same child at the start of a fixed CENTER row whose other child is centred: no alignment
+    // of the row puts both right, so the visible flow children leave the flow together, the row
+    // frozen at its size.
+    const nodes = [frame(0, -1, [T6(0, 0), 700, 100]),
+      rec(1, 0, "FRAME", [T6(0, 0), 588, 43], row({ counterAxisSizingMode: "FIXED", counterAxisAlignItems: "CENTER" })),
+      rect(2, 1, [T6(0, 6), 20, 24], { visible: false }),
+      filler(3, 1, [T6(0, 6), 562, 20]),
+      rect(4, 3, [T6(0, 0), 140, 20]),
+      rect(5, 1, [T6(568, 9.5), 20, 24])];
+    const { E, R, ctx, J } = await judged(nodes);
+    const p = nodeOf(E, ctx, 1);
+    check(J.geometry.visibleOver05 === 0 && R.detail.flowGroupsForOne === 1 && R.counters.flowGroups === 1 && nodeOf(E, ctx, 3).layoutPositioning === "ABSOLUTE" &&
+      nodeOf(E, ctx, 5).layoutPositioning === "ABSOLUTE" && p.counterAxisAlignItems === "CENTER" && near(p.width, 588, 0.01) && near(p.height, 43, 0.01),
+      "flow: a fill child no row alignment puts right leaves the flow with its visible siblings, the row frozen",
+      JSON.stringify([J.geometry.visibleOver05, J.geometry.worst.slice(0, 3), R.detail, R.counters.flowGroups]));
+  }
+  {
+    // K: a flow frame with a child, narrower than its own padding on the flow axis. Figma will not make
+    // it that small; it gives up the flow, and its child is placed by matrix where Pixso put it.
+    const nodes = [frame(0, -1, [T6(0, 0), 200, 100]),
+      component(1, 0, [T6(20, 20), 28, 28], { layoutMode: "HORIZONTAL", primaryAxisAlignItems: "CENTER", counterAxisAlignItems: "CENTER", paddingLeft: 16, paddingRight: 16, paddingTop: 4, paddingBottom: 4, itemSpacing: 8, clipsContent: false }),
+      rect(2, 1, [T6(6, 6), 16, 16])];
+    const { E, R, ctx, J } = await judged(nodes);
+    const n = nodeOf(E, ctx, 1), r = nodeOf(E, ctx, 2);
+    check(J.geometry.sizeVisibleOver05 === 0 && J.geometry.visibleOver05 === 0 && near(n.width, 28, 0.01) && n.layoutMode === "NONE" && n.paddingLeft === 16 &&
+      R.counters.layoutDroppedForSize === 1 && R.detail.layoutDroppedWithChildren === 1 && near(r.relativeTransform[0][2], 6, 1e-9),
+      "repair: a flow frame with a child, under its padding, keeps its size and padding values, gives up the flow, and its child keeps its place",
+      JSON.stringify([n.width, n.layoutMode, r.relativeTransform, R.counters.layoutDroppedForSize, J.geometry.worst]));
+  }
+  {
+    // P: a vector whose node carries a corner radius. Figma keeps a vector's radius per vertex, so the
+    // node's radius goes onto each vertex without its own; a vertex's own radius stays.
+    const net = { vertices: [{ x: 0, y: 0 }, { x: 10, y: 0, cornerRadius: 3 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
+      segments: NET_SQUARE.segments, regions: NET_SQUARE.regions };
+    const nodes = [frame(0, -1, [T6(0, 0), 100, 100]), vector(1, 0, [T6(10, 10), 10, 10], { vectorNetwork: net, cornerRadius: 2, fills: [SOLID(0, 0, 0)] }),
+      vector(2, 0, [T6(30, 10), 10, 10], { vectorNetwork: NET_SQUARE, fills: [SOLID(0, 0, 0)] })];
+    const { E, R, ctx } = await judged(nodes);
+    const sent = (i) => (E.D.writes.find((w) => w.id === nodeOf(E, ctx, i).id && w.prop === "setVectorNetworkAsync()") || {}).value;
+    const r1 = (sent(1) || { vertices: [] }).vertices.map((v) => v.cornerRadius), r2 = (sent(2) || { vertices: [] }).vertices.map((v) => v.cornerRadius === undefined ? null : v.cornerRadius);
+    check(same(r1, [2, 3, 2, 2]) && same(r2, [null, null, null, null]) && R.detail.vertexRadiusFromNode === 1,
+      "vectors: the node's corner radius goes onto every vertex without its own; a vector with none is written as it is", JSON.stringify([r1, r2, R.detail.vertexRadiusFromNode]));
+  }
+  {
+    // P and K: Figma's createSection gives the section a stroke the IR's SECTION never carries; the
+    // builder writes it away, so the section's sides are the IR's (none).
+    const nodes = [rec(0, -1, "SECTION", [T6(0, 0), 300, 200], { fills: [SOLID(1, 1, 1)] }), frame(1, 0, [T6(10, 10), 50, 50])];
+    const { E, ctx, J } = await judged(nodes);
+    const s = nodeOf(E, ctx, 0);
+    check(Array.isArray(s.strokes) && s.strokes.length === 0 && J.sides.checked === 0 && J.sides.mismatchIR.length === 0 && J.count.ok,
+      "sections: Figma's default section stroke is written away, so G8 finds the IR's none", JSON.stringify([s.strokes, J.sides]));
   }
 }
 

@@ -895,6 +895,95 @@ function hreq(port, method, path, headers, body) {
   srv3.close();
 }
 
+// One window per runner. Two plugin windows holding the key (the plugin open in two Figma files) were
+// both given every pending job, and the first report won: the second live build of the test kit K,
+// 2026-10-05, built a page in one file and verified it in the other. The first window given a job is
+// the runner's; another is told 423 on every route that carries a job, and its report counts for
+// nothing. Both windows hold a /job request when the job is posted, as two idle windows do.
+{
+  const said = [];
+  const sec = newSecrets();
+  const VER = distKeyed.version;
+  const srv = startJobServer(0, Object.assign({ log: (m) => said.push(m), pluginVersion: VER }, sec));
+  await srv.ready;
+  const P = srv.port;
+  const as = (w) => ({ Origin: "null", Authorization: "Bearer " + sec.token, "X-PXF-Plugin": VER, "X-PXF-Window": w, "Content-Type": "application/json" });
+  const pre = await hreq(P, "OPTIONS", "/job?client=plugin", { Origin: "null", "Access-Control-Request-Method": "GET", "Access-Control-Request-Headers": "authorization,x-pxf-plugin,x-pxf-window" });
+  check(pre.status === 204 && /x-pxf-window/i.test(pre.headers["access-control-allow-headers"] || ""), "the preflight allows the X-PXF-Window header a window names itself in");
+  const heldA = hreq(P, "GET", "/job?client=plugin", as("win-a"));
+  await sleep(80);
+  const heldB = hreq(P, "GET", "/job?client=plugin", as("win-b"));
+  await sleep(80);
+  const IMG = "cd".repeat(20);
+  const posted = srv.post({ kind: "render" }, JSON.stringify({ op: "ping" }), new Map([[IMG, Buffer.from("x")]]), 5000);
+  const [a, b] = await Promise.all([heldA, heldB]);
+  let ja = {}, jb = {};
+  try { ja = JSON.parse(a.body); } catch (e) {}
+  try { jb = JSON.parse(b.body); } catch (e) {}
+  check(a.status === 200 && ja.kind === "render" && b.status === 423 && jb.otherWindow === true && b.headers["access-control-allow-origin"] === "null" && srv.window === "win-a",
+    "a job posted while two windows wait goes to the one that asked first; the other is told 423, readable by it", [a.status, ja.kind, b.status, srv.window].join(","));
+  const routes = [["GET", "/job?client=plugin"], ["GET", "/job/" + ja.id + "/payload"], ["GET", "/image/" + IMG + "?b64=1"], ["POST", "/alive?id=" + ja.id + "&done=5"],
+    ["POST", "/report"]];
+  const fromB = [];
+  for (const [m, p] of routes) {
+    const r = await hreq(P, m, p, as("win-b"), m === "POST" ? JSON.stringify({ id: ja.id, i: 0, n: 1, d: JSON.stringify({ ok: 2, from: "b" }) }) : null);
+    if (r.status !== 423) fromB.push(m + " " + p.split("?")[0] + " -> " + r.status);
+  }
+  const noHeader = await hreq(P, "GET", "/job?client=plugin", { Origin: "null", Authorization: "Bearer " + sec.token, "X-PXF-Plugin": VER });
+  check(!fromB.length && noHeader.status === 423, "the other window gets 423 on the job, its payload, its images, /alive and /report; a window naming none is another window too", fromB.join("; "));
+  const pa = await hreq(P, "GET", "/job/" + ja.id + "/payload", as("win-a"));
+  const ra = await hreq(P, "POST", "/report", as("win-a"), JSON.stringify({ id: ja.id, i: 0, n: 1, d: JSON.stringify({ ok: 1, from: "a" }) }));
+  const got = await posted;
+  check(pa.status === 200 && ra.status === 200 && got.from === "a", "the runner's window takes the payload and its report is the job's; the other's report counted for nothing", JSON.stringify(got));
+  // The next job goes to the same window, even when the other asks first.
+  const early = await hreq(P, "GET", "/job?client=plugin", as("win-b"));
+  const posted2 = srv.post({ kind: "render" }, JSON.stringify({ op: "ping" }), new Map(), 5000);
+  const late = await hreq(P, "GET", "/job?client=plugin", as("win-b"));
+  const mine = await hreq(P, "GET", "/job?client=plugin", as("win-a"));
+  let jm = {};
+  try { jm = JSON.parse(mine.body); } catch (e) {}
+  await hreq(P, "POST", "/report", as("win-a"), JSON.stringify({ id: jm.id, i: 0, n: 1, d: JSON.stringify({ ok: 3 }) }));
+  const got2 = await posted2;
+  check(early.status === 423 && late.status === 423 && mine.status === 200 && jm.kind === "render" && got2.ok === 3 && srv.othersRefused >= 8,
+    "the next job goes to the same window, however early the other asks", [early.status, late.status, mine.status, srv.othersRefused].join(","));
+  check(said.some((l) => /refused 423/.test(l) && /another plugin window/.test(l) && /close the other one/.test(l)) && said.some((l) => /plugin window is "win-a"/.test(l)),
+    "the runner says which window is its own, and that another one asked and must be closed");
+  srv.close();
+}
+// ...but not for good: the runner's window closed (the designer reopened the plugin, the live kit
+// build of 2026-10-05) is silent, and after ownerGoneMs the next window to ask takes the run over and
+// does the pending job again. A window that keeps asking keeps the run.
+{
+  const said = [];
+  const sec = newSecrets();
+  const VER = distKeyed.version;
+  const srv = startJobServer(0, Object.assign({ log: (m) => said.push(m), pluginVersion: VER, ownerGoneMs: 400 }, sec));
+  await srv.ready;
+  const P = srv.port;
+  const as = (w) => ({ Origin: "null", Authorization: "Bearer " + sec.token, "X-PXF-Plugin": VER, "X-PXF-Window": w, "Content-Type": "application/json" });
+  const posted = srv.post({ kind: "render" }, JSON.stringify({ op: "ping" }), new Map(), 5000);
+  const a = await hreq(P, "GET", "/job?client=plugin", as("win-a"));
+  let ja = {};
+  try { ja = JSON.parse(a.body); } catch (e) {}
+  const soon = await hreq(P, "GET", "/job?client=plugin", as("win-b"));
+  await sleep(150);
+  const keep = await hreq(P, "GET", "/control?rev=0", as("win-a"));
+  await sleep(300);
+  const stillA = await hreq(P, "GET", "/job?client=plugin", as("win-b"));
+  await sleep(500);
+  const taken = await hreq(P, "GET", "/job?client=plugin", as("win-b"));
+  let jt = {};
+  try { jt = JSON.parse(taken.body); } catch (e) {}
+  await hreq(P, "POST", "/report", as("win-b"), JSON.stringify({ id: jt.id, i: 0, n: 1, d: JSON.stringify({ ok: 7, from: "b" }) }));
+  const got = await posted;
+  const lateA = await hreq(P, "GET", "/job?client=plugin", as("win-a"));
+  check(a.status === 200 && soon.status === 423 && keep.status === 200 && stillA.status === 423 && taken.status === 200 && jt.id === ja.id &&
+    got.from === "b" && srv.window === "win-b" && lateA.status === 423 && said.some((l) => /has been silent for/.test(l) && /takes over this run/.test(l)),
+    "a window that keeps asking keeps the run; once it is silent past ownerGoneMs the next window takes the run over and does the pending job again",
+    [a.status, soon.status, keep.status, stillA.status, taken.status, jt.id === ja.id, got.from, srv.window, lateA.status].join(","));
+  srv.close();
+}
+
 // Tools that post at once first wait for a window holding this session's key (tools/session.mjs). A
 // window still holding the last key is answered 401 and does not count; one with this key does.
 {
@@ -1014,9 +1103,10 @@ function wire(uiHtml, port, code, tap) {
     const bigHash = createHash("sha1").update(big).digest("hex");
     const opsB = W.plugin.PXF_IR.ops, wasB = opsB.fonts;
     opsB.fonts = async (ctx) => Object.assign(ctx.report, { figmaHash: ctx.S.images()[bigHash] || null });
+    const mark = toPlugin.length;   // only this job: with P4 recorded as binary, earlier images travel as slices too
     const rb = await srv.post({ kind: "ir", imageTransport: "binary" }, JSON.stringify(FONTS_TASK()), new Map([[bigHash, big]]), 30000);
     opsB.fonts = wasB;
-    const slices = toPlugin.filter((m) => m.t === "image-chunk" && typeof m.d === "object");
+    const slices = toPlugin.slice(mark).filter((m) => m.t === "image-chunk" && typeof m.d === "object");
     check(rb.figmaHash === bigHash && slices.length === 2 && slices.every((m) => m.d.length <= 4 * 1048576) && toPlugin.some((m) => m.t === "image-begin" && m.hash === bigHash && m.binary === true),
       "the binary image transport sends a 5 MB image as two Uint8Array slices of at most 4 MB, and Figma's hash is its SHA-1", JSON.stringify([rb.figmaHash === bigHash, slices.map((m) => m.d.length)]));
 
@@ -1039,6 +1129,50 @@ function wire(uiHtml, port, code, tap) {
     check(after.ok === 1, "after a stalled task the window takes the next job");
   } catch (e) { fail("the chain: " + e.message); }
   W.close();
+  srv.close();
+}
+
+// Two real windows (dist/ui.html) open at once, each with its own Figma, as when the plugin is open in
+// two files: the build and its verify both go to the window that took the first job, and the other
+// window says it does nothing and should be closed.
+{
+  const sec = newSecrets();
+  const twinDist = buildPlugin({ outDir: join(scratch, "dist-twin"), token: sec.token });
+  const said = [];
+  const srv = startJobServer(0, Object.assign({ log: (m) => said.push(m), pluginVersion: twinDist.version }, sec));
+  await srv.ready;
+  const ui = readFileSync(twinDist.uiPath, "utf8");
+  const W1 = wire(ui, srv.port);
+  await until(() => srv.lastPoll() > 0, 5000, "the first window to ask for work");
+  await sleep(100);
+  const W2 = wire(ui, srv.port);
+  try {
+    await until(() => W2.fetches() >= 2, 5000, "the second window to ask for work");
+    await sleep(150);
+    if (PAYLOAD) {
+      const r = await srv.post({ kind: "build", page: "pxf twin page" }, JSON.stringify(PAYLOAD), new Map([[IMG_HASH, IMG_BYTES]]), 30000);
+      const pageIn = (W) => W.figma.root.children.find((p) => p.name === "pxf twin page");
+      const p1 = pageIn(W1), p2 = pageIn(W2);
+      await until(() => /в другом окне плагина/.test(W2.el("s").textContent), 5000, "the second window to say another window has the run");
+      check(!r.error && p1 && p1.children.some((n) => n.id === r.rootId) && !p2,
+        "with two windows open the build lands in the first window's Figma only", JSON.stringify([!!p1, !!p2, r.error]));
+      const v = await srv.post({ kind: "verify", rootNodeId: r.rootId, page: "pxf twin page" }, JSON.stringify(PAYLOAD), new Map(), 30000);
+      check(!v.error && v.count === 3 && v.expected === 3, "its verify runs in the same Figma and finds the 3 nodes it built", JSON.stringify(v).slice(0, 200));
+    } else {
+      const r = await srv.post({ kind: "render" }, JSON.stringify({ op: "ping" }), new Map(), 15000);
+      await until(() => /в другом окне плагина/.test(W2.el("s").textContent), 5000, "the second window to say another window has the run");
+      check(r.ok === 1, "with two windows open a job is answered once");
+    }
+    check(/закройте его/.test(W2.el("s").textContent) && !/в другом окне плагина/.test(W1.el("s").textContent) && srv.window !== null && srv.othersRefused > 0 &&
+      said.some((l) => /refused 423/.test(l)),
+      "the other window is refused (423) and says it does nothing and should be closed; the runner says so too", W2.el("s").textContent);
+    // Parked, not retrying: the answer cannot change while this runner lives.
+    const f0 = W2.fetches();
+    await sleep(1200);
+    check(W2.fetches() - f0 <= 1, "having been told, the other window stops asking (" + (W2.fetches() - f0) + " requests in 1.2 s)");
+  } catch (e) { fail("two windows: " + e.message); }
+  W1.close();
+  W2.close();
   srv.close();
 }
 

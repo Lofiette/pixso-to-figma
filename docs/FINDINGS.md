@@ -1099,3 +1099,42 @@ most likely diverge from Pixso — is not necessary.
 The earlier hypothesis that overrides repoint nested instances through `symbolData.symbolID` stays
 disproved: 0 of 63 936 overrides do that. The repointing lives in `overriddenSymbolID`, a field of its
 own, which is where it was found.
+
+# M1, the first live builds (2026-10-05): engine rules
+
+Generic rules found by tracing the failing gates of the first two live builds of real files to their
+records and the stored `.pix` fields (docs/M1.md §15.9 has the counts). Each one is something Pixso and
+Figma do differently; the builder now reproduces Pixso's result in every case.
+
+**A flow child that says it fills the counter axis but hugs its content there is placed off its row's
+alignment by Pixso.** Pixso keeps such a child at its own size (it hugs) and centres it in a row that
+hugs its counter axis (51 children, in rows aligned MIN), or puts it at the start of a row of fixed
+counter size (41, in rows aligned CENTER): 92 of the 92 visible such children of the one file that has
+them; the other files have none, so whether a hugging CENTER row or a fixed MIN row does the same is not
+measured. Figma places it by the row's alignment and ignores a child's own MIN / CENTER /
+MAX. The child usually also grows along the flow, so taking it out of the flow alone moves the sibling
+after it by the child's whole width. What reproduces Pixso: the row's own counter alignment, where one
+puts the child right and moves no sibling; otherwise all the row's visible flow children out of the flow
+together, the row frozen at its size.
+
+**Figma keeps a vector's corner radius per vertex.** A `cornerRadius` written on a VECTOR before its
+network does not survive `setVectorNetworkAsync`: the vertices come back sharp, and Figma's fill paths
+are the sharp network's (on every vector where the rounding moves the bounds, 4 of 4). Pixso's node-level
+radius rounds every vertex that has no radius of its own. Written onto those vertices, the radius holds
+(a vertex's own radius is drawn, P19). A boolean's box in Figma is its drawn result, so a boolean over a
+sharp-drawn operand is boxed to the sharp shape.
+
+**Figma's `createSection()` gives the section a stroke list that is not empty (weight 1).** A builder
+that writes only the props it carries leaves it on every section; it must write `strokes` empty where
+the source's section stroke is not carried. Figma draws a section square: Pixso's section corner radius
+has no Figma counterpart.
+
+**Figma's padding floor holds for a frame with children too.** An auto-layout frame narrower than its
+own padding on the flow axis is built at the padding's width. Giving up the flow keeps the size and the
+padding values, and placing the children by matrix keeps them where Pixso put them (Pixso lays them out
+in a negative inner space).
+
+**A node's own paints are a cache of its style.** Where a node references a fill, stroke or effect style
+that is in the file, Pixso draws the style's current value; the node's own copy can be stale (a render
+pair: own fill grey, style blue, drawn blue). The node's own value is the source only when the style is
+not in the file.

@@ -206,7 +206,8 @@ Rules:
 - a source node of a type not listed is not carried, and neither is its subtree; the loss is a
   `NODE_TYPE_UNSUPPORTED` note;
 - **style definitions are not node records** (the nodes Pixso keeps as the bodies of styles, with no transform):
-  styles land in M2b, and the reader counts them as not carried;
+  the reader counts them as not carried; the fill, stroke and effect styles records draw are the IR's `styles` (§7,
+  §10), which the builder writes as raw values until M2b;
 - every record has `props`, with `relativeTransform`, `width` and `height` at least;
 - a prop is one `KNOWN_PROPS` lists for the record's type, of the kind it lists (§2); the `NEVER_OMIT` props the
   type has are always present;
@@ -224,7 +225,10 @@ Version 2's decisions about what a record is (`docs/M1.md` §2):
   becomes a `VECTOR` from its network and a LINE with a height a `VECTOR` from its geometry, each with a
   `SOURCE_FEATURE_UNSUPPORTED` note. Where the network and the stored geometry disagree in a known way the record has
   a `VECTOR_ORACLE_DIFFERS` note whose detail starts with the class (`region-no-fill`, `network-bounds`,
-  `winding`).
+  `winding`). A network record with no region whose segments close a loop and no stored fill path keeps its
+  network; Figma fills such a loop (P19B, 2026-10-05) where Pixso drew none, so under a visible fill paint the
+  record is written with `fills` [] and a `SOURCE_FEATURE_UNSUPPORTED` "unfilled loop" note, and Figma draws no
+  fill either. An open region loop the reader drops (no visible fill) adds no segment to the network.
 - **Groups (D4)** keep the type `GROUP`; the builder makes them frames with no paints and no clipping.
 - **Booleans (D5).** Under `booleans: auto` a boolean whose operands are all filled shapes stays a
   `BOOLEAN_OPERATION` over its operands; one with an operand that only strokes (or has no geometry) is written as one
@@ -236,7 +240,8 @@ Version 2's decisions about what a record is (`docs/M1.md` §2):
 - **Side strokes (D15).** No `border*Weight` field means four sides at `strokeWeight`; any field present means a
   missing side is 0. Where the stroke-area path shows which sides Pixso draws, the reader writes `oracleSides`, and
   where the rule and the path disagree the IR follows the path and notes `SIDE_RULE_UNPROVEN`.
-- **Section strokes (D13)** are dropped: a `SECTION` has fills only.
+- **Section strokes (D13)** are dropped: a `SECTION` has fills only. Its corner radius, which Figma does not draw on a
+  section, is noted `SOURCE_FEATURE_UNSUPPORTED` "SECTION corner radius".
 
 The IR's own `props`:
 
@@ -254,10 +259,19 @@ The IR's own `props`:
 | `fillStyle`, `strokeStyle`, `textStyle`, `effectStyle`, `gridStyle` | index into `styles`, of type PAINT, PAINT, TEXT, EFFECT and GRID |
 | `componentPropertyReferences` | `{ characters \| visible \| mainComponent: property id }`, bound to TEXT, BOOLEAN and INSTANCE_SWAP properties of the enclosing definition's family |
 
-A style is referenced only when it binds: on ordinary nodes the node's own value is what Pixso draws, so the style is
-bound when its value equals the node's within 1/255 per channel. Otherwise the raw value stays, there is no
-reference, and a `STYLE_VALUE_DIFFERS` note says so. A reference that resolves nowhere is a
-`STYLE_MISSING_IN_SOURCE` note.
+A node that references a fill, stroke or effect style draws the **style's** current value: Pixso keeps the node's own
+paints as a cache that goes stale when the style changes (a render pair of P, 2026-10-05: a section whose own fill is
+grey and whose fill style is blue draws blue; `tools/pix/ir/styles.mjs`). So where the reference resolves to a style
+definition of its kind in the file that carries a value, the record takes that value and the style is bound
+(`fillStyle`, `strokeStyle`, `effectStyle`; §10), and where the node's own value differs from it by more than 1/255
+per channel or unit a `STYLE_VALUE_DIFFERS` note says so. A reference that resolves to no style definition of its
+kind (a library style the file does not carry), or to one with no value, keeps the node's own value, unbound, with a
+`STYLE_MISSING_IN_SOURCE` note. A reference resolves by guid, or else through a style definition's `overrideKey`;
+`0:0` and the all-ones guid are no reference. A stroke style is a paint style: its value is its fill paints. An
+`INSTANCE` placeholder resolves none (it draws nothing in M1); layout grids are not carried in M1, so a grid style
+changes nothing; text styles follow §15.7's R2 (`text.mjs`). Measured on the four files (records, read-only): bound
+fill / stroke / effect styles D 3 291 / 744 / 13, K 27 382 / 11 717 / 752, M 11 355 / 1 429 / 47, P 20 869 / 3 216 / 420;
+the style's value drawn over a differing own copy D 0, K 0, M 41, P 182; references kept unbound D 94, K, M and P 0.
 
 ## 8. Component definitions
 
@@ -406,14 +420,14 @@ from the preflight and the kit-map resolution, and *build* codes come from Figma
 | `NO_ID` | run | reading the file gave the object no id, so it cannot be extracted; it is skipped and counted as a loss | named here (§6) |
 | `VARIANT_SET_REJECTED` | read | the member names of a state group do not parse into one set of axes; the members become standalone components | §3 |
 | `STALE_ASSIGNMENT` | read | a property assignment unreachable from the instance's current family; dropped | §3 |
-| `STYLE_MISSING_IN_SOURCE` | read | a style reference that resolves nowhere; raw values kept | §3 |
-| `STYLE_VALUE_DIFFERS` | read | the node's value differs from its style's by more than 1/255 per channel; raw value kept, style not bound | §3 |
+| `STYLE_MISSING_IN_SOURCE` | read | a style reference that resolves to no style definition of its kind in the file, or to one with no value there; the node's own values kept, unbound (§7) | §3 |
+| `STYLE_VALUE_DIFFERS` | read | the node's own value differs from its resolved style's by more than 1/255 per channel or unit; Pixso draws the style's, so the style's value is written and the style bound (§7) | §3 |
 | `VECTOR_FROM_GEOMETRY` | read | fill geometry but no region: built from the stored fill and stroke geometry | §3 |
 | `OVERRIDE_STALE` | read | an override entry whose path is absent from `derivedSymbolData`; dropped | named here (§3) |
 | `OVERRIDE_ECHO` | read | an override field equal to the master's value; dropped | named here (§3, P9b) |
 | `NODE_TYPE_UNSUPPORTED` | read | a source node type the IR has no type for; it and its subtree are not carried | named here (§7, §8) |
 | `TEXT_LINES_UNKNOWN` | read | a buildable text with no stored baselines; it has no `lines` | named here (§3) |
-| `SOURCE_FEATURE_UNSUPPORTED` | read | a Pixso feature Figma lacks, named in the detail, which starts with the feature from an open list (CONNECTLINE, LINE with height, SECTION strokes, RIGHT_ANGLE, vibrance, hue filter, dashCap, deformationTransform, fontVariations, GRID, counter alignment <X>, strokeCap <X>, effect <TYPE>, export format <X>, paint type <X>, image paint without an image, text without a font name, inverse winding, open region loop, operand strokes under `--booleans native`, an operand without fill geometry, boolean without stored geometry, built natively, no stored geometry (a STAR or POLYGON), layoutGrids, fontVariantNumeric, fontVariantPosition, OpenType features), optionally followed by `: ` and text; dropped or converted, and counted per feature in `stats.unsupported`. The judge excuses a vector's paths only for the features that change the drawing (`judge.mjs` SFU_GEOMETRY, docs/M1.md §8.3) | named here (§7) |
+| `SOURCE_FEATURE_UNSUPPORTED` | read | a Pixso feature Figma lacks, named in the detail, which starts with the feature from an open list (CONNECTLINE, LINE with height, SECTION strokes, SECTION corner radius, RIGHT_ANGLE, vibrance, hue filter, dashCap, deformationTransform, fontVariations, GRID, counter alignment <X>, strokeCap <X>, effect <TYPE>, export format <X>, paint type <X>, image paint without an image, text without a font name, inverse winding, open region loop, operand strokes under `--booleans native`, an operand without fill geometry, boolean without stored geometry, built natively, no stored geometry (a STAR or POLYGON), layoutGrids, fontVariantNumeric, fontVariantPosition, OpenType features), optionally followed by `: ` and text; dropped or converted, and counted per feature in `stats.unsupported`. The judge excuses a vector's paths only for the features that change the drawing (`judge.mjs` SFU_GEOMETRY, docs/M1.md §8.3) | named here (§7) |
 | `GEOMETRY_INVALID` | read | a NaN size, transform or path, or a boolean with no operand and no geometry; the box comes from the geometry or the children, or the node is not carried | named here (§7) |
 | `IMAGE_HASH_MISMATCH` | read | an archive image entry whose SHA-1 is not its name; treated as missing | named here (§4) |
 | `VECTOR_ORACLE_DIFFERS` | read | the stored network and the stored fill geometry disagree in a pre-registered class (`region-no-fill`, `network-bounds`, `winding`) | named here (§3) |

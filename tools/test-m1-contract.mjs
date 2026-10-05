@@ -19,7 +19,7 @@ import { validate, validateTask } from "./ir/validate.mjs";
 import { assertOutsideRepo, REPO_ROOT } from "./ir/outside-repo.mjs";
 import { generatePlugin, irBundle, irBundleSource } from "./build-plugin.mjs";
 import { loadPluginBundle, loadPluginIR, defaultHost } from "./ir/plugin-vm.mjs";
-import { makeDouble, networkRegionPath } from "./double/index.mjs";
+import { makeDouble, networkRegionPath, loadVerdicts } from "./double/index.mjs";
 import { SURFACE, LAYOUT_GETTERS } from "./double/surface.mjs";
 import * as judge from "./ir/judge.mjs";
 import * as pathgeom from "./ir/pathgeom.mjs";
@@ -331,14 +331,26 @@ check(/props is tools\/ir\/props\.mjs/.test(threw(() => taskMod.validateTask(bui
     regions: [{ windingRule: "EVENODD", loops: [[0, 1, 2]] }] };
   await v.setVectorNetworkAsync(net);
   const g = v.fillGeometry;
-  check(g.length === 1 && g[0].windingRule === "EVENODD" && g[0].data === "M 0 0 L 10 0 C 10 4 7 8 5 8 L 0 0 Z" && schema.figmaPathError(g[0].data) === null,
+  // Figma reads paths back glued ("M0 0L10 0Z", P19B 2026-10-05); pathBounds reads them as Figma writes them.
+  check(g.length === 1 && g[0].windingRule === "EVENODD" && g[0].data === "M0 0L10 0C10 4 7 8 5 8L0 0Z" && pathgeom.pathBounds(g[0].data).length === 1,
     "a network's region gives its fillGeometry, lines and cubics, as a Figma path string", JSON.stringify(g));
+  // P19 (recorded): an open chain with no region draws no fill. P19B (recorded 2026-10-05): a closed
+  // loop with no region is filled (regionlessFill ok); with P19B planted pending, the double's
+  // assumption (empty) leaves it unfilled.
+  await v.setVectorNetworkAsync({ vertices: net.vertices, segments: net.segments.slice(0, 2), regions: [] });
+  const openNone = v.fillGeometry.length === 0;
   await v.setVectorNetworkAsync({ vertices: net.vertices, segments: net.segments, regions: [] });
-  check(v.fillGeometry.length === 0, "an open region-less network has no fill geometry");
+  const closedOne = v.fillGeometry.length === 1 && v.fillGeometry[0].windingRule === "NONZERO";
+  const Dp = makeDouble({ verdicts: { probes: { P19B: { status: "pending", verdicts: {} } } } });
+  const vp = Dp.figma.createVector();
+  await vp.setVectorNetworkAsync({ vertices: net.vertices, segments: net.segments, regions: [] });
+  check(openNone && closedOne && vp.fillGeometry.length === 0,
+    "an open region-less network has no fill geometry (P19); a closed one has its loop (P19B regionlessFill ok), none with P19B planted pending",
+    JSON.stringify([openNone, v.fillGeometry, vp.fillGeometry]));
   const ra = await rejects(v.setVectorNetworkAsync({ vertices: [{ x: 0, y: 0, handleMirroring: "RIGHT_ANGLE" }, { x: 1, y: 1 }], segments: [{ start: 0, end: 1 }], regions: [] }));
   check(/RIGHT_ANGLE/.test(ra), "setVectorNetworkAsync rejects RIGHT_ANGLE mirroring");
   v.vectorPaths = [{ windingRule: "NONZERO", data: "M 0 0 L 4 0 L 4 4 Z" }, { windingRule: "NONE", data: "M 0 0 L 1 1" }];
-  check(v.fillGeometry.length === 1 && v.fillGeometry[0].data === "M 0 0 L 4 0 L 4 4 Z", "vectorPaths give the fill geometry directly, without the unfilled ones");
+  check(v.fillGeometry.length === 1 && v.fillGeometry[0].data === "M0 0L4 0L4 4Z", "vectorPaths give the fill geometry directly, without the unfilled ones");
   check(networkRegionPath(net, { windingRule: "NONZERO", loops: [[2, 1, 0]] }).indexOf("Z") > 0, "a loop listed in the other direction still gives a closed path");
   // Text and fonts.
   const t = f.createText();
@@ -405,13 +417,30 @@ check(/props is tools\/ir\/props\.mjs/.test(threw(() => taskMod.validateTask(bui
   const seen = [];
   const DU = makeDouble({ ui: (m) => seen.push(m) });
   DU.figma.ui.postMessage({ t: "probe", n: 1 });
-  const png = new Uint8Array(32); png.set([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0x10, 0, 0, 0, 0x10, 1]);
-  const im = DU.figma.createImage(png);
+  // A PNG header alone, w x h: 32 bytes, the size big-endian at bytes 16 and 20.
+  const pngHeader = (w, h) => {
+    const b = new Uint8Array(32), dv = new DataView(b.buffer);
+    b.set([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82]); dv.setUint32(16, w); dv.setUint32(20, h);
+    return b;
+  };
+  // 4 096 x 4 095 is P8 png4096, which Figma accepts (recorded 2026-10-05); the sides differ, so a swap shows.
+  const im = DU.figma.createImage(pngHeader(4096, 4095));
   const size = await im.getSizeAsync(), back = await im.getBytesAsync();
   check(SURFACE.figma.read.indexOf("ui") >= 0 && SURFACE.ui.methods.indexOf("postMessage") >= 0 && SURFACE.image.methods.indexOf("getSizeAsync") >= 0 &&
-    DU.ui.posted.length === 1 && seen.length === 1 && seen[0].n === 1 && size.width === 4096 && size.height === 4097 && back.length === 32 &&
+    DU.ui.posted.length === 1 && seen.length === 1 && seen[0].n === 1 && size.width === 4096 && size.height === 4095 && back.length === 32 &&
     /outside the surface/.test(threw(() => { DU.figma.ui.onmessage = () => {}; })) && /outside the surface/.test(threw(() => im.getSomething)),
     "figma.ui.postMessage and the Image's hash, bytes and PNG size are in the surface and the double (part E's P4 and P8); onmessage stays the host's");
+  // A side over 4 096 px is P8 png4097. Recorded throw (2026-10-05): the double refuses it and names the
+  // case. Planted pending, the double follows its assumption (ok) and reads the size back from the header.
+  const recorded = loadVerdicts(), pendingP8 = JSON.parse(JSON.stringify(recorded));
+  pendingP8.probes.P8.status = "pending";
+  for (const k of Object.keys(pendingP8.probes.P8.verdicts)) pendingP8.probes.P8.verdicts[k] = "pending";
+  const DP = makeDouble({ verdicts: pendingP8 });
+  const sizeP = await DP.figma.createImage(pngHeader(4096, 4097)).getSizeAsync();
+  check(recorded.probes.P8.verdicts.png4097 === "throw" && /P8 png4097/.test(threw(() => makeDouble().figma.createImage(pngHeader(4096, 4097)))) &&
+    DP.assumed.indexOf("P8.png4097") >= 0 && sizeP.width === 4096 && sizeP.height === 4097,
+    "a 4 096 x 4 097 PNG follows P8 png4097: refused as recorded (throw); while the case is pending, taken by assumption with its size read back",
+    JSON.stringify(sizeP));
 }
 
 // ============================================================================================
@@ -437,6 +466,9 @@ check(/props is tools\/ir\/props\.mjs/.test(threw(() => taskMod.validateTask(bui
   const near = (a, b) => Math.abs(a - b) < 1e-9;
   const box = (b, x0, y0, x1, y1) => b && near(b.x0, x0) && near(b.y0, y0) && near(b.x1, x1) && near(b.y1, y1);
   check(pathgeom.PATHGEOM_IMPLEMENTED === true && box(pathgeom.pathBounds("M 0 0 L 10 0 L 10 5 Z")[0], 0, 0, 10, 5), "pathBounds bounds a polygon by its points");
+  check(box(pathgeom.pathBounds("M0 0L10 0L10 5Z")[0], 0, 0, 10, 5) && box(pathgeom.pathBounds("M0 0L-1e1 5Z")[0], -10, 0, 0, 5),
+    "pathBounds reads Figma's glued form (\"M0 0L10 0Z\", P19B 2026-10-05) and exponents");
+  check((() => { try { pathgeom.pathBounds("M0 0X1 1"); return false; } catch (e) { return /cannot read/.test(e.message); } })(), "pathBounds refuses a character outside a path");
   // A quadratic from (0,0) to (10,0) through control (5,10) peaks at t = 1/2, y = 5 (the hull reaches 10).
   check(box(pathgeom.pathBounds("M 0 0 Q 5 10 10 0 Z")[0], 0, 0, 10, 5), "a quadratic's extremum, not its control point", JSON.stringify(pathgeom.pathBounds("M 0 0 Q 5 10 10 0 Z")));
   // The cubic (0,0) (0,10) (10,10) (10,0) peaks at t = 1/2, y = 7.5; the hull reaches 10.
@@ -464,8 +496,8 @@ check(/props is tools\/ir\/props\.mjs/.test(threw(() => taskMod.validateTask(bui
 check(checkPostOpts(undefined) === null && checkPostOpts({ liveness: { warnMs: 60000, failMs: 300000 }, ceilingMs: 140000, onProgress: () => {} }) === null &&
   /below failMs/.test(checkPostOpts({ liveness: { warnMs: 5, failMs: 5 } })) && /unknown option/.test(checkPostOpts({ heartbeat: 1 })) &&
   /function/.test(checkPostOpts({ onProgress: 1 })), "post()'s liveness options are checked for shape: { liveness: { warnMs, failMs }, ceilingMs, onProgress }");
-check(schema.SETTING_DEFAULTS.booleans === "auto" && schema.SETTING_DEFAULTS.spaceEvenlySingle === "between" && schema.SETTING_DEFAULTS.textFit === "widen" &&
-  taskMod.TASK_SETTING_DEFAULTS.layoutOrder === "creation" && taskMod.TASK_SETTING_DEFAULTS.textRead === "measure" && taskMod.TASK_SETTING_DEFAULTS.fallbackFont.family === "Inter",
+check(schema.SETTING_DEFAULTS.booleans === "auto" && schema.SETTING_DEFAULTS.spaceEvenlySingle === "center" && schema.SETTING_DEFAULTS.textFit === "widen" &&
+  taskMod.TASK_SETTING_DEFAULTS.layoutOrder === "deepestFirst" && taskMod.TASK_SETTING_DEFAULTS.textRead === "measure" && taskMod.TASK_SETTING_DEFAULTS.fallbackFont.family === "Inter",
   "every M1 setting has its stated default (docs/M1.md §3)");
 check(validate({ header: { format: "pix2fig.ir", version: schema.VERSION } }).ok === false, "validate() is the IR check every caller uses");
 

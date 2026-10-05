@@ -56,7 +56,7 @@ export const SETTING_FLAGS = { mode: "--mode", overrides: "--overrides", drift: 
   kitmaps: "--kitmaps" };
 // The owner's default for each (docs/M1.md §3, REWRITE.md §11). mode has none: it is chosen per run.
 export const SETTING_DEFAULTS = { overrides: "fidelity", drift: "link", deleted: "publish",
-  resync: "pixso-unless-edited", textFit: "widen", booleans: "auto", spaceEvenlySingle: "between", kitmaps: "default" };
+  resync: "pixso-unless-edited", textFit: "widen", booleans: "auto", spaceEvenlySingle: "center", kitmaps: "default" };   // spaceEvenlySingle: P18, 2026-10-05
 
 // Figma's node types, which the IR speaks. Pixso never produces SLOT, but the Figma Сова kit uses
 // it inside its components, and the matcher and verifier read Figma trees with this same list.
@@ -136,15 +136,15 @@ export const REASON_CODES = {
 
   VARIANT_SET_REJECTED: { stage: "read", plan: "§3", meaning: "a state group whose member names do not parse into one set of axes; its members become standalone components" },
   STALE_ASSIGNMENT: { stage: "read", plan: "§3", meaning: "a property assignment whose definition cannot be reached from the instance's current family; dropped, never matched by name" },
-  STYLE_MISSING_IN_SOURCE: { stage: "read", plan: "§3", meaning: "a style reference that resolves nowhere; the node keeps its raw values" },
-  STYLE_VALUE_DIFFERS: { stage: "read", plan: "§3", meaning: "the node's own value differs from its style's by more than 1/255 per channel; the raw value stays, the style is not bound" },
+  STYLE_MISSING_IN_SOURCE: { stage: "read", plan: "§3", meaning: "a style reference that resolves to no style definition of its kind in the file, or to one with no value there; the node keeps its own values, unbound" },
+  STYLE_VALUE_DIFFERS: { stage: "read", plan: "§3", meaning: "the node's own value differs from its resolved style's by more than 1/255 per channel or unit; Pixso draws the style's, so the style's value is written and the style bound (the node's own is a stale copy)" },
   VECTOR_FROM_GEOMETRY: { stage: "read", plan: "§3", meaning: "a vector with fill geometry but no region, built from its stored fill and stroke geometry" },
   OVERRIDE_STALE: { stage: "read", plan: null, from: "§3: entries whose path is absent from derivedSymbolData are provably stale: dropped and counted", meaning: "an override entry whose path is absent from derivedSymbolData; dropped" },
   OVERRIDE_ECHO: { stage: "read", plan: null, from: "§3: many override fields only echo the master's value and must be dropped before applying", meaning: "an override field equal to the master's value; dropped" },
   NODE_TYPE_UNSUPPORTED: { stage: "read", plan: null, from: "§7: coverage, with every loss given a reason code; §8: the fixture covers an unsupported node type", meaning: "a source node of a type the IR has no type for; it and its subtree are not carried" },
   // M1 (docs/M1.md §5.1).
   TEXT_LINES_UNKNOWN: { stage: "read", plan: null, from: "§3: Pixso's own line breaks are stored, which gives a direct check for the one-pixel heading wrap (decision 9)", meaning: "a buildable text with no stored baselines; it carries no lines, so its line count is not checked" },
-  SOURCE_FEATURE_UNSUPPORTED: { stage: "read", plan: null, from: "§7: Source vs IR. Coverage, with every loss given a reason code", meaning: "a Pixso feature Figma lacks; the detail starts with the feature, from an open list (CONNECTLINE, LINE with height, SECTION strokes, RIGHT_ANGLE, vibrance, hue filter, dashCap, deformationTransform, fontVariations, GRID, counter alignment <X>, strokeCap <X>, effect <TYPE>, an exportSettings format, paint type <X>, image paint without an image, text without a font name, inverse winding, open region loop, operand strokes, an operand without fill geometry, boolean without stored geometry, built natively); dropped or converted, and counted" },
+  SOURCE_FEATURE_UNSUPPORTED: { stage: "read", plan: null, from: "§7: Source vs IR. Coverage, with every loss given a reason code", meaning: "a Pixso feature Figma lacks; the detail starts with the feature, from an open list (CONNECTLINE, LINE with height, SECTION strokes, SECTION corner radius, RIGHT_ANGLE, vibrance, hue filter, dashCap, deformationTransform, fontVariations, GRID, counter alignment <X>, strokeCap <X>, effect <TYPE>, an exportSettings format, paint type <X>, image paint without an image, text without a font name, inverse winding, open region loop, operand strokes, an operand without fill geometry, boolean without stored geometry, built natively); dropped or converted, and counted" },
   GEOMETRY_INVALID: { stage: "read", plan: null, from: "§7: Source vs IR. Coverage, with every loss given a reason code", meaning: "a NaN size, transform or path, or a boolean with no operand and no geometry; the box comes from the geometry or the children, or the node is not carried" },
   IMAGE_HASH_MISMATCH: { stage: "read", plan: null, from: "§4: Pixso MCP bytes by hash (the SHA-1 is checked)", meaning: "an archive image entry whose SHA-1 is not its name; it is treated as missing (a file-level note: no node, the name in the detail)" },
   VECTOR_ORACLE_DIFFERS: { stage: "read", plan: null, from: "§3: Regions and fillGeometry disagree on 35 and 220 vectors", meaning: "the stored network and the stored fill geometry disagree in a pre-registered class (region-no-fill, network-bounds, winding); the judge excuses only that class" },

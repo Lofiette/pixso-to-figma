@@ -200,7 +200,7 @@ export function numberLines(J) {
       "; classified: " + m(J.geometry.classified) + "; worst listed " + J.geometry.worst.length,
     "sides: checked " + J.sides.checked + ", against the oracle " + J.sides.checkedAgainstOracle + ", mismatch IR " + J.sides.mismatchIR.length + ", mismatch oracle " + J.sides.mismatchOracle.length +
       ", unproven " + J.sides.unproven + ", lost border population " + J.sides.lostBorder.population + ", ok " + J.sides.lostBorder.ok,
-    "vectors: checked " + J.vectors.checked + ", match " + J.vectors.match + ", regrouped " + J.vectors.regrouped + ", excused: " + m(J.vectors.excused) +
+    "vectors: checked " + J.vectors.checked + ", match " + J.vectors.match + ", regrouped " + J.vectors.regrouped + ", unfilled " + J.vectors.unfilled + ", excused: " + m(J.vectors.excused) +
       "; built from the oracle and differing: " + m(J.vectors.excusedBuiltFromOracle) + "; differs " + J.vectors.differs.length,
     "text: checked " + J.text.checked + ", differ " + J.text.differ.length + " (widened " + J.text.differ.filter((d) => d.widened).length + ", font-held " + J.text.differ.filter((d) => d.fontHeld).length +
       ", approximate " + J.text.differ.filter((d) => d.approx).length + "), unmeasured " + J.text.unmeasured + ", unknown " + J.text.unknown,

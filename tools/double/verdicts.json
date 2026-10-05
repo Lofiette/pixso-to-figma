@@ -1,5 +1,5 @@
 {
-  "comment": "Probe verdicts the headless double reproduces (docs/M1.md §5.4, §6 E, D9). Results already recorded come from docs/REWRITE.md §9 (2026-10-04); P4, P8 and P19B are pending until the live session (docs/M1.md §10 step 1), after which part F records them here from tools/plugin-probe.mjs. A case is ok, throw, drop, empty or pending; the P19B geometry cases may also read differs (Figma did something else; the probe result says what), and P4 has its own values: transport base64 or binary, sameHash ok or differs. tools/double/behaviour.mjs says what each value means to the double and which value it assumes while a case is pending; a recorded value it does not model refuses to build the double, so the double changes first. The image chain treats throw and drop as move to the next link. Counts and behaviours only: no file names, no keys.",
+  "comment": "Probe verdicts the headless double reproduces (docs/M1.md §5.4, §6 E, D9). P2, P13 and P19 come from docs/REWRITE.md §9 (2026-10-04); P4, P8 and P19B were recorded from tools/plugin-probe.mjs in the live session (docs/M1.md §10 step 1, 2026-10-05), so no probe the double models is pending; P5, P6 and P18 are absent (read as pending) until §10 step 2. A case is ok, throw, drop, empty or pending; the P19B geometry cases may also read differs (Figma did something else; the probe result says what, and P19B's measured holds what the double takes from it, in the probe container's coordinates), and P4 has its own values: transport base64 or binary, sameHash ok or differs. tools/double/behaviour.mjs says what each value means to the double and which value it assumes while a case is pending; a recorded value it does not model refuses to build the double, so the double changes first. The image chain treats throw and drop as move to the next link. Counts and behaviours only: no file names, no keys.",
   "version": 1,
   "probes": {
     "P2": {
@@ -21,20 +21,25 @@
       "status": "run 2026-10-04",
       "verdicts": { "perVertexCornerRadius": "ok", "perRegionFills": "ok", "openRegionlessNetworkFilled": "empty" }
     },
-    "P4": { "status": "pending", "verdicts": { "transport": "pending", "sameHash": "pending" } },
+    "P4": { "status": "run 2026-10-05", "verdicts": { "transport": "binary", "sameHash": "ok" },
+      "timings": { "base64MedianMs": 25, "binaryMedianMs": 13 } },
     "P8": {
-      "status": "pending",
-      "verdicts": { "png4096": "pending", "png4097": "pending", "longStrip": "pending", "jpegAsPng": "pending",
-        "webpAsPng": "pending", "unknownHash": "pending" }
+      "status": "run 2026-10-05",
+      "verdicts": { "png4096": "ok", "png4097": "throw", "longStrip": "throw", "jpegAsPng": "ok",
+        "webpAsPng": "throw", "unknownHash": "ok" }
     },
+    "P5": { "status": "run 2026-10-05" },
+    "P18": { "status": "run 2026-10-05" },
+    "P6": { "status": "run 2026-10-05" },
     "P19B": {
-      "status": "pending",
-      "verdicts": { "autoClosedLoop": "pending", "offsetNetwork": "pending", "regionlessFill": "pending",
-        "fillGeometryAgainstNetwork": "pending", "booleanUnion": "pending", "booleanSubtract": "pending",
-        "booleanIntersect": "pending", "booleanExclude": "pending", "nestedBoolean": "pending",
-        "singleOperandUnion": "pending", "lineOperand": "pending", "strokedOperand": "pending",
-        "frameMask": "pending", "maskInGroupAsFrame": "pending", "flattenedWithStroke": "pending",
-        "arcFullSweep": "pending" }
+      "status": "run 2026-10-05",
+      "verdicts": { "autoClosedLoop": "ok", "offsetNetwork": "ok", "regionlessFill": "ok",
+        "fillGeometryAgainstNetwork": "ok", "booleanUnion": "ok", "booleanSubtract": "ok",
+        "booleanIntersect": "ok", "booleanExclude": "ok", "nestedBoolean": "ok",
+        "singleOperandUnion": "ok", "lineOperand": "differs", "strokedOperand": "differs",
+        "frameMask": "ok", "maskInGroupAsFrame": "ok", "flattenedWithStroke": "ok",
+        "arcFullSweep": "ok" },
+      "measured": { "booleanResultWinding": "NONZERO", "lineOperandBox": [0, 0, 30, 25], "strokedOperandBox": [0, -2, 42, 20] }
     }
   }
 }

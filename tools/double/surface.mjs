@@ -107,7 +107,9 @@ const NODES = {
   write: ["name", "backgrounds"], methods: STAMPS.concat(["appendChild", "insertChild", "findAll", "findAllWithCriteria", "loadAsync", "remove"]) },
   FRAME: sceneType("FRAME", PAINT_READ_ONLY, PAINT.concat(SIDES, CORNERS, FRAME_LIKE), [], true),
   COMPONENT: sceneType("COMPONENT", PAINT_READ_ONLY.concat(["key"]), PAINT.concat(SIDES, CORNERS, FRAME_LIKE), [], true),
-  SECTION: sceneType("SECTION", [], ["fills"], [], true),
+  // A section has a stroke list and a weight (the first live builds, 2026-10-05: VERIFY read them on
+  // every built section, C); whether Figma takes other stroke props on a section is not measured.
+  SECTION: sceneType("SECTION", [], ["fills", "strokes", "strokeWeight"], [], true),
   RECTANGLE: sceneType("RECTANGLE", PAINT_READ_ONLY, PAINT.concat(SIDES, CORNERS), [], false),
   ELLIPSE: sceneType("ELLIPSE", PAINT_READ_ONLY, PAINT.concat(["arcData"]), [], false),
   POLYGON: sceneType("POLYGON", PAINT_READ_ONLY, PAINT.concat(["pointCount", "cornerRadius", "cornerSmoothing"]), [], false),

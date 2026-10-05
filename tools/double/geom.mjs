@@ -10,8 +10,9 @@
 //   networkBox(net)                    -> the exact bounds of a network's segments and vertices
 //   polygonPath(n, w, h), starPath(n, inner, w, h), ellipsePath(w, h), rectPath(w, h)
 //   booleanResult(op, operands)        -> { paths: [{ windingRule, data }], box } | null
-//       operands: [{ paths: [{ windingRule, data }] }] already in the result's space. Operand strokes
-//       are ignored, as Figma's boolean operations work on fill areas.
+//       operands: [{ paths: [{ windingRule, data }] }] already in the result's space. It works on the
+//       fill areas it is given; index.mjs adds what P19B measured of strokes (a stroked operand's box,
+//       a LINE's own path) before and after it, per the lineOperand and strokedOperand verdicts.
 //
 // Booleans are APPROXIMATE, by construction: the operands are rasterised on a grid (512 cells along
 // the longer side of their union box, at least 0.05 px a cell), combined per cell (UNION any,
@@ -20,10 +21,10 @@
 // opposite ways, so NONZERO fills them). Every traced coordinate within one cell of an operand's
 // own coordinate (a vertex, or an edge of its exact box) is snapped to it, so a result made of
 // straight edges that lie on the operands' edges comes out exact; curved edges stay within a cell.
-// The result is labelled NONZERO, except an EXCLUDE result, labelled EVENODD as Pixso stores its XOR
-// results (the traced loops draw the same under either rule). Which rule Figma gives a boolean's
-// fillGeometry is an assumption (A) until P19B's boolean cases record it (their m.winding; part F,
-// docs/M1.md §15).
+// The result is labelled NONZERO for every operation, EXCLUDE included, as Figma labels it: P19B in
+// Figma (2026-10-05) read NONZERO on each boolean case's result path (m.winding), where Pixso stores
+// XOR as EVENODD (the traced loops draw the same under either rule; the judge compares a native
+// boolean by count and bounds, tools/ir/judge.mjs).
 import { pathBounds, unionBounds } from "../ir/pathgeom.mjs";
 
 const r4 = (n) => { const v = Math.round(n * 10000) / 10000; return String(Object.is(v, -0) ? 0 : v); };
@@ -33,7 +34,8 @@ const ap = (m, x, y) => [m[0][0] * x + m[0][1] * y + m[0][2], m[1][0] * x + m[1]
 const ARGS = { M: 2, L: 2, Q: 4, C: 6, Z: 0 };
 
 export function parsePath(data) {
-  const tok = String(data || "").trim().split(/[\s,]+/).filter(Boolean);
+  // Spaced (Pixso, the IR) or glued (Figma's read-back, "M0 0L10 0Z") alike.
+  const tok = String(data || "").match(/[MLQCZ]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g) || [];
   const out = [];
   let cur = null, at = null, i = 0;
   const num = () => { const v = Number(tok[i++]); if (!isFinite(v)) throw new Error("double: a path number is not finite"); return v; };
@@ -303,5 +305,5 @@ export function booleanResult(op, operands) {
   });
   const data = formatPath(subs);
   const box = op === "UNION" ? total : pathBox(data);
-  return { paths: [{ windingRule: op === "EXCLUDE" ? "EVENODD" : "NONZERO", data }], box };
+  return { paths: [{ windingRule: "NONZERO", data }], box };
 }

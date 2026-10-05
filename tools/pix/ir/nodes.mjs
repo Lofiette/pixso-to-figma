@@ -13,12 +13,13 @@ import { decodeVectorNetwork } from "../network.mjs";
 import * as E from "./enums.mjs";
 import { r2, r4, r6, isFin, matrixOf, matrixFinite, mapBox, unionBox, guidStr } from "./util.mjs";
 import { effectsOf, exportSettingsOf, paintsOf } from "./paints.mjs";
-import { strokeProps, cornerProps, sideCensus, visiblePaint, weightOf, SIDE_FIELDS } from "./strokes.mjs";
+import { strokeProps, cornerProps, sideCensus, visiblePaint, weightOf, SIDE_FIELDS, CORNER_FIELDS } from "./strokes.mjs";
 import { frameLayoutProps, childLayoutProps, isAutoLayout } from "./layout.mjs";
 import { textProps, checkTextData } from "./text.mjs";
 import { vectorProps, geometryOf, geometryBox, networkToIR, networkBox } from "./vector.mjs";
 import { booleanClass, classBReason, flattens } from "./booleans.mjs";
 import { componentEntry, masterRef } from "./components.mjs";
+import { drawnStyles } from "./styles.mjs";
 
 const NEVER = new Set(NEVER_OMIT);
 const RECT_LIKE = new Set(["FRAME", "COMPONENT", "RECTANGLE"]);
@@ -181,14 +182,17 @@ export function emit(cx, planned, out) {
     meta.push({ stateGroup: !!n.isStateGroup && p.type === "FRAME", lostBorder: false });
     cx.at = i;
     cx.featured = new Set();
-    propsOf(cx, p, rec, parentNode, internal);
+    // The paints and effects the node draws: a resolved style's over its own copy (styles.mjs). A
+    // placeholder draws nothing in M1, so an INSTANCE resolves none.
+    const drawn = p.type === "INSTANCE" ? { n } : drawnStyles(cx, n);
+    propsOf(cx, p, rec, parentNode, internal, drawn);
     if (p.type === "COMPONENT") components.push(componentEntry(cx, i, n, internal));
     if (p.type === "INSTANCE") rec.instance = { master: p.master };
     if (p.pix === "BOOLEAN_OPERATION") { if (p.flatten) B.flattened++; else if (p.type === "BOOLEAN_OPERATION") B.native++; }
     if (p.flatten) B.foldedNodes += p.folded;
-    meta[i].lostBorder = isLostBorder(cx, n, p.pix);
-    if (p.pix === "SECTION" && isLostBorderShape(cx, n)) cx.stats.lostBorderSections++;
-    sideCensus(cx, n, p.pix);
+    meta[i].lostBorder = isLostBorder(cx, drawn.n, p.pix);
+    if (p.pix === "SECTION" && isLostBorderShape(cx, drawn.n)) cx.stats.lostBorderSections++;
+    sideCensus(cx, drawn.n, p.pix);
     for (const k of p.kids) one(k, i, pageIndex, n, internal);
     cx.at = undefined;
   };
@@ -200,8 +204,8 @@ function isLostBorder(cx, n, pixType) {
   return (pixType === "FRAME" || pixType === "SYMBOL" || pixType === "RECTANGLE") && isLostBorderShape(cx, n);
 }
 
-function propsOf(cx, p, rec, parentNode, internal) {
-  const n = p.n, type = p.type, props = rec.props;
+function propsOf(cx, p, rec, parentNode, internal, drawn) {
+  const n = (drawn && drawn.n) || p.n, type = p.type, props = rec.props;
   const known = KNOWN_PROPS[type];
   const put = (k, v) => {
     if (v === undefined || !Object.prototype.hasOwnProperty.call(known, k)) return;
@@ -218,10 +222,14 @@ function propsOf(cx, p, rec, parentNode, internal) {
   if (n.locked) put("locked", true);
   childLayoutProps(cx, n, put, parentNode, type !== "INSTANCE" && isAutoLayout(cx, n));
   if (type === "INSTANCE") return;   // a placeholder: its box and child layout only (docs/M1.md D6)
+  // The styles it draws, bound (a type that takes none leaves them out).
+  for (const k of ["fillStyle", "strokeStyle", "effectStyle"]) if (drawn && drawn[k] !== undefined) put(k, drawn[k]);
 
   if (type === "SECTION") {
     put("fills", paintsOf(cx, n.fillPaints));
     if (visiblePaint(n.strokePaints)) cx.feature("SECTION strokes");
+    // Figma draws a section square (the first live build of P, 2026-10-05: a render pair).
+    if ([n.cornerRadius].concat(CORNER_FIELDS.map((k) => n[k])).some((v) => isFin(v) && v > 0)) cx.feature("SECTION corner radius");
     return;
   }
   if (type === "SLICE") { put("exportSettings", exportSettingsOf(cx, n.exportSettings)); return; }

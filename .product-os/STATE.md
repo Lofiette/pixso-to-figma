@@ -17,6 +17,11 @@
   disk, pages per snapshot, the reader's stroke align, text style, line height and region fills read as Pixso draws
   them. The reader choices are inferred from stored data; §10 lists the renders that settle them.
 
+- **2026-10-05: M1 accepted live on D and P** (`docs/M1.md` §15.8-§15.11): every gate passes on the test design
+  file and on the owner's product file (29 896 records), all gating probes are recorded and the creation order is frozen.
+  K is 82 of 99 tasks built with every quality gate at 0; its run resumes when Figma's connection is stable. Next: finish
+  K, then M2a (components IR, offline).
+
 - **Task:** Pixso -> Figma migration, 1:1, whole files, no model in the loop.
 - **Status:** five files migrated. Day three went into the *instrument* rather than the algorithm:
   the verdict now distinguishes what a person could see from what only a measurement can, and the
