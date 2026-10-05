@@ -116,6 +116,26 @@ export function resumeStates(old, fresh, tasks) {
   return { states: fresh, resumed };
 }
 
+// A verify task kept as built on resume whose judgement never reached the disk (the run died after
+// its state was saved): it, its build, and the whole split chain that build belongs to go back to
+// pending, so they are judged again instead of failing G3 forever. judged(taskNo) says whether
+// judge/<taskNo>.json exists. Returns the number of tasks reset.
+export function dropUnjudged(states, tasks, judged) {
+  const done = (t) => t.state === "built" || t.state === "built-with-fallbacks";
+  const idx = new Map(states.tasks.map((t, k) => [t.taskNo, k]));
+  const verifyOf = new Map();
+  states.tasks.forEach((t) => { if (t.op === "verify") verifyOf.set(buildNoOf(t), t.taskNo); });
+  const chains = splitChains(tasks || []);
+  const reset = new Set();
+  for (const t of states.tasks) {
+    if (t.op !== "verify" || !done(t) || judged(t.taskNo)) continue;
+    const b = buildNoOf(t);
+    for (const no of chains.find((g) => g.indexOf(b) >= 0) || [b]) { reset.add(no); if (verifyOf.has(no)) reset.add(verifyOf.get(no)); }
+  }
+  for (const no of reset) if (idx.has(no)) Object.assign(states.tasks[idx.get(no)], { state: "pending", codes: {}, ms: {}, error: null, failures: 0 });
+  return reset.size;
+}
+
 // The build tasks that hold one split root, as lists of taskNo: a task whose root attaches to a record
 // ({ i }) is in the chain of the task that holds that record. Chains of one task are left out.
 export function splitChains(tasks) {
@@ -171,6 +191,8 @@ const isStall = (e) => !!e && (e.code === CODE.PLUGIN_STALLED || e.stalled === t
 //   clean(buildTask) -> task | null     the clean task to send before a build (null: none)
 //   imagesFor(task) -> Map hash -> Buffer
 //   judge({ task, build, verify }) -> J | null   (null while part C's judge is not in this build)
+//   onJudge(task, J)   called with each J before its verify is saved as built (pix-run writes
+//                      judge/<taskNo>.json there, so a run that dies keeps every J it saved a state for)
 //   save(states), onReport(task, report), log(line)
 //   missingFonts "ask" | "substitute", yes: continue past the font preflight
 //   only: a build taskNo (with its verify; the fonts task always runs) or null
@@ -200,7 +222,19 @@ export async function runTasks(o) {
         const c = o.clean(task);
         if (c) {
           const rc = await o.post(c, { ceilingMs: rec.ceilingMs, images: new Map() });
-          if (rc && (rc.error || rc.refused)) log("  task " + task.taskNo + ": clean refused: " + (rc.error || "refused"));
+          // A clean that was refused, sent nothing back or could not remove an earlier run's roots
+          // would leave them in the file beside the new build, which VERIFY (preferring this run's)
+          // cannot see: the build does not run, and the task is a resumable BUILD_FAILED (G1).
+          const left = rc && Array.isArray(rc.failures) ? rc.failures.length : 0;
+          if (!rc || rc.error || rc.refused || left) {
+            const codes = {};
+            count(codes, CODE.BUILD_FAILED);
+            const why = "clean: " + (!rc ? "no report" : rc.error ? String(rc.error) : rc.refused ? "refused" : left + " old roots not removed");
+            transition(states, task.taskNo, "failed", { codes, error: why });
+            log("  task " + task.taskNo + " (build): " + CODE.BUILD_FAILED + ": " + why);
+            save(states);
+            continue;
+          }
         }
       }
       if (task.op === "verify") {
@@ -266,7 +300,7 @@ export async function runTasks(o) {
       if (lost) count(codes, CODE.ROOT_NOT_FOUND, lost);
       const build = builds.has(buildNoOf(rec)) ? builds.get(buildNoOf(rec)) : null;
       const J = o.judge ? o.judge({ task, build, verify: report }) : null;
-      if (J) Js.push(Object.assign({ taskNo: task.taskNo }, { J }));
+      if (J) { Js.push(Object.assign({ taskNo: task.taskNo }, { J })); if (o.onJudge) o.onJudge(task, J); }
       transition(states, task.taskNo, "built", { codes, ms: report.ms || {} });
       save(states);
       continue;

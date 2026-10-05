@@ -33,7 +33,7 @@ import { M1_SCOPES, PLAN_DEFAULTS, cleanTaskFor, parseScope, planM1 } from "./ir
 import { LINKS, parseLinks, resolveImages, tableFromIR } from "./ir/images.mjs";
 import { checkIdentity } from "./ir/identity.mjs";
 import { makeMcpClient } from "./ir/mcp-readonly.mjs";
-import { defaultDataDir, loadStates, newStates, probeStatus, resumeStates, runTasks, saveStates } from "./ir/runstate.mjs";
+import { defaultDataDir, dropUnjudged, loadStates, newStates, probeStatus, resumeStates, runTasks, saveStates } from "./ir/runstate.mjs";
 import * as judge from "./ir/judge.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -217,6 +217,10 @@ export async function main(argv) {
   const statesFile = join(runDir, "states.json");
   const { states, resumed } = resumeStates(loadStates(statesFile), fresh, plan.tasks);
   if (resumed) say("resuming: " + resumed + " tasks already built in this run folder");
+  // A verify kept as built whose judgement is not on disk (a run that died before writing it) is
+  // judged again, with its build and its split chain.
+  const redo = dropUnjudged(states, plan.tasks, (no) => existsSync(join(runDir, "judge", no + ".json")));
+  if (redo) say("resuming: " + redo + " tasks run again, their judgement was not on disk");
   // A judgement on disk belongs to a verify task that is kept; any other is stale and goes.
   for (const t of states.tasks) if (t.op === "verify" && t.state === "pending") rmSync(join(runDir, "judge", t.taskNo + ".json"), { force: true });
   saveStates(statesFile, states);
@@ -229,11 +233,10 @@ export async function main(argv) {
     { liveness, ceilingMs: p.ceilingMs, onProgress: () => {} });
   const imagesFor = (task) => { const m = new Map(); for (const im of task.images) if (im.source !== "none" && bytes.has(im.hash)) m.set(im.hash, bytes.get(im.hash)); return m; };
   const r = await runTasks({ states, tasks: plan.tasks, post, imagesFor, clean: (t) => cleanTaskFor(t, ir),
-    judge: judgeWith(ir, stats),
+    judge: judgeWith(ir, stats), onJudge: (t, J) => jsonOut(join(runDir, "judge", t.taskNo + ".json"), J),
     save: (s) => saveStates(statesFile, s), onReport: (t, rep) => jsonOut(join(runDir, "reports", t.taskNo + "-" + t.op + ".json"), rep),
     log: say, missingFonts: o.missingFonts, yes: o.yes, only: o.only });
   srv.close();
-  for (const j of r.Js) jsonOut(join(runDir, "judge", j.taskNo + ".json"), j.J);
   if (!judge.JUDGE_IMPLEMENTED) say("note: part C's judge is not in this build; gates G3 and G6-G11 have nothing to read");
   if (r.stopped === "fonts") say("missing fonts:\n" + states.fonts.missing.map((f) => "  " + f.family + " " + f.style).join("\n"));
   const { accept } = await import("./m1-accept.mjs");

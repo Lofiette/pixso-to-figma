@@ -21,7 +21,7 @@ import { cleanTaskFor, derivePopulations, planM1, PLAN_DEFAULTS, CEILING_BASE_MS
 import { imageInfo, p8Cases, refusedBy, resolveImages, tableFromIR, carriers, parseLinks } from "./ir/images.mjs";
 import { SCRIPTS, assertReadOnlyScript, makeMcpClient, readOnlyProblems } from "./ir/mcp-readonly.mjs";
 import { checkIdentity, compareIdentity, sampleGuids } from "./ir/identity.mjs";
-import { count, newStates, probeStatus, resumeStates, runTasks, saveStates, splitChains, transition, defaultDataDir } from "./ir/runstate.mjs";
+import { count, dropUnjudged, newStates, probeStatus, resumeStates, runTasks, saveStates, splitChains, transition, defaultDataDir } from "./ir/runstate.mjs";
 import { GATES, m1Gates, m1Verdict, sumJs, BUILT_NOT_AUDITED } from "./ir/verdict.mjs";
 import { emptyJ, checkJShape, TOTALS_SHAPE } from "./ir/judge.mjs";
 import { REPO_ROOT } from "./ir/outside-repo.mjs";
@@ -489,6 +489,35 @@ async function runGroup() {
   st = fresh(); P = playedPlugin();
   await runTasks({ states: st, tasks: plan.tasks, post: P.post, only: 4 });
   check(P.posted.join() === "fonts:1,build:4,verify:5" && st.tasks[1].state === "pending", "--only <taskNo> runs the fonts task, that build and its verify");
+  {
+    // Review S6/F9: each J is handed over (onJudge, which pix-run writes to disk) before its verify is
+    // saved as built, so a run that dies at a later task keeps every J it saved a state for.
+    st = fresh(); P = playedPlugin();
+    const handed = [];
+    let judged = 0;
+    const died = await runTasks({ states: st, tasks: plan.tasks, post: P.post, judge: () => { if (++judged === 2) throw new TypeError("synthetic: the judge threw"); return emptyJ(); },
+      onJudge: (t) => handed.push(t.taskNo + ":" + st.tasks.find((x) => x.taskNo === t.taskNo).state) }).then(() => "", (e) => e.message);
+    check(/synthetic/.test(died) && handed.join() === "3:pending" && st.tasks[2].state === "built" && st.tasks[4].state === "pending",
+      "a J reaches onJudge before its verify is saved as built; the run that dies at the next judge keeps it", handed.join() + " " + died);
+    // And a verify kept as built whose J never reached the disk runs again, with its build.
+    const kept = fresh(); for (const t of kept.tasks) t.state = "built";
+    const n = dropUnjudged(kept, plan.tasks, (no) => no === 5);
+    check(n === 2 && kept.tasks.map((t) => t.state).join() === "built,pending,pending,built,built",
+      "on resume a built verify with no judge file goes back to pending with its build; judged pairs stay", kept.tasks.map((t) => t.state).join());
+  }
+  {
+    // Review F8: a clean refused, or one that could not remove the earlier run's roots, fails the
+    // build behind it (BUILD_FAILED, resumable) instead of leaving duplicate roots unseen.
+    for (const [label, answer] of [["refused", { error: "ir: the task is refused", refused: true }], ["failed to remove 2 old roots", { op: "clean", removed: 0, kept: 0, failures: [{ i: null, prop: "remove", msg: "x" }, { i: null, prop: "remove", msg: "y" }] }]]) {
+      st = fresh(); P = playedPlugin();
+      const lines = [];
+      const post = (task, p) => (task.op === "clean" && task.taskNo === 2 ? Promise.resolve(answer) : P.post(task, p));
+      await runTasks({ states: st, tasks: plan.tasks, post, clean: (t) => cleanTaskFor(t, S.ir), log: (l) => lines.push(l) });
+      check(st.tasks[1].state === "failed" && st.tasks[1].codes[CODE.BUILD_FAILED] === 1 && /^clean: /.test(st.tasks[1].error) && st.tasks[2].state === "skipped" &&
+        st.tasks[3].state === "built" && P.posted.indexOf("build:2") < 0 && lines.some((l) => /BUILD_FAILED: clean/.test(l)),
+        "a clean " + label + ": its build fails (BUILD_FAILED, G1) without running, its verify is skipped, and the run goes on", JSON.stringify(st.tasks[1]));
+    }
+  }
   const statesFile = join(REPO_ROOT, "tmp-states.json");
   check(/inside the repository/.test(threw(() => saveStates(statesFile, st))) && !existsSync(statesFile), "states.json is never written inside the repository");
   saveStates(join(TMP, "s", "states.json"), st);
