@@ -87,7 +87,8 @@ export function m1Gates(totals, states, opts) {
     const missing = verifies.length - J.tasks;
     gate("G3", !J.count.ok || J.count.expected !== J.count.built || missing !== 0,
       "expected " + J.count.expected + ", built " + J.count.built + " (non-instance " + J.count.nonInstance + ", placeholders " + J.count.placeholders + ")" +
-      (missing ? "; " + missing + " verify tasks not judged" : ""));
+      (missing ? "; " + missing + " verify tasks not judged" : "") +
+      (!J.count.ok && J.count.expected === J.count.built ? "; the totals agree, but a record has no row, or a row's built type or child count is not its record's" : ""));
   }
 
   const B = states.balance || {};

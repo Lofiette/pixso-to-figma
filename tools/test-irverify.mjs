@@ -121,7 +121,7 @@ const V = (w, x0, y0, x1, y1, n) => [w, x0, y0, x1, y1, n === undefined ? 1 : n]
 // What a faithful Figma build measures, worked out by hand (root-relative).
 function rowsClean() {
   return [
-    [0, "FRAME", 9, true, 0, 0, 200, 120, [1, 1, 1, 1], null, null],
+    [0, "FRAME", 13, true, 0, 0, 200, 120, [1, 1, 1, 1], null, null],
     [1, "RECTANGLE", 0, true, 10, 10, 20, 20, [2, 0, 2, 0], null, null],
     [2, "VECTOR", 0, true, 40, 10, 10, 8, [1, 1, 1, 1], [V("NONZERO", 40, 10, 50, 18)], null],
     [3, "VECTOR", 0, true, 40, 30, 10, 8, [1, 1, 1, 1], [V("NONZERO", 40, 30, 50, 38)], null],
@@ -412,6 +412,19 @@ const widenScene = (by) => {
   check(same(judge(s4).placeholders.misaligned, [5]), "a placeholder built as anything but a FRAME is misaligned");
   const s5 = scene(); s5.build = null;
   check(judge(s5).placeholders.aligned === 1, "with no build report the alignment stands on the rows alone");
+}
+{
+  // Review F2: totals that agree do not make the count right.
+  const s = scene(); s.verify.rows = s.verify.rows.filter((w) => w[0] !== 1);   // record 1 has no row; the count still says 17
+  let J = judge(s);
+  check(J.count.ok === false && J.count.built === J.count.expected && J.sides.checked === 2,
+    "a record with no row under a found root fails the count though the totals agree (and is not judged anywhere else)", show(J.count));
+  const s2 = scene(); rowOf(s2, 6)[ROW.childCount] = 2;
+  check(judge(s2).count.ok === false, "a row with more children than its record has fails the count");
+  const s3 = scene(); rowOf(s3, 1)[ROW.builtType] = "FRAME";
+  check(judge(s3).count.ok === false, "a row of another built type fails the count");
+  s3.build.failures.push({ i: 1, prop: "type", msg: "built as a FRAME" });
+  check(judge(s3).count.ok === true, "a FRAME where the build coded its type fallback is the record's row");
 }
 {
   const s = scene(); s.verify.roots = [{ i: 0, id: null, found: false }]; s.verify.rows = []; s.verify.count = 0;

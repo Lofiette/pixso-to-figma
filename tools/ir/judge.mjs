@@ -37,7 +37,10 @@
 //   offset over 1 px. Effective visibility is the IR's: the record and every IR ancestor visible.
 // count      expected = task.expect.count (or the record count); built = verify.count;
 //   placeholders = rows at INSTANCE records; nonInstance = built - placeholders; ok when the three
-//   equal the expectation (expect.nonInstance, expect.placeholders) and every root was found (G3).
+//   equal the expectation (expect.nonInstance, expect.placeholders), every root was found, and under
+//   the found roots every record has a row (VERIFY paired it), the row's builtType is the record's
+//   BUILT_TYPE (a FRAME where the build coded BOOLEAN_FALLBACK or a type failure) and its childCount
+//   is the record's number of child records (0 for an INSTANCE) (G3).
 // geometry   position: the min corner of the record's box under the expected transform against the
 //   row's (builder4.js:804-852), dp = |(dx, dy)|; size: ds = max(|dw|, |dh|). A hidden record goes to
 //   hiddenOver05 / sizeHiddenOver05 and classified.hidden, never to a visible count. A visible delta
@@ -100,6 +103,7 @@
 // codes      the task's (read-stage) notes, the build report's codes, and the judge's own:
 //   ROOT_NOT_FOUND per root not found, VECTOR_GEOMETRY_DIFFERS, TEXT_LINES_DIFFER.
 import { CODE, VECTOR_TYPES, ORACLE_CLASSES } from "./schema.mjs";
+import { BUILT_TYPE } from "./task.mjs";
 import { geometryBounds, pathBounds, unionBounds, inBox } from "./pathgeom.mjs";
 
 // A VERIFY row, by position (docs/M1.md §6 C):
@@ -337,8 +341,25 @@ export function judgeTask(args) {
   J.count.built = verify.count;
   J.count.placeholders = instances.filter((i) => row.has(i)).length;
   J.count.nonInstance = verify.count - J.count.placeholders;
+  // Totals can agree while a record is never judged (a node built under the wrong parent, or one
+  // missing and one extra): every record under a found root must have a row, of its built type (or a
+  // frame where the build coded its fallback), with as many children as the task gives it.
+  const kidCount = new Map();
+  for (const t of recs) if (rec.has(t.parent)) kidCount.set(t.parent, (kidCount.get(t.parent) || 0) + 1);
+  const fellBack = new Set();
+  for (const f of B && Array.isArray(B.failures) ? B.failures : []) if (isObj(f) && f.prop === "type") fellBack.add(f.i);
+  for (const c of coded) if (c.code === CODE.BOOLEAN_FALLBACK) fellBack.add(c.i);
+  let unpaired = 0, childOff = 0, typeOff = 0;
+  for (const t of recs) {
+    if (!rootFound(t.i)) continue;
+    const w = row.get(t.i);
+    if (!w) { unpaired++; continue; }
+    if (w[ROW.childCount] !== (t.type === "INSTANCE" ? 0 : kidCount.get(t.i) || 0)) childOff++;
+    const bt = BUILT_TYPE[t.type];
+    if (bt && w[ROW.builtType] !== bt && !(fellBack.has(t.i) && w[ROW.builtType] === "FRAME")) typeOff++;
+  }
   J.count.ok = verify.count === exCount && J.count.placeholders === exPh && J.count.nonInstance === exNon &&
-    rootsAll.every((i) => found.get(i) === true);
+    rootsAll.every((i) => found.get(i) === true) && unpaired === 0 && childOff === 0 && typeOff === 0;
 
   // ---- geometry
   // Decision 9: each widened text's widening as the build reported it (TEXT_WIDENED_TO_SOURCE_LINES,

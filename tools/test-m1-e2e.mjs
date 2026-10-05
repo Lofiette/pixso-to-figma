@@ -254,6 +254,19 @@ const flowParent = (n) => { const p = IR.nodes[n.parent]; return !!p && (p.props
     "a missing node fails G3 (count) and G9 (missing), though its codes excuse any mismatch of its paths", show([failedGates(run), T.count, T.vectors]));
 }
 {
+  // Review F2: a stroked leaf moved under an unrelated frame with no child records. The totals agree
+  // (no node is missing or extra), so only pairing every record and its child count catches it.
+  const recs = inScopeOf();
+  const kids = (i) => recs.filter((n) => n.parent === i);
+  const leaf = recs.find((n) => (n.type === "RECTANGLE" || n.type === "ELLIPSE") && n.parent >= 0 && !kids(n.i).length && IR.nodes[n.i].props.strokes !== undefined &&
+    kids(n.parent).slice(-1)[0].i === n.i && IR.nodes[n.parent].type !== "BOOLEAN_OPERATION");
+  const task = buildTaskOf(GOOD, leaf.i);
+  const host = task.nodes.find((n) => n.type === "FRAME" && n.i !== leaf.parent && !kids(n.i).length);
+  const run = await runOnce("reparent", { plant: (no, env) => { if (no === task.taskNo) nodeOf(env, host.i).appendChild(nodeOf(env, leaf.i)); } });
+  check(failedGates(run).indexOf("G3 count") >= 0 && run.totals.count.built === run.totals.count.expected,
+    "a leaf moved under an unrelated frame after the build fails G3, though the node totals agree", show([failedGates(run), run.totals.count]));
+}
+{
   // A missing root: VERIFY cannot find it (ROOT_NOT_FOUND).
   const target = inScopeOf().find((n) => n.parent < 0 && n.type === "FRAME");
   const run = await runOnce("root", { plant: (no, env) => { if (buildTaskOf(GOOD, target.i).taskNo === no) nodeOf(env, target.i).remove(); } });
