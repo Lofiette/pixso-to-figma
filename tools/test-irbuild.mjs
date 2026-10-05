@@ -441,6 +441,40 @@ const mixedNodes = () => [
     "a build that measures (decision 9 through countLines) removes its scratch node and the service page it made", JSON.stringify([made.length, R.textWidened, R.failures, E.D.tree().children.length - pagesBefore]));
 }
 {
+  // Review figma F2: a label truncated with an ellipsis in a fixed box (ENDING, no maxLines) that
+  // Pixso stores as one line is drawn cut, not widened to its full one-line width.
+  const nodes = [frame(0, -1, [T6(0, 0), 100, 20]), text(1, 0, [T6(0, 0), 80, 15], "Very long product name that does not fit", { textTruncation: "ENDING", lines: 1 })];
+  const E = env();
+  const task = mkTask({ nodes, settings: { textFit: "widen" } });
+  const { R, ctx } = await build(E, task);
+  const n = E.D.node(ctx.S.nodes["1"]);
+  const m = E.IR.countLines(ctx, n, task.nodes[1]);
+  E.IR.dropScratch(ctx);
+  check(R.textWidened.length === 0 && !R.codes.TEXT_WIDENED_TO_SOURCE_LINES && near(n.width, 80, 0.5) && m.lines === 1,
+    "a truncated one-line label in a fixed box is not widened, and countLines counts the one line it draws", JSON.stringify([n.width, R.textWidened, m]));
+}
+{
+  // Review figma F5: the measuring scratch is reused; a bulleted, indented text measured first must
+  // not leave its list style on the next text (new characters take the first character's style).
+  const list = text(1, 0, [T6(0, 0), 200, 14], "Item", { lines: 1, textRanges: [{ start: 0, end: 4, fields: { listOptions: { type: "UNORDERED" }, indentation: 1 } }] });
+  const plain = text(2, 0, [T6(0, 20), 200, 14], "Plain paragraph", { lines: 1 });
+  const task = mkTask({ op: "verify", nodes: [frame(0, -1, [T6(0, 0), 300, 100]), list, plain] });
+  const E = env();
+  await E.D.figma.loadFontAsync(INTER);
+  const ctx = E.IR.makeCtx(E.D.figma, task, { id: "m" });
+  await E.IR.prepareMeasure(ctx);
+  const host = E.D.figma.createText(); host.resize(200, 14);
+  E.IR.countLines(ctx, host, task.nodes[1]);
+  E.IR.countLines(ctx, host, task.nodes[2]);
+  // The value in effect at the first character: the last range of each field covering it.
+  const eff = {};
+  for (const r of E.D.rangesOf(ctx.S.scratchTextId)) if (r.start === 0) eff[r.name] = r.value;
+  const left = [["setRangeListOptions", eff.setRangeListOptions], ["setRangeIndentation", eff.setRangeIndentation]]
+    .filter(([k, v]) => v !== undefined && (k === "setRangeListOptions" ? v.type !== "NONE" : v !== 0));
+  E.IR.dropScratch(ctx);
+  check(!left.length, "countLines clears the scratch's list and indentation before writing the next text", JSON.stringify(left));
+}
+{
   // The text box pin and P6's in-loop read: measure pins after the settle, inLoop during creation.
   // The P0 double keeps a text at the size it is given, so a stand-in sizes an auto-sized text to
   // 6 px per character (part E's text model replaces it).

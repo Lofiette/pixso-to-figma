@@ -301,10 +301,17 @@ function rect(f, parent, w, h, opts) {
   check(g.fontSize === 10 && g.getRangeFontSize(0, 5) === 10, "a node-level write clears that field's ranges");
   check(/unloaded font/.test(threw(() => g.setRangeFontName(0, 2, { family: "Inter", style: "Bold" }))), "a range in a font not loaded throws");
   await f.loadFontAsync({ family: "Inter", style: "Bold" });
-  g.setRangeFontName(0, 2, { family: "Inter", style: "Bold" });
+  g.setRangeFontName(2, 4, { family: "Inter", style: "Bold" });
   const wBold = g.width;
   g.characters = "Hello world";
-  check(g.fontName.style === "Regular" && g.width < wBold, "writing characters clears every range; a bold range draws wider", [g.fontName.style, g.width, wBold].join(","));
+  check(g.fontName.style === "Regular" && g.width < wBold, "writing characters clears every range past the first character; a bold range draws wider", [g.fontName.style, g.width, wBold].join(","));
+  // New characters take the first character's style (A; part F, review figma F5): a list or an
+  // indentation on it carries over to whatever text is written next.
+  g.setRangeListOptions(0, 11, { type: "UNORDERED" }); g.setRangeIndentation(0, 11, 1);
+  g.characters = "Plain text";
+  const kept = D.rangesOf(g.id).map((r) => [r.name, r.start, r.end]);
+  check(JSON.stringify(kept) === JSON.stringify([["setRangeListOptions", 0, 10], ["setRangeIndentation", 0, 10]]),
+    "writing characters keeps the first character's range styles over the new text (a bullet carries over)", JSON.stringify(kept));
   const u = f.createText(); u.characters = "a\u{1F600}b";
   check(threw(() => u.setRangeFontSize(1, 3, 20)) === "" && /outside the characters/.test(threw(() => u.setRangeFontSize(0, 5, 20))), "range bounds are UTF-16 indices (an astral character is two)");
   const e = f.createText();

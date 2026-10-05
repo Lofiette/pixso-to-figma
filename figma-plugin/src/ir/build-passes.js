@@ -98,7 +98,9 @@ B.measurePhase = async function (st) {
     if (rec.type !== "TEXT" || st.builtType[k] !== "TEXT") continue;
     await B.tick(st, k);
     if (st.settings.textRead !== "inLoop") B.pinText(st, k);
-    if (!widen || rec.props.lines !== 1) continue;
+    // A truncated text (ENDING) is drawn cut with an ellipsis in its box, as Pixso draws it: it is
+    // never widened (part F, review figma F2).
+    if (!widen || rec.props.lines !== 1 || ctx.prop(rec, "textTruncation") === "ENDING") continue;
     var m = measure(st, k);
     if (m && m.lines > 1) B.widenText(st, k, m);
   }

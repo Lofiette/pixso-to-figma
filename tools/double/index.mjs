@@ -16,6 +16,7 @@
 //   D.tree()           the document as plain data: { id, type, name, relativeTransform, width, height,
 //                      props, pluginData, sharedPluginData, children }, laid out first
 //   D.node(id)         the node with that id (a Proxy), or null
+//   D.rangesOf(id)     a text node's ranges, [{ name, start, end, value }] (tests only)
 //   D.ui               { posted: [message] }: what the plugin code sent through figma.ui.postMessage
 //   D.images           Map(hash -> byte length) of the images created
 //   D.loadedFonts()    ["family|style"] loaded so far
@@ -46,8 +47,9 @@
 //   - strokeWeight resetting the four side weights (figma.mixed while they differ), cornerRadius
 //     likewise for the corners;
 //   - text (text.mjs): a missing-font throw on any write that lays text out, every font of the text
-//     loaded first; ranges per UTF-16 index, cleared by a node-level write of the same field and all of
-//     them by a write of characters; node-level reads give figma.mixed where ranges differ; auto
+//     loaded first; ranges per UTF-16 index, cleared by a node-level write of the same field; a write
+//     of characters keeps only the first character's (stretched over the new text, A); node-level
+//     reads give figma.mixed where ranges differ; auto
 //     width and height from the width model; resize resetting textAutoResize as the UI does (an
 //     auto-width text resized in width becomes auto-height, any text resized in height becomes fixed;
 //     A until a live check);
@@ -585,10 +587,15 @@ export function makeDouble(opts = {}) {
       case "backgrounds": P.backgrounds = clone(value); break;
       case "fills": P.fills = clone(checkPaint(value, st.type + ".fills")); break;
       case "layoutSizingHorizontal": case "layoutSizingVertical": writeSizing(st, prop, value); break;
-      case "characters":
+      case "characters": {
+        // New characters take the first character's style (the Plugin API's rule for a styled text,
+        // assumed: A): a range that covered index 0 covers the whole new text, the rest go. A field
+        // written at node level afterwards clears its ranges as usual (part F, review figma F5).
         P.characters = String(value);
-        st.ranges = [];
+        const n = P.characters.length;
+        st.ranges = n ? st.ranges.filter((r) => r.start === 0).map((r) => Object.assign({}, r, { end: n })) : [];
         break;
+      }
       default: P[prop] = clone(value);
     }
     logWrite(st, prop, value);
@@ -830,6 +837,9 @@ export function makeDouble(opts = {}) {
     setPhase(name) { phase = name === undefined ? null : name; },
     tree: () => { settleAll(); return tree(); },
     node: (id) => { const st = byId.get(String(id)); return st ? st.proxy : null; },
+    // A text node's ranges as plain data ({ name, start, end, value }), for tests: the surface has no
+    // getter for every range field.
+    rangesOf: (id) => { const st = byId.get(String(id)); return st ? clone(st.ranges) : null; },
     loadedFonts: () => Array.from(loaded),
   };
 }

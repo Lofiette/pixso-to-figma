@@ -10,7 +10,8 @@
 //     round((H - paragraphSpacing * (paragraphs - 1)) / L), where L is the line height in pixels
 //     (PIXELS; PERCENT / 100 x fontSize; AUTO: the one-line height measured once per font and size on
 //     the same scratch node, kept for the session). paragraphs = the "\n"-separated parts of
-//     characters. With ENDING truncation the count is capped at maxLines. approx is true when ranges
+//     characters. With ENDING truncation the count is capped at maxLines, and in a fixed box
+//     (textAutoResize NONE) at the lines that fit its height, at least 1. approx is true when ranges
 //     mix line heights (a range sets lineHeight or paragraphSpacing, or sets fontSize or fontName
 //     while the line height is AUTO or PERCENT), or when L is not a positive number.
 //     The AUTO measurement writes the font writeTextProps writes: the record's, or
@@ -100,10 +101,22 @@ function fontOf(ctx, rec) {
   return f;
 }
 
+// The scratch is reused for every text of the session, and new characters take the first
+// character's style: a list bullet or an indentation the previous text left on it would lay the next
+// one out narrower (one line too many). Paragraph-level range fields no node-level write resets are
+// cleared before anything is written (part F, review figma F5).
+function plainScratch(t) {
+  var n0 = String(t.characters || "").length;
+  if (!n0) return;
+  try { t.setRangeListOptions(0, n0, { type: "NONE" }); } catch (e) {}
+  try { t.setRangeIndentation(0, n0, 0); } catch (e2) {}
+}
+
 // AUTO's one-line height for a font and size, measured once per session on the scratch node.
 function autoLine(ctx, s, t, font, size) {
   var key = font.family + "|" + font.style + "|" + size;
   if (IR.util.own(s.auto, key)) return s.auto[key];
+  plainScratch(t);
   t.fontName = { family: font.family, style: font.style };   // first: every later write lays text out in it
   t.characters = "Hg";
   t.fontSize = size;
@@ -139,6 +152,7 @@ IR.countLines = function (ctx, node, rec) {
   else if (unit === "PERCENT") L = lh.value / 100 * size;
   else L = autoLine(ctx, s, t, fontOf(ctx, rec), size);
 
+  plainScratch(t);
   IR.writeTextProps(ctx, t, rec);
   t.textTruncation = "DISABLED";
   t.leadingTrim = "NONE";
@@ -153,6 +167,10 @@ IR.countLines = function (ctx, node, rec) {
   if (!(L > 0) || !isFinite(L)) { lines = H > 0 ? 1 : 0; approx = true; }
   else lines = Math.max(0, Math.round((H - ps * (paragraphs - 1)) / L));
   var maxLines = ctx.prop(rec, "maxLines");
-  if (ctx.prop(rec, "textTruncation") === "ENDING" && typeof maxLines === "number" && maxLines >= 1 && lines > maxLines) lines = maxLines;
+  var ending = ctx.prop(rec, "textTruncation") === "ENDING";
+  if (ending && typeof maxLines === "number" && maxLines >= 1 && lines > maxLines) lines = maxLines;
+  // A truncated text in a fixed box draws the lines that fit the box, the last with an ellipsis
+  // (part F, review figma F2): counted the same, a one-line label is never widened for overflowing.
+  if (ending && ctx.prop(rec, "textAutoResize") === "NONE" && L > 0 && isFinite(L)) lines = Math.min(lines, Math.max(1, Math.floor((node.height + 0.5) / L)));
   return { lines: lines, approx: approx };
 };

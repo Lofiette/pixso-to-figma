@@ -750,19 +750,20 @@ const textRec = (i, props) => ({ i, parent: i === 0 ? -1 : 0, guid: "8:" + (i + 
     textRec(2, { lineHeight: 5 }),                                                                   // AUTO, Inter
     textRec(3, { lineHeight: 5, fontName: 2 }),                                                      // AUTO, Roboto (another line height)
     textRec(4, { lineHeight: 3, characters: "aaaa\nbbbb", paragraphSpacing: 10, lines: 2 }),         // two paragraphs, spacing 10
-    textRec(5, { lineHeight: 3, textTruncation: "ENDING", maxLines: 2, lines: 2 }),                  // capped at maxLines
+    textRec(5, { lineHeight: 3, textTruncation: "ENDING", maxLines: 2, lines: 2, textAutoResize: "HEIGHT" }), // capped at maxLines
     textRec(6, { lineHeight: 3, textRanges: [{ start: 0, end: 2, fields: { lineHeight: 4 } }] }),     // mixed line heights
     textRec(7, { lineHeight: 3, textRanges: [{ start: 0, end: 2, fields: { fontSize: 12 } }] }),      // a size range under PIXELS: exact
     textRec(8, { lineHeight: 5, textRanges: [{ start: 0, end: 2, fields: { fontSize: 12 } }] }),      // a size range under AUTO: approximate
+    textRec(9, { lineHeight: 3, textTruncation: "ENDING", lines: 1 }),                               // a fixed box of 20 px holds one 14 px line (review figma F2)
   ];
   const task = textTask(recs);
   const ctx = IR.makeCtx(figma, task, { id: "c1" });
   const built = figma.createText(); built.textAutoResize = "NONE"; built.fontName = { family: "Inter", style: "Regular" }; built.characters = "x"; built.resize(25, 20);
   const pagesBefore = D.tree().children.length;
   const got = recs.map((r) => IR.countLines(ctx, built, r));
-  const want = [[3, false], [3, false], [3, false], [3, false], [2, false], [2, false], [3, true], [3, false], [3, true]];
+  const want = [[3, false], [3, false], [3, false], [3, false], [2, false], [2, false], [3, true], [3, false], [3, true], [1, false]];
   const bad = got.map((g, k) => (g.lines === want[k][0] && g.approx === want[k][1] ? "" : k + ": " + show(g) + " want " + show(want[k]))).filter(Boolean);
-  check(!bad.length, "countLines through " + label + " on a toy text model: PIXELS, PERCENT, AUTO per font, paragraph spacing, ENDING cap, approximate ranges", bad.join("; "));
+  check(!bad.length, "countLines through " + label + " on a toy text model: PIXELS, PERCENT, AUTO per font, paragraph spacing, ENDING cap (maxLines, or a fixed box's height), approximate ranges", bad.join("; "));
   const tree = D.tree();
   const service = tree.children.find((p) => p.sharedPluginData[NS] && p.sharedPluginData[NS].pxPage === "m1-service");
   const scratch = service && service.children.find((n) => n.sharedPluginData[NS] && n.sharedPluginData[NS].pxScratch === "1" && n.pluginData.pxScratch === "1");
