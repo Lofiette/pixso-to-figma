@@ -53,11 +53,14 @@
 //
 // The assumptions, and why. P8: images over 4 096 px are accepted (the double's core already took a
 // 4 096 x 4 097 PNG header and read its size back, and tools/test-m1-contract.mjs, P0's, holds it to
-// that), JPEG accepted, WebP refused (Figma's documentation names PNG, JPEG and GIF), an unknown hash
-// kept. P19B: Figma fills an open subpath, moves a vector's origin to its drawing's bounds and keeps
-// the drawing in place (docs/M1.md §11 "Vector origin"), does not fill a closed loop without a region
-// (as P19 measured for an open one), and computes booleans on fill areas with operand strokes
-// ignored (docs/M1.md D5); frame masks are kept. All are A until docs/M1.md §10 step 1.
+// that with the case planted pending), JPEG accepted, WebP refused (Figma's documentation names PNG,
+// JPEG and GIF), an unknown hash kept. P19B: Figma fills an open subpath, moves a vector's origin to its
+// drawing's bounds and keeps the drawing in place (docs/M1.md §11 "Vector origin"), does not fill a
+// closed loop without a region (as P19 measured for an open one), and computes booleans on fill areas
+// with operand strokes ignored (docs/M1.md D5); frame masks are kept. All were A until docs/M1.md §10
+// step 1. P4 and P8 were recorded on 2026-10-05 (P8: over 4 096 px and long strips throw, against the
+// assumption; the rest as assumed), so the double follows the record and assumes only a case still
+// pending, or planted pending by a test.
 export const MODEL = {
   P4: { transport: { assumed: "base64", values: ["base64", "binary"] }, sameHash: { assumed: "ok", values: ["ok", "differs"] } },
   P8: {

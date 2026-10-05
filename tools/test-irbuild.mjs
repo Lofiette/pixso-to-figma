@@ -56,6 +56,8 @@ const NET_SQUARE = { vertices: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 
   segments: [{ start: 0, end: 1 }, { start: 1, end: 2 }, { start: 2, end: 3 }, { start: 3, end: 0 }],
   regions: [{ windingRule: "NONZERO", loops: [[0, 1, 2, 3]] }] };
 const GEO_TRI = [{ windingRule: "EVENODD", data: "M 0 0 L 10 0 L 5 8 Z" }];
+// The same path as Figma reads it back: each command glued to its first number (P19B, 2026-10-05).
+const GEO_TRI_READ = [{ windingRule: "EVENODD", data: "M0 0L10 0L5 8Z" }];
 
 // Interns every interned prop (node props, range fields, the page background) into values, as the
 // planner does, collects the fonts, lists the roots, and fills expect. Raw values in, a task out.
@@ -219,10 +221,11 @@ const mixedNodes = () => [
       rec(2, 0, "ELLIPSE", [T6(30, 0), 20, 20], painted({ arcData: { startingAngle: 0, endingAngle: 6.283185, innerRadius: 0.5 } }))] }));
     const full = E2.D.node(c2.S.nodes["1"]), donut = E2.D.node(c2.S.nodes["2"]);
     const raw = E2.D.figma.createEllipse(); raw.resize(20, 20); raw.arcData = { startingAngle: 0, endingAngle: 6.283185, innerRadius: 0 };
+    // A pie starts at the centre and draws a line out ("M10 10L…", in Figma's glued read-back form).
     check(full.arcData.endingAngle === 2 * Math.PI && donut.arcData.endingAngle === 2 * Math.PI && donut.arcData.innerRadius === 0.5 &&
-      !/^M 10 10 L/.test(full.fillGeometry[0].data) && /^M 10 10 L/.test(raw.fillGeometry[0].data),
+      !/^M10 10L/.test(full.fillGeometry[0].data) && /^M10 10L/.test(raw.fillGeometry[0].data),
       "a full sweep is written as exactly 2π, so the ellipse stays closed (6.283185 written as is draws a pie in the double, as it would in Figma)",
-      JSON.stringify([full.arcData, donut.arcData]));
+      JSON.stringify([full.arcData, donut.arcData, full.fillGeometry[0].data.slice(0, 24), raw.fillGeometry[0].data.slice(0, 24)]));
   }
   const cmp = findTree(tr, ctx.S.nodes["12"]);
   check(cmp.type === "COMPONENT" && (cmp.sharedPluginData.pix2fig || {}).pxDef === "1:112", "a COMPONENT record is a component stamped pxDef (its guid)");
@@ -245,8 +248,10 @@ const mixedNodes = () => [
     check(back.regions.length === 1 && Array.isArray(back.regions[0].fills) && back.regions[0].fills.length === 1 && back.regions[0].fills[0].color.r === 1,
       "a region's own fills are written with the network (a white region on a green vector)", JSON.stringify(back.regions));
   }
-  check(same(v4.vectorPaths, GEO_TRI) && R.counters.vectorsGeometry === 1 && writesOf(E, v4.id).every((w) => w.prop !== "resize()"),
-    "a geometry record is built from its fillGeometry as vectorPaths (vectorsGeometry), and a vector is never resized");
+  // Written as the IR holds it (spaced), read back as Figma writes it (glued).
+  check(writesOf(E, v4.id).some((w) => w.prop === "vectorPaths" && same(w.value, GEO_TRI)) && same(v4.vectorPaths, GEO_TRI_READ) &&
+    R.counters.vectorsGeometry === 1 && writesOf(E, v4.id).every((w) => w.prop !== "resize()"),
+    "a geometry record is built from its fillGeometry as vectorPaths (vectorsGeometry), and a vector is never resized", JSON.stringify(v4.vectorPaths));
   // Determinism: the same task on a fresh double writes the same things in the same order.
   const E2 = env({ images: { [H1]: H1 } });
   await build(E2, mkTask({ nodes: mixedNodes(), notes: [{ code: "VECTOR_FROM_GEOMETRY", i: 4, detail: null }], images: [{ hash: H1, source: "archive", format: "png", reason: null }] }));
@@ -352,6 +357,20 @@ const mixedNodes = () => [
   const got = mul6(abs, [1, 0, stored.x, 0, 1, stored.y]);
   check(stored.x === 0 && R4.detail.vectorOriginShifted === 1 && near(got[2], want[2], 1e-9) && near(got[5], want[5], 1e-9),
     "a vector whose origin Figma moves keeps its drawing in place (the wanted transform takes the shift, on a rotated vector too)", JSON.stringify([got[2], got[5], want[2], want[5]]));
+
+  // The same for a vector built from its stored geometry: the builder finds the shift from the first
+  // point it wrote (the IR's spaced form) and the first point Figma reads back (glued, "M0 0L…", P19B
+  // 2026-10-05). A double planted with P19B offsetNetwork ok moves the origin as Figma does.
+  const vOk = loadVerdicts(); vOk.probes.P19B.verdicts.offsetNetwork = "ok";
+  const t5 = mkTask({ nodes: [frame(0, -1, [T6(100, 100), 50, 50]), vector(1, 0, [ROT90(30, 5), 10, 8], { fillGeometry: [{ windingRule: "EVENODD", data: "M 3 2 L 13 2 L 8 10 Z" }] })],
+    notes: [{ code: "VECTOR_FROM_GEOMETRY", i: 1, detail: null }] });
+  valid("offset geometry", t5);
+  const E5 = env({ double: { verdicts: vOk } });
+  const { R: R5, ctx: c5 } = await build(E5, t5);
+  const vg = E5.D.node(c5.S.nodes["1"]), read = vg.vectorPaths[0].data;
+  const gotG = flat(vg.absoluteTransform), wantG = mul6(mul6(T6(100, 100), ROT90(30, 5)), [1, 0, 3, 0, 1, 2]);
+  check(read === "M0 0L10 0L5 8Z" && R5.detail.vectorOriginShifted === 1 && near(gotG[2], wantG[2], 1e-9) && near(gotG[5], wantG[5], 1e-9),
+    "a geometry-built vector whose origin Figma moves keeps its drawing in place, its paths read back in Figma's glued form", JSON.stringify([read, R5.detail.vectorOriginShifted, gotG[2], gotG[5], wantG[2], wantG[5]]));
 }
 
 // ============================================================================================

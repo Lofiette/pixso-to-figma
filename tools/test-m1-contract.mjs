@@ -19,7 +19,7 @@ import { validate, validateTask } from "./ir/validate.mjs";
 import { assertOutsideRepo, REPO_ROOT } from "./ir/outside-repo.mjs";
 import { generatePlugin, irBundle, irBundleSource } from "./build-plugin.mjs";
 import { loadPluginBundle, loadPluginIR, defaultHost } from "./ir/plugin-vm.mjs";
-import { makeDouble, networkRegionPath } from "./double/index.mjs";
+import { makeDouble, networkRegionPath, loadVerdicts } from "./double/index.mjs";
 import { SURFACE, LAYOUT_GETTERS } from "./double/surface.mjs";
 import * as judge from "./ir/judge.mjs";
 import * as pathgeom from "./ir/pathgeom.mjs";
@@ -406,13 +406,30 @@ check(/props is tools\/ir\/props\.mjs/.test(threw(() => taskMod.validateTask(bui
   const seen = [];
   const DU = makeDouble({ ui: (m) => seen.push(m) });
   DU.figma.ui.postMessage({ t: "probe", n: 1 });
-  const png = new Uint8Array(32); png.set([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0x10, 0, 0, 0, 0x10, 1]);
-  const im = DU.figma.createImage(png);
+  // A PNG header alone, w x h: 32 bytes, the size big-endian at bytes 16 and 20.
+  const pngHeader = (w, h) => {
+    const b = new Uint8Array(32), dv = new DataView(b.buffer);
+    b.set([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82]); dv.setUint32(16, w); dv.setUint32(20, h);
+    return b;
+  };
+  // 4 096 x 4 095 is P8 png4096, which Figma accepts (recorded 2026-10-05); the sides differ, so a swap shows.
+  const im = DU.figma.createImage(pngHeader(4096, 4095));
   const size = await im.getSizeAsync(), back = await im.getBytesAsync();
   check(SURFACE.figma.read.indexOf("ui") >= 0 && SURFACE.ui.methods.indexOf("postMessage") >= 0 && SURFACE.image.methods.indexOf("getSizeAsync") >= 0 &&
-    DU.ui.posted.length === 1 && seen.length === 1 && seen[0].n === 1 && size.width === 4096 && size.height === 4097 && back.length === 32 &&
+    DU.ui.posted.length === 1 && seen.length === 1 && seen[0].n === 1 && size.width === 4096 && size.height === 4095 && back.length === 32 &&
     /outside the surface/.test(threw(() => { DU.figma.ui.onmessage = () => {}; })) && /outside the surface/.test(threw(() => im.getSomething)),
     "figma.ui.postMessage and the Image's hash, bytes and PNG size are in the surface and the double (part E's P4 and P8); onmessage stays the host's");
+  // A side over 4 096 px is P8 png4097. Recorded throw (2026-10-05): the double refuses it and names the
+  // case. Planted pending, the double follows its assumption (ok) and reads the size back from the header.
+  const recorded = loadVerdicts(), pendingP8 = JSON.parse(JSON.stringify(recorded));
+  pendingP8.probes.P8.status = "pending";
+  for (const k of Object.keys(pendingP8.probes.P8.verdicts)) pendingP8.probes.P8.verdicts[k] = "pending";
+  const DP = makeDouble({ verdicts: pendingP8 });
+  const sizeP = await DP.figma.createImage(pngHeader(4096, 4097)).getSizeAsync();
+  check(recorded.probes.P8.verdicts.png4097 === "throw" && /P8 png4097/.test(threw(() => makeDouble().figma.createImage(pngHeader(4096, 4097)))) &&
+    DP.assumed.indexOf("P8.png4097") >= 0 && sizeP.width === 4096 && sizeP.height === 4097,
+    "a 4 096 x 4 097 PNG follows P8 png4097: refused as recorded (throw); while the case is pending, taken by assumption with its size read back",
+    JSON.stringify(sizeP));
 }
 
 // ============================================================================================

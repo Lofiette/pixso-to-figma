@@ -36,9 +36,9 @@
 // (e.resumable: the task is failed, and a re-run resumes it). A heartbeat (/alive with no count) keeps
 // the old "is the window there" signal and never extends a task.
 //
-// The image transport. A job's images cross the window as base64 text by default; "binary" sends them
-// as Uint8Array slices of at most 4 MB. tools/double/verdicts.json P4 decides the default once the live
-// probe has run (transport "binary"); a job may name its own (job.imageTransport).
+// The image transport. A job's images cross the window as base64 text or, "binary", as Uint8Array
+// slices of at most 4 MB. tools/double/verdicts.json P4 decides the default: binary since the live probe
+// recorded it (2026-10-05), base64 while P4 is pending; a job may name its own (job.imageTransport).
 import { createServer } from "node:http";
 import { randomBytes, randomInt, timingSafeEqual, createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -68,10 +68,11 @@ export function checkPostOpts(opts) {
 }
 
 export const IMAGE_TRANSPORTS = Object.freeze(["base64", "binary"]);
-// The transport P4 chose, from tools/double/verdicts.json; base64 while P4 is pending.
-export function defaultImageTransport() {
+// The transport P4 chose, from tools/double/verdicts.json (or the verdicts object given, so a test can
+// plant a pending P4); base64 while P4 is pending.
+export function defaultImageTransport(verdicts) {
   try {
-    const v = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "double", "verdicts.json"), "utf8"));
+    const v = verdicts || JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "double", "verdicts.json"), "utf8"));
     return v.probes.P4.verdicts.transport === "binary" ? "binary" : "base64";
   } catch (e) { return "base64"; }
 }

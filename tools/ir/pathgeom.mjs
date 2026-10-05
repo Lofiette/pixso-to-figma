@@ -10,7 +10,9 @@
 //
 //   pathBounds(data, matrix?) -> [{ x0, y0, x1, y1 }]
 //     data    a Figma path string: M, L, Q, C and Z, every letter and number separated by white space
-//             (schema.figmaPathError(data) === null)
+//             (schema.figmaPathError(data) === null), as Pixso and the IR write it; or as Figma reads
+//             it back, each command glued to its first number ("M0 0L10 0Z", P19B on 2026-10-05).
+//             Commas and any other letter are refused.
 //     matrix  optional 2x3 affine [[a, b, tx], [c, d, ty]], applied to every point before bounding;
 //             absent means the identity
 //     returns one box per subpath (each M starts one), in path order, from the exact extrema of every

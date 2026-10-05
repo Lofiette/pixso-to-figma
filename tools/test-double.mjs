@@ -7,9 +7,10 @@
 // tools/test-m1-contract.mjs; this file covers what part E adds:
 //
 //   1. conformance: the probe functions of figma-plugin/src/ir/probes-*.js, run against the double,
-//      reproduce tools/double/verdicts.json — the recorded P2 and P19 results, the double's stated
-//      assumptions for the pending P4, P8 and P19B cases, and every value the double models for every
-//      case, one double per value; a recorded value the double cannot model refuses to build it
+//      reproduce tools/double/verdicts.json — the recorded results (P2, P19; P4 and P8 since
+//      2026-10-05), the double's stated assumptions for the cases still pending (P19B), and, with
+//      the cases planted pending, the assumptions for P4 and P8 too; and every value the double models
+//      for every case, one double per value; a recorded value the double cannot model refuses to build it
 //   2. auto layout with expected boxes: hug, fixed, padding, spacing, MIN / CENTER / MAX /
 //      SPACE_BETWEEN, grow, stretch, a child's own alignment, hidden and absolute children, the padding
 //      floor, min and max, an INSIDE stroke and strokesIncludedInLayout, wrap, nested fill and text,
@@ -22,13 +23,14 @@
 //   5. images: formats and sizes from the bytes, P8 refusals and drops, P4 re-encoding
 //   6. the probes' own argument checks, and P4 through a simulated window
 //   7. liveness in tools/jobserver.mjs: no advance fails the post with PLUGIN_STALLED, an advance keeps
-//      it, a heartbeat does not, the ceiling fails it, onProgress hears every advance
+//      it, a heartbeat does not, the ceiling fails it, onProgress hears every advance; and the image
+//      transport P4's verdict picks
 import { request } from "node:http";
 import { createHash } from "node:crypto";
 import { makeDouble, loadVerdicts, MODEL, textMetrics, DEFAULT_TEXT_RATIO, sniffImage, DOUBLE_FEATURES } from "./double/index.mjs";
 import { loadPluginBundle } from "./ir/plugin-vm.mjs";
 import { pathBounds, unionBounds } from "./ir/pathgeom.mjs";
-import { startJobServer, newSecrets, IMAGE_TRANSPORTS } from "./jobserver.mjs";
+import { startJobServer, newSecrets, IMAGE_TRANSPORTS, defaultImageTransport } from "./jobserver.mjs";
 import { CODE } from "./ir/schema.mjs";
 import { p4Images, compareLine } from "./plugin-probe.mjs";
 
@@ -52,6 +54,26 @@ function withVerdict(probe, kase, value) {
   v.probes[probe].verdicts[kase] = value;
   return v;
 }
+// A verdicts object with every case of the named probes planted pending, as before the live session.
+function pendingFor(probes) {
+  const v = JSON.parse(JSON.stringify(VERDICTS));
+  for (const p of probes) { v.probes[p].status = "pending"; for (const k of Object.keys(v.probes[p].verdicts)) v.probes[p].verdicts[k] = "pending"; }
+  return v;
+}
+const isPending = (verdicts, probe, kase) => {
+  const pv = verdicts.probes[probe] && verdicts.probes[probe].verdicts;
+  return !pv || pv[kase] === undefined || pv[kase] === "pending";
+};
+// What the double follows for each case of a probe: the recorded verdict, or its stated assumption
+// while the case is pending (tools/double/behaviour.mjs).
+function followed(probe, verdicts) {
+  const out = {};
+  for (const k of Object.keys(MODEL[probe])) out[k] = isPending(verdicts, probe, k) ? MODEL[probe][k].assumed : verdicts.probes[probe].verdicts[k];
+  return out;
+}
+// "P19B.offsetNetwork", … for every modelled case still pending, in MODEL's order (behaviour().assumed's).
+const pendingCases = (verdicts) => Object.keys(MODEL).flatMap((p) => Object.keys(MODEL[p]).filter((k) => isPending(verdicts, p, k)).map((k) => p + "." + k));
+const RECORDED_ON = /^run \d{4}-\d{2}-\d{2}/;
 function bundle(D) { return loadPluginBundle({ figma: D.figma }); }
 function box(n) { const b = n.absoluteBoundingBox; return [b.x, b.y, b.width, b.height]; }
 function drawnBox(n) {
@@ -87,19 +109,34 @@ check(DOUBLE_FEATURES.layout && DOUBLE_FEATURES.text && DOUBLE_FEATURES.booleans
   const res = await IR.probes.P19B.run(IR.probes.P19B.args({}));
   check(same(res.p19.verdicts, VERDICTS.probes.P19.verdicts), "P19 (recorded): the probe run against the double gives the recorded verdicts",
     JSON.stringify(res.p19.verdicts));
-  const assumedP19B = {};
-  for (const k of Object.keys(MODEL.P19B)) assumedP19B[k] = MODEL.P19B[k].assumed;
-  check(VERDICTS.probes.P19B.status === "pending" && same(res.verdicts, assumedP19B),
-    "P19B (pending): the probe against the double gives the double's stated assumption for every case", JSON.stringify(res.verdicts));
+  check(same(res.verdicts, followed("P19B", VERDICTS)),
+    "P19B: the probe against the double gives the recorded verdict for each recorded case and the double's stated assumption for each pending one",
+    JSON.stringify(res.verdicts));
   check(D.tree().children[0].children.length === 0, "P19B leaves nothing behind in the file");
+  // P8, recorded on 2026-10-05: the probe against the double gives back exactly what Figma said.
   const r8 = await IR.probes.P8.run(IR.probes.P8.args({}));
-  const assumedP8 = {};
+  check(RECORDED_ON.test(VERDICTS.probes.P8.status) && pendingCases(VERDICTS).every((k) => k.indexOf("P8.") !== 0) && same(r8.verdicts, VERDICTS.probes.P8.verdicts) &&
+    r8.cases.png4097.width === 4097 && /P8 png4097/.test(r8.cases.png4097.error) && r8.cases.jpegAsPng.hashIsSha1 === true,
+    "P8 (recorded): the probe against the double gives the recorded verdict for every case (over 4 096 px and WebP refused, JPEG and an unknown hash kept)",
+    JSON.stringify(r8.verdicts));
+  // The same probes against a double with P4, P8 and P19B planted pending, as before the live session:
+  // the double's stated assumption for every case.
+  const DP = makeDouble({ verdicts: pendingFor(["P4", "P8", "P19B"]) });
+  const IRP = bundle(DP).PXF_IR;
+  const r8p = await IRP.probes.P8.run(IRP.probes.P8.args({}));
+  const resP = await IRP.probes.P19B.run(IRP.probes.P19B.args({}));
+  const assumedP8 = {}, assumedP19B = {};
   for (const k of Object.keys(MODEL.P8)) assumedP8[k] = MODEL.P8[k].assumed;
-  check(VERDICTS.probes.P8.status === "pending" && same(r8.verdicts, assumedP8) && r8.cases.png4097.width === 4097 && r8.cases.jpegAsPng.hashIsSha1 === true,
-    "P8 (pending): the probe against the double gives the double's stated assumption for every case", JSON.stringify(r8.verdicts));
-  check(D.assumed.length === Object.keys(MODEL.P4).length + Object.keys(MODEL.P8).length + Object.keys(MODEL.P19B).length &&
-    D.assumed.indexOf("P19.openRegionlessNetworkFilled") < 0 && D.assumed.indexOf("P19B.offsetNetwork") >= 0,
-    "the double lists the cases it follows by assumption (P4, P8, P19B while pending), and none it follows from a recorded verdict", D.assumed.join(","));
+  for (const k of Object.keys(MODEL.P19B)) assumedP19B[k] = MODEL.P19B[k].assumed;
+  check(same(r8p.verdicts, assumedP8) && r8p.cases.png4097.width === 4097 && r8p.cases.jpegAsPng.hashIsSha1 === true && same(resP.verdicts, assumedP19B),
+    "P8 and P19B planted pending: the probe against the double gives the double's stated assumption for every case", JSON.stringify([r8p.verdicts, resP.verdicts]));
+  // The assumed list is exactly the cases still pending: none of P4's and P8's since they were recorded,
+  // none of P19's; with P4, P8 and P19B planted pending, every case of the three and still none of P19's.
+  const allOf = (p) => Object.keys(MODEL[p]).map((k) => p + "." + k);
+  check(same(D.assumed, pendingCases(VERDICTS)) && !D.assumed.some((k) => /^(P4|P8|P19)\./.test(k)) &&
+    same(DP.assumed, allOf("P4").concat(allOf("P8"), allOf("P19B"))) && DP.assumed.indexOf("P19.openRegionlessNetworkFilled") < 0,
+    "the double lists the cases it follows by assumption (the pending ones: P19B until recorded; P4 and P8 too when planted pending), and none it follows from a recorded verdict",
+    JSON.stringify([D.assumed, DP.assumed]));
   console.log("skip P13 (recorded): instance sublayer overrides are not modelled in M1; the double has no instances (M2b)");
 }
 // Every value the double models, for every case: a double built with that verdict, and the probe run
@@ -128,9 +165,13 @@ check(DOUBLE_FEATURES.layout && DOUBLE_FEATURES.text && DOUBLE_FEATURES.booleans
   check(/not modelled/.test(threw(() => makeDouble({ verdicts: withVerdict("P19B", "booleanUnion", "differs") }))) &&
     /not modelled/.test(threw(() => makeDouble({ verdicts: withVerdict("P8", "png4096", "maybe") }))),
     "a recorded verdict the double cannot model refuses to build the double, naming the case (the double changes first)");
+  const PEND = pendingFor(["P4", "P8", "P19B"]);
   check(compareLine("P19", "openRegionlessNetworkFilled", "empty", VERDICTS) === "as recorded" && compareLine("P19", "perRegionFills", "drop", VERDICTS) === "RECORDED ok" &&
-    compareLine("P8", "webpAsPng", "throw", VERDICTS) === "as the double assumes" && compareLine("P19B", "offsetNetwork", "drop", VERDICTS) === "THE DOUBLE ASSUMES ok",
-    "plugin-probe prints each live verdict against the recorded one, or the double's assumption while pending");
+    compareLine("P8", "webpAsPng", "throw", VERDICTS) === "as recorded" && compareLine("P8", "png4097", "ok", VERDICTS) === "RECORDED throw" &&
+    compareLine("P4", "transport", "base64", VERDICTS) === "RECORDED binary" &&
+    compareLine("P8", "webpAsPng", "throw", PEND) === "as the double assumes" && compareLine("P8", "png4097", "throw", PEND) === "THE DOUBLE ASSUMES ok" &&
+    compareLine("P4", "transport", "binary", PEND) === "THE DOUBLE ASSUMES base64" && compareLine("P19B", "offsetNetwork", "drop", PEND) === "THE DOUBLE ASSUMES ok",
+    "plugin-probe prints each live verdict against the recorded one (P4, P8, P19), or the double's assumption while pending (planted)");
 }
 
 // ============================================================================================
@@ -328,8 +369,9 @@ function rect(f, parent, w, h, opts) {
     regions: [{ windingRule: "NONZERO", loops: [[0, 1, 2]] }] };
   const v = f.createVector(); v.relativeTransform = [[1, 0, 5], [0, 1, 7]];
   await v.setVectorNetworkAsync(net);
-  check(same(v.relativeTransform, [[1, 0, 15], [0, 1, 27]]) && v.width === 20 && v.height === 20 && same(drawnBox(v), [15, 27, 35, 47]) && v.fillGeometry[0].data.indexOf("M 0 0") === 0,
-    "a network off the origin (assumed P19B offsetNetwork ok): the origin moves to its bounds, the size becomes them, the drawing stays", JSON.stringify([v.relativeTransform, drawnBox(v)]));
+  // fillGeometry reads back in Figma's glued form ("M0 0L…", P19B 2026-10-05), starting at the new origin.
+  check(same(v.relativeTransform, [[1, 0, 15], [0, 1, 27]]) && v.width === 20 && v.height === 20 && same(drawnBox(v), [15, 27, 35, 47]) && v.fillGeometry[0].data === "M0 0L20 0L20 20L0 0Z",
+    "a network off the origin (assumed P19B offsetNetwork ok): the origin moves to its bounds, the size becomes them, the drawing stays", JSON.stringify([v.relativeTransform, drawnBox(v), v.fillGeometry[0].data]));
   v.resize(40, 10);
   check(same(drawnBox(v), [15, 27, 55, 37]), "resizing a vector scales its drawing", JSON.stringify(drawnBox(v)));
   const Dd = makeDouble({ verdicts: withVerdict("P19B", "offsetNetwork", "drop") });
@@ -385,7 +427,7 @@ function rect(f, parent, w, h, opts) {
     "format and size from the bytes: PNG, JPEG, WebP, GIF (the probes' synthetic images read as made)");
   const im = f.createImage(jpg);
   check(im.hash === sha1(jpg) && same(await im.getSizeAsync(), { width: 8, height: 8 }) && /webpAsPng/.test(threw(() => f.createImage(webp))),
-    "createImage hashes with SHA-1 and reads a JPEG's size; WebP bytes are refused (assumed P8 webpAsPng throw)");
+    "createImage hashes with SHA-1 and reads a JPEG's size; WebP bytes are refused (P8 webpAsPng throw, recorded)");
   const Dd = makeDouble({ verdicts: withVerdict("P8", "jpegAsPng", "drop") });
   const id = Dd.figma.createImage(jpg), rr = Dd.figma.createRectangle();
   rr.fills = [{ type: "IMAGE", imageHash: id.hash, scaleMode: "FILL" }, BLACK];
@@ -397,7 +439,7 @@ function rect(f, parent, w, h, opts) {
   const unknown = { type: "IMAGE", imageHash: sha1("pxf no such image"), scaleMode: "FILL" };
   const kept = f.createRectangle(); kept.fills = [unknown];
   check(/unknownHash/.test(threw(() => { Du.figma.createRectangle().fills = [unknown]; })) && kept.fills.length === 1,
-    "an IMAGE paint with an unknown hash: kept by assumption, a throw when the verdict says so");
+    "an IMAGE paint with an unknown hash: kept (P8 unknownHash ok, recorded), a throw when the verdict says so");
   const Dh = makeDouble({ verdicts: withVerdict("P4", "sameHash", "differs") });
   check(Dh.figma.createImage(jpg).hash !== sha1(jpg) && /^[0-9a-f]{40}$/.test(Dh.figma.createImage(jpg).hash), "P4 sameHash differs: a re-encoding Figma, whose hash is not the bytes' SHA-1");
 }
@@ -516,8 +558,19 @@ function hreq(port, method, path, headers, body) {
   await report(j6.id, { fine: 6 });
   const r6 = await p6;
   const badT = await rejects(srv.post({ kind: "ir", imageTransport: "carrier pigeon" }, "{}", new Map(), 1000));
-  check(r6.ok && r6.ok.fine === 6 && j6.imageTransport === "base64" && srv.imageTransport === "base64" && /imageTransport/.test(badT) && same(IMAGE_TRANSPORTS, ["base64", "binary"]),
-    "a job without liveness options is not watched; a job carries its image transport (base64 while P4 is pending) and an unknown one is refused");
+  check(r6.ok && r6.ok.fine === 6 && VERDICTS.probes.P4.verdicts.transport === "binary" && defaultImageTransport() === "binary" &&
+    j6.imageTransport === "binary" && srv.imageTransport === "binary" && /imageTransport/.test(badT) && same(IMAGE_TRANSPORTS, ["base64", "binary"]),
+    "a job without liveness options is not watched; a job carries its image transport (binary, as P4 recorded) and an unknown one is refused",
+    JSON.stringify([j6.imageTransport, srv.imageTransport]));
+  // The default follows P4's verdict: base64 while it is pending (planted) or says base64, binary when
+  // it says binary; a job that names base64 gets it whatever the default.
+  const p7 = outcome(srv.post({ kind: "ir", imageTransport: "base64" }, "{}", new Map(), 30000));
+  const j7 = await job();
+  await report(j7.id, { fine: 7 });
+  const r7 = await p7;
+  check(defaultImageTransport(pendingFor(["P4"])) === "base64" && defaultImageTransport(withVerdict("P4", "transport", "base64")) === "base64" &&
+    defaultImageTransport(withVerdict("P4", "transport", "binary")) === "binary" && r7.ok && r7.ok.fine === 7 && j7.imageTransport === "base64",
+    "the default image transport is P4's verdict (base64 while P4 is pending), and a job may name its own", JSON.stringify(j7.imageTransport));
   srv.close();
 }
 
