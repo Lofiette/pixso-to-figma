@@ -4,10 +4,10 @@
 //
 // Offline and synthetic: hand-made IR records, hand-computed VERIFY rows, and scenes built in the
 // headless double by direct figma.* calls (independent of part B's builder). Prints "ok   …" /
-// "FAIL …" lines and exits 1 on any failure. Checks that need part B's IR.writeTextProps or part E's
-// text model print "pending: B" / "pending: E" until those merge; part F re-runs them. Until then
-// countLines is checked through a stand-in writer and a toy text model, both defined here, which
-// test its arithmetic and its scratch node, not Figma's text layout.
+// "FAIL …" lines and exits 1 on any failure. countLines is checked twice: through part B's
+// IR.writeTextProps on a toy text model defined here (its arithmetic and its scratch node), and
+// through part B's writer on part E's text model (Figma's text as the double models it). Both printed
+// "pending: B" / "pending: E" before those parts merged; part F made them plain checks.
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,11 +20,10 @@ import { loadPluginBundle, defaultHost } from "./ir/plugin-vm.mjs";
 import { IR_SRC_DIR } from "./build-plugin.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-let failed = 0, pending = 0;
+let failed = 0;
 const ok = (m) => console.log("ok   " + m);
 const fail = (m) => { failed++; console.log("FAIL " + m); };
 const check = (cond, m, why) => (cond ? ok(m) : fail(m + (why !== undefined ? " — " + String(why).slice(0, 400) : "")));
-const pend = (part, m) => { pending++; console.log("pending: " + part + " — " + m); };
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const near = (a, b, e) => Math.abs(a - b) <= (e === undefined ? 1e-6 : e);
 const boxIs = (b, x0, y0, x1, y1, e) => !!b && near(b.x0, x0, e) && near(b.y0, y0, e) && near(b.x1, x1, e) && near(b.y1, y1, e);
@@ -108,7 +107,8 @@ function irScene() {
   const notes = [{ code: schema.CODE.VECTOR_FROM_GEOMETRY, node: 3, detail: null }, { code: schema.CODE.VECTOR_ORACLE_DIFFERS, node: 10, detail: "network-bounds: synthetic" },
     { code: schema.CODE.VECTOR_ORACLE_DIFFERS, node: 11, detail: "region-no-fill" }, { code: schema.CODE.VECTOR_ORACLE_DIFFERS, node: 12, detail: "winding" },
     { code: schema.CODE.TEXT_LINES_UNKNOWN, node: 13, detail: null }];
-  // vectorNetwork value 5 is a stand-in index: the judge never reads the network.
+  // vectorNetwork value 5 is a stand-in index: the judge reads a network only to place a VECTOR whose
+  // box differs (vectorBox), and finds no network there, so it classifies nothing by it.
   return { nodes: n, values: clone(VALUES), notes };
 }
 function taskOf(ir) {
@@ -430,6 +430,61 @@ const sumMap = (m) => Object.values(m).reduce((a, b) => a + b, 0);
   check(/judgeRun: /.test(threw(() => judgeRun([emptyJ(), { count: {} }]))) && /judgeRun: /.test(threw(() => judgeRun(null))), "judgeRun throws on a J that is not of J_SHAPE");
   check(same(Object.keys(T).slice(1), Object.keys(J_SHAPE)), "totals keep J's key order after tasks");
 }
+{
+  // vectorBox (part F, docs/M1.md §8.3): a VECTOR or BOOLEAN_OPERATION takes its box from its drawing,
+  // which may differ from Pixso's box; the delta is classified when the row's box is the IR drawing's.
+  const withValue = (s, v) => { s.ir.values.push(v); return s.ir.values.length - 1; };
+  const net = (segs, verts) => ({ vertices: verts.map(([x, y]) => ({ x, y })), segments: segs, regions: [] });
+  const flatNet = net([{ start: 0, end: 1 }, { start: 1, end: 2 }], [[0, 0], [10, 0], [10, 4]]);   // drawing 10 x 4 in a 10 x 8 box
+  {
+    const s = scene(); s.ir.nodes[2].props.vectorNetwork = withValue(s, flatNet); s.task = taskOf(s.ir);
+    rowOf(s, 2)[ROW.h] = 4;
+    const J = judge(s);
+    check(J.geometry.sizeVisibleOver1 === 0 && J.geometry.sizeVisibleOver05 === 0 && J.geometry.classified.vectorBox === 1 && J.geometry.worst[0].i === 2,
+      "a network vector whose drawing is smaller than Pixso's box: Figma's box is the drawing's, classified vectorBox", show(J.geometry));
+    rowOf(s, 2)[ROW.absX] += 2;
+    const J2 = judge(s);
+    check(J2.geometry.visibleOver1 === 1 && J2.geometry.sizeVisibleOver1 === 1 && !J2.geometry.classified.vectorBox,
+      "the same vector drawn 2 px off its place is counted, position and size", show(J2.geometry));
+  }
+  {
+    // A cubic bulging to y = 4.5 (controls at 6): the drawing's exact bounds, not its control hull.
+    const curve = net([{ start: 0, end: 1, tangentStart: { x: 0, y: 6 }, tangentEnd: { x: 0, y: 6 } }], [[0, 0], [10, 0]]);
+    const s = scene(); s.ir.nodes[10].props.vectorNetwork = withValue(s, curve); s.task = taskOf(s.ir);
+    rowOf(s, 10)[ROW.h] = 4.5;
+    check(judge(s).geometry.classified.vectorBox === 1, "a curved segment's box is its exact extremum (4.5 px), classified");
+    rowOf(s, 10)[ROW.h] = 6;
+    const J = judge(s);
+    check(J.geometry.sizeVisibleOver1 === 1 && !J.geometry.classified.vectorBox, "a box at the control hull (6 px) is not the drawing's: counted", show(J.geometry));
+  }
+  {
+    // A geometry-built vector whose path starts at (1, 1): Figma moves its origin there.
+    const s = scene(); s.ir.nodes[3].props.fillGeometry = withValue(s, [{ windingRule: "NONZERO", data: "M 1 1 L 9 1 L 5 7 Z" }]); s.task = taskOf(s.ir);
+    const w = rowOf(s, 3); w[ROW.absX] = 41; w[ROW.absY] = 31; w[ROW.w] = 8; w[ROW.h] = 6;
+    const J = judge(s);
+    check(J.geometry.visibleOver05 === 0 && J.geometry.sizeVisibleOver05 === 0 && J.geometry.classified.vectorBox === 1,
+      "a geometry vector whose origin Figma moved to its path's corner keeps its drawing in place: classified", show(J.geometry));
+  }
+  {
+    // Turned 90°: the drawing's box is placed by the record's own transform.
+    const s = scene(); s.ir.nodes[2].props.vectorNetwork = withValue(s, flatNet); s.ir.nodes[2].props.relativeTransform = [0, -1, 50, 1, 0, 10]; s.task = taskOf(s.ir);
+    const w = rowOf(s, 2); w[ROW.absX] = 46; w[ROW.absY] = 10; w[ROW.w] = 10; w[ROW.h] = 4;
+    const J = judge(s);
+    check(J.geometry.visibleOver05 === 0 && J.geometry.classified.vectorBox === 1 && J.geometry.worst.some((x) => x.i === 2 && x.dx === 4),
+      "a turned vector's drawing is placed by its transform (4 px from Pixso's box corner, classified)", show(J.geometry));
+  }
+  {
+    // A native boolean: its stored result is the drawing; a box that is not the result's is counted.
+    const s = scene(); rowOf(s, 8)[ROW.w] = 28;
+    const J = judge(s);
+    check(J.geometry.sizeVisibleOver1 === 1 && !J.geometry.classified.vectorBox, "a boolean whose box is not its stored result's is counted", show(J.geometry));
+    const s2 = scene(); s2.ir.nodes[8].props.oracleFillGeometry = withValue(s2, [{ windingRule: "NONZERO", data: "M 0 0 L 28 0 L 28 20 L 0 20 Z" }]); s2.task = taskOf(s2.ir);
+    rowOf(s2, 8)[ROW.w] = 28;
+    check(judge(s2).geometry.classified.vectorBox === 1, "a boolean whose stored result is narrower than Pixso's box: classified");
+    const s3 = scene(); rowOf(s3, 1)[ROW.h] = 12;
+    check(judge(s3).geometry.sizeVisibleOver1 === 1, "a RECTANGLE is never vectorBox: its size is written");
+  }
+}
 
 // ============================================================================================
 // 3. VERIFY on a scene built in the double by direct figma.* calls (independent of part B)
@@ -562,19 +617,6 @@ function bundleWith(D, host, irFiles) {
 // 4. countLines: the scratch node, the arithmetic, and (later) Figma's text through B and E
 // ============================================================================================
 const realFiles = () => Object.fromEntries(readdirSync(IR_SRC_DIR).filter((f) => f.endsWith(".js")).map((f) => [f, readFileSync(join(IR_SRC_DIR, f), "utf8")]));
-// A stand-in for part B's IR.writeTextProps, used only while text.js is still the P0 stub: the one
-// writer's order (fontName, characters, the text props, textAutoResize last), no ranges.
-const STAND_IN_TEXT = [
-  "IR.writeTextProps = function (ctx, node, rec) {",
-  "  var f = ctx.prop(rec, 'fontName');",
-  "  if (ctx.S.fonts[f.family + '|' + f.style] === 'sub') f = ctx.task.settings.fallbackFont;",
-  "  node.fontName = { family: f.family, style: f.style };",
-  "  node.characters = ctx.prop(rec, 'characters');",
-  "  node.fontSize = ctx.prop(rec, 'fontSize');",
-  "  node.lineHeight = ctx.prop(rec, 'lineHeight');",
-  "  node.paragraphSpacing = ctx.prop(rec, 'paragraphSpacing');",
-  "  node.textAutoResize = ctx.prop(rec, 'textAutoResize');",
-  "};"].join("\n");
 // A toy text model over the double: each character is 0.6 x fontSize wide, words do not matter, a
 // paragraph takes ceil(chars x charWidth / width) lines, AUTO's line is FACTOR[family] x fontSize.
 const FACTOR = { Inter: 1.2, Roboto: 2 };
@@ -616,16 +658,15 @@ const textRec = (i, props) => ({ i, parent: i === 0 ? -1 : 0, guid: "8:" + (i + 
   props: paint(Object.assign({ relativeTransform: T6(0, 0), width: 100, height: 20, characters: "aaaaaaaaaa", fontName: 1, fontSize: 10, textAutoResize: "NONE", lines: 3 }, props)) });
 {
   const probeIR = bundleWith(makeDouble(), defaultHost());
-  const bReal = !probeIR.writeTextProps.notInThisBuild;
+  check(typeof probeIR.writeTextProps === "function" && !probeIR.writeTextProps.notInThisBuild, "part B's IR.writeTextProps is in the bundle");
   const files = realFiles();
-  if (!bReal) files["text.js"] = STAND_IN_TEXT;
   const D = makeDouble();
   for (const f of [{ family: "Inter", style: "Regular" }, { family: "Roboto", style: "Regular" }]) await D.figma.loadFontAsync(f);
   const figma = toyText(D);
   const host = defaultHost(); host.phase = D.setPhase;
   const B = loadPluginBundle({ figma, host, sources: { irFiles: files } });
   const IR = B.PXF_IR;
-  const label = bReal ? "part B's writeTextProps" : "a stand-in writer (part B's is a stub)";
+  const label = "part B's writeTextProps";
   const recs = [
     textRec(0, { lineHeight: 3 }),                                                                   // 60 px of text in 25: 3 lines of 14
     textRec(1, { lineHeight: 4 }),                                                                   // 150 % of 10
@@ -679,10 +720,8 @@ const textRec = (i, props) => ({ i, parent: i === 0 ? -1 : 0, guid: "8:" + (i + 
   const D2 = makeDouble();
   await D2.figma.loadFontAsync({ family: "Inter", style: "Regular" });
   const t = D2.figma.createText(); t.characters = "word ".repeat(40); t.textAutoResize = "NONE"; t.resize(20, 1); t.textAutoResize = "HEIGHT";
-  const eReal = t.height > 1;
-  if (!bReal) pend("B", "countLines through part B's IR.writeTextProps (the stand-in above checks the mechanics; F re-runs this)");
-  if (!eReal) pend("E", "countLines against part E's text model in the double (F re-runs this)");
-  if (bReal && eReal) {
+  check(t.height > 1, "part E's text model wraps a long text in a narrow HEIGHT box");
+  {
     const IR2 = bundleWith(D2, defaultHost());
     const tk = textTask([textRec(0, { lineHeight: 3, characters: "word word word word word word word word", lines: 1 })], [{ family: "Inter", style: "Regular" }]);
     const c = IR2.makeCtx(D2.figma, tk, { id: "c3" });
@@ -697,5 +736,5 @@ const textRec = (i, props) => ({ i, parent: i === 0 ? -1 : 0, guid: "8:" + (i + 
 }
 
 console.log("");
-console.log(failed ? failed + " verify/judge check" + (failed === 1 ? "" : "s") + " FAILED" : "all verify/judge checks pass" + (pending ? " (" + pending + " pending on other parts)" : ""));
+console.log(failed ? failed + " verify/judge check" + (failed === 1 ? "" : "s") + " FAILED" : "all verify/judge checks pass");
 process.exit(failed ? 1 : 0);

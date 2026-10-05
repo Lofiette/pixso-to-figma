@@ -45,6 +45,14 @@
 //                      the widened texts under its task root, and vertically at most 0.5 px
 //     insideHalfPixel  0.5 < dp <= 1 under an auto-layout ancestor whose INSIDE stroke has unequal
 //                      sides and stays out of the layout (strokesIncludedInLayout false)
+//     vectorBox        (part F) a record built as a VECTOR or BOOLEAN_OPERATION, whose box Figma takes
+//                      from its drawing (the builder never resizes one, docs/M1.md §6 B): the row's box
+//                      equals the IR drawing's box within 1 px, position and size. The IR drawing is
+//                      the record's build source (vectorNetwork, every segment and its curve; or
+//                      fillGeometry), or a boolean's oracleFillGeometry (its stored result); its box in
+//                      the record's own space, placed by the expected transform. A record with no
+//                      drawing is not classified. Where Pixso's box and its drawing differ, the drawing
+//                      is what G9 and this check hold to; a drawn shift is still counted.
 //   Every other visible delta counts: visibleOver05 (dp > 0.5), visibleOver1 (dp > 1, gate G6),
 //   sizeVisibleOver05, sizeVisibleOver1 (gate G7), maxSizeVisible. worst lists the records with a
 //   delta over 0.5 px, visible or not, largest first, at most 30.
@@ -84,13 +92,14 @@
 // codes      the task's (read-stage) notes, the build report's codes, and the judge's own:
 //   ROOT_NOT_FOUND per root not found, VECTOR_GEOMETRY_DIFFERS, TEXT_LINES_DIFFER.
 import { CODE, VECTOR_TYPES, ORACLE_CLASSES } from "./schema.mjs";
-import { geometryBounds, unionBounds, inBox } from "./pathgeom.mjs";
+import { geometryBounds, pathBounds, unionBounds, inBox } from "./pathgeom.mjs";
 
 // A VERIFY row, by position (docs/M1.md §6 C):
 //   [i, builtType, childCount, effVisible, absX, absY, w, h, sides|null, vec|null, lines|null]
 //   sides  the four Figma side weights [top, right, bottom, left] (or [w, w, w, w] for a type without
 //          sides) when the node's strokes are not empty
-//   vec    [[winding, x0, y0, x1, y1], …] per Figma fill path, root-relative absolute coordinates
+//   vec    [[winding, x0, y0, x1, y1, subpaths], …] per Figma fill path (pathgeom geometryBounds),
+//          root-relative absolute coordinates; a 5-element entry (no subpath count) counts as 1 subpath
 //   lines  { lines, approx } from countLines, TEXT only
 export const ROW = Object.freeze({ i: 0, builtType: 1, childCount: 2, effVisible: 3, absX: 4, absY: 5, w: 6, h: 7,
   sides: 8, vec: 9, lines: 10, length: 11 });
@@ -204,6 +213,32 @@ const boxOfEntry = (e) => ({ x0: e[1], y0: e[2], x1: e[3], y1: e[4] });
 const near = (a, b) => Math.abs(a.x0 - b.x0) <= VEC_TOL + EPS && Math.abs(a.y0 - b.y0) <= VEC_TOL + EPS &&
   Math.abs(a.x1 - b.x1) <= VEC_TOL + EPS && Math.abs(a.y1 - b.y1) <= VEC_TOL + EPS;
 const unionOf = (entries) => unionBounds(entries.filter((e) => subpaths(e) > 0).map(boxOfEntry));
+// A number as a Figma path takes it (no exponent).
+const pn = (n) => { const v = Number(Number(n).toFixed(6)); return String(Object.is(v, -0) ? 0 : v); };
+// The box of an IR drawing in the record's own space: its build source (a network's segments, curves
+// included, and any vertex no segment uses; or fillGeometry), or a boolean's stored result. null when
+// it has none.
+function drawingBox(p, value) {
+  const boxes = [];
+  if (p.vectorNetwork !== undefined) {
+    const net = value(p.vectorNetwork) || {};
+    const vs = Array.isArray(net.vertices) ? net.vertices : [], used = new Set();
+    for (const s of Array.isArray(net.segments) ? net.segments : []) {
+      const a = vs[s.start], b = vs[s.end];
+      if (!a || !b) continue;
+      used.add(s.start); used.add(s.end);
+      const ts = s.tangentStart || { x: 0, y: 0 }, te = s.tangentEnd || { x: 0, y: 0 };
+      const curved = ts.x || ts.y || te.x || te.y;
+      const d = "M " + pn(a.x) + " " + pn(a.y) + (curved ? " C " + pn(a.x + ts.x) + " " + pn(a.y + ts.y) + " " + pn(b.x + te.x) + " " + pn(b.y + te.y) : " L") + " " + pn(b.x) + " " + pn(b.y);
+      for (const x of pathBounds(d)) boxes.push(x);
+    }
+    vs.forEach((v, k) => { if (!used.has(k) && v && isFinite(v.x) && isFinite(v.y)) boxes.push({ x0: v.x, y0: v.y, x1: v.x, y1: v.y }); });
+  } else {
+    const g = p.fillGeometry !== undefined ? p.fillGeometry : p.oracleFillGeometry;
+    if (g !== undefined) for (const e of geometryBounds(value(g))) if (subpaths(e) > 0) boxes.push(boxOfEntry(e));
+  }
+  return unionBounds(boxes);
+}
 
 function argError(m) { return new TypeError("judgeTask: " + m); }
 
@@ -350,6 +385,16 @@ export function judgeTask(args) {
     if (!sizeOk) {
       const W = widenAtOrBelow(t.i);
       if (W > 0 && dw >= -SIDE_TOL && dw <= W + SIDE_TOL && Math.abs(dh) <= HALF) { sizeOk = true; classes.add("textWidened"); }
+    }
+    if ((!posOk || !sizeOk) && (w[ROW.builtType] === "VECTOR" || w[ROW.builtType] === "BOOLEAN_OPERATION")) {
+      const d = drawingBox(p, value);
+      if (d) {
+        const dW = d.x1 - d.x0, dH = d.y1 - d.y0;
+        const at = boxOf(mul(exp.get(t.i), [[1, 0, d.x0], [0, 1, d.y0]]), dW, dH);
+        if (Math.hypot(w[ROW.absX] - at.x0, w[ROW.absY] - at.y0) <= POS + EPS && Math.abs(w[ROW.w] - dW) <= POS + EPS && Math.abs(w[ROW.h] - dH) <= POS + EPS) {
+          posOk = true; sizeOk = true; classes.add("vectorBox");
+        }
+      }
     }
     for (const c of classes) add(G.classified, c);
     if (!posOk) {
