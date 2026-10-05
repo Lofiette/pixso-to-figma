@@ -42,10 +42,15 @@
 //   row's (builder4.js:804-852), dp = |(dx, dy)|; size: ds = max(|dw|, |dh|). A hidden record goes to
 //   hiddenOver05 / sizeHiddenOver05 and classified.hidden, never to a visible count. A visible delta
 //   is CLASSIFIED (counted in classified[class], in no visible count) when it is explained:
-//     textWidened      decision 9: the record is a text the build widened (build.textWidened) or an
-//                      ancestor of one, its width grew by at most the widening below it and its height
-//                      moved at most 0.5 px; or it moved horizontally by at most the total widening of
-//                      the widened texts under its task root, and vertically at most 0.5 px
+//     textWidened      decision 9, with each widening as the build coded it (TEXT_WIDENED_TO_SOURCE_LINES
+//                      "widened by X px", never Figma's measured width): the record is a widened text
+//                      or an ancestor of one, its width grew by at most the widening below it (+0.5)
+//                      and its height moved at most 0.5 px; or it moved horizontally by at most what
+//                      a widening can push it, and vertically at most 0.5 px. A widened text may move
+//                      left by its own widening (its CENTER or RIGHT shift); any record may move
+//                      by the widening of the texts in its sibling subtrees wherever it, or an
+//                      ancestor in the task, sits in an auto-layout flow (not ABSOLUTE). A record no
+//                      flow links to a widened text gets nothing
 //     insideHalfPixel  0.5 < dp <= 1 under an auto-layout ancestor whose INSIDE stroke has unequal
 //                      sides and stays out of the layout (strokesIncludedInLayout false)
 //     vectorBox        (part F) a record built as a VECTOR or BOOLEAN_OPERATION, whose box Figma takes
@@ -336,14 +341,32 @@ export function judgeTask(args) {
     rootsAll.every((i) => found.get(i) === true);
 
   // ---- geometry
+  // Decision 9: each widened text's widening as the build reported it (TEXT_WIDENED_TO_SOURCE_LINES,
+  // "widened by X px"), never Figma's measured width, so a text grown past it is a size finding.
   const widened = new Set(B && Array.isArray(B.textWidened) ? B.textWidened : []);
   const widenBy = new Map();
-  for (const i of widened) if (row.has(i) && irRec.has(i)) widenBy.set(i, Math.max(0, row.get(i)[ROW.w] - P(i).width));
-  const widenUnderRoot = new Map();
-  for (const [i, w] of widenBy) widenUnderRoot.set(rootOf.get(i), (widenUnderRoot.get(rootOf.get(i)) || 0) + w);
-  const widenAtOrBelow = (i) => {
+  for (const c of coded) {
+    if (c.code !== CODE.TEXT_WIDENED_TO_SOURCE_LINES || !widened.has(c.i) || !irRec.has(c.i) || widenBy.has(c.i)) continue;
+    const m = /widened by (-?[0-9]+(?:[.][0-9]+)?) px/.exec(String(c.detail || ""));
+    if (m) widenBy.set(c.i, Math.max(0, Number(m[1])));
+  }
+  // The widening at or below each IR record (its IR ancestry, so a split root's parent outside the
+  // task counts the pieces of this task under it).
+  const under = new Map();
+  for (const [t, w] of widenBy) for (let a = t; a >= 0 && ir.nodes[a]; a = ir.nodes[a].parent) under.set(a, (under.get(a) || 0) + w);
+  const widenAtOrBelow = (i) => under.get(i) || 0;
+  const flowParent = (a) => {
+    const r = ir.nodes[a], p = r ? r.parent : -1;
+    if (!(p >= 0) || !ir.nodes[p] || (r.props || {}).layoutPositioning === "ABSOLUTE") return false;
+    const lm = (ir.nodes[p].props || {}).layoutMode;
+    return lm === "HORIZONTAL" || lm === "VERTICAL";
+  };
+  // How far a widened text can push record i: for each ancestor-or-self a of i in the task that sits
+  // in an auto-layout flow, the widening of the texts in its sibling subtrees (under a's parent, not
+  // under a). Nothing for a record no flow links to a widened text.
+  const pushOf = (i) => {
     let s = 0;
-    for (const [t, w] of widenBy) for (let a = t; rec.has(a); a = rec.get(a).parent) if (a === i) { s += w; break; }
+    for (let a = i; rec.has(a); a = ir.nodes[a].parent) if (flowParent(a)) s += widenAtOrBelow(ir.nodes[a].parent) - widenAtOrBelow(a);
     return s;
   };
   const insideHalf = (i) => {
@@ -382,13 +405,15 @@ export function judgeTask(args) {
     const classes = new Set();
     let posOk = dp <= HALF, sizeOk = ds <= HALF;
     if (!posOk) {
-      const W = widenUnderRoot.get(rootOf.get(i)) || 0;
-      if (W > 0 && Math.abs(dx) <= W + SIDE_TOL && Math.abs(dy) <= HALF) { posOk = true; classes.add("textWidened"); }
+      // The widened text itself moves left by its CENTER (half) or RIGHT (all) shift; anything pushed
+      // through a flow moves by at most the widening in its sibling subtrees, either way.
+      const own = widenBy.get(i) || 0, push = pushOf(i);
+      if ((own > 0 || push > 0) && dx >= -(own + push) - HALF && dx <= push + HALF && Math.abs(dy) <= HALF) { posOk = true; classes.add("textWidened"); }
       else if (dp <= POS && insideHalf(i)) { posOk = true; classes.add("insideHalfPixel"); }
     }
     if (!sizeOk) {
       const W = widenAtOrBelow(i);
-      if (W > 0 && dw >= -SIDE_TOL && dw <= W + SIDE_TOL && Math.abs(dh) <= HALF) { sizeOk = true; classes.add("textWidened"); }
+      if (W > 0 && dw >= -SIDE_TOL && dw <= W + HALF && Math.abs(dh) <= HALF) { sizeOk = true; classes.add("textWidened"); }
     }
     if ((!posOk || !sizeOk) && (builtType === "VECTOR" || builtType === "BOOLEAN_OPERATION")) {
       const d = drawingBox(p, value);

@@ -64,6 +64,7 @@ const notesOn = (i) => IR.notes.filter((n) => n.node === i).map((n) => n.code);
 // runs after a build task and may change Figma; opts.refuse(task) makes the plugin throw on a task.
 async function runOnce(label, opts) {
   const o = opts || {};
+  const IR = o.ir || READ.ir;
   const { bytes, table } = await resolveImages(IR, PIX, { links: ["archive"], verdicts: VERDICTS });
   const plan = planM1(IR, STATS, Object.assign({ m1Scope: "default", images: table, runId: RUN }, o.maxChars ? { maxChars: o.maxChars } : {}));
   const D = makeDouble({ verdicts: VERDICTS });
@@ -266,6 +267,27 @@ const flowParent = (n) => { const p = IR.nodes[n.parent]; return !!p && (p.props
   check(S.tasks[1].state === "failed" && S.tasks[1].codes[CODE.BUILD_FAILED] === 1 && S.tasks[2].state === "skipped" &&
     failedGates(run).indexOf("G1 tasks") >= 0 && failedGates(run).indexOf("G2 roots") >= 0 && /^FAIL/.test(run.gates.verdict),
     "a refused task fails G1 (BUILD_FAILED, its verify skipped) and the verdict is FAIL", show(failedGates(run)));
+}
+
+{
+  // Review F1: a widened text excuses only what its widening can push. The fixture's one-line badge
+  // label made longer than its box, so the build widens it (decision 9); every gate still passes.
+  // Moved 25 px right after the build, the label fails G6: a LEFT text never moves right of its
+  // place, whatever its widening (the old rule excused any move up to the root's total widening).
+  const ir = JSON.parse(JSON.stringify(IR));
+  const label = ir.nodes.findIndex((n) => n.type === "TEXT" && n.props.lines === 1 && n.parent >= 0 && ir.nodes[n.parent].type === "COMPONENT");
+  ir.nodes[label].props.characters = "New arrivals for the whole week";
+  const run = await runOnce("widened", { ir });
+  const coded = run.reports.filter((x) => x.op === "build").flatMap((x) => x.rep.coded).filter((c) => c.code === CODE.TEXT_WIDENED_TO_SOURCE_LINES && c.i === label);
+  check(validate(ir).ok && coded.length === 1 && failedGates(run).length === 0 && run.totals.geometry.classified.textWidened >= 1,
+    "a text the build widens (" + (coded[0] && coded[0].detail) + ") is classified textWidened, and every gate passes", show([failedGates(run), run.totals.geometry]));
+  const moved = await runOnce("widened-move", { ir, plant: (no, env) => {
+    const id = env.ctxs.get(no).S.nodes[String(label)];
+    if (!env.plan.tasks.find((t) => t.taskNo === no).nodes.some((n) => n.i === label)) return;
+    const n = env.D.node(id);
+    n.relativeTransform = [[1, 0, n.relativeTransform[0][2] + 25], [0, 1, n.relativeTransform[1][2]]];
+  } });
+  check(failedGates(moved).join() === "G6 position", "the widened text moved 25 px after the build fails G6", show([failedGates(moved), moved.totals.geometry.worst.slice(0, 2)]));
 }
 
 // ============================================================================================

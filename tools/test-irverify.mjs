@@ -217,11 +217,18 @@ const sumMap = (m) => Object.values(m).reduce((a, b) => a + b, 0);
   J = judge(s3);
   check(J.geometry.visibleOver05 === 1 && !J.geometry.classified.insideHalfPixel, "nor does it explain a half pixel outside such a frame");
 }
-{
+// A widened text in a scene whose root is a horizontal flow (the widening as the build codes it).
+const widenScene = (by) => {
   const s = scene();
+  s.ir.nodes[0].props.layoutMode = "HORIZONTAL";
   s.build.textWidened = [4];
+  s.build.coded.push({ code: schema.CODE.TEXT_WIDENED_TO_SOURCE_LINES, i: 4, detail: "widened by " + by + " px, 2 -> 1 lines, moved " + by + " px" });
+  return s;
+};
+{
+  const s = widenScene(6);
   rowOf(s, 4)[ROW.w] += 6; rowOf(s, 4)[ROW.absX] -= 6;      // a RIGHT-aligned text widened by 6 px
-  rowOf(s, 5)[ROW.absX] += 6;                                 // a sibling pushed by it
+  rowOf(s, 5)[ROW.absX] += 6;                                 // a flow sibling pushed by it
   rowOf(s, 0)[ROW.w] += 6;                                    // its ancestor grew by it
   let J = judge(s);
   check(J.geometry.visibleOver05 === 0 && J.geometry.sizeVisibleOver05 === 0 && J.geometry.classified.textWidened === 3,
@@ -232,6 +239,32 @@ const sumMap = (m) => Object.values(m).reduce((a, b) => a + b, 0);
   const s2 = scene(); rowOf(s2, 5)[ROW.absX] += 6;
   J = judge(s2);
   check(J.geometry.visibleOver1 === 1 && !J.geometry.classified.textWidened, "without a widened text the same shift is a finding");
+}
+{
+  // Review F1/S2: the excuse reaches only what a widening can push through a flow.
+  const s = scene();     // the root is not a flow: nothing is pushed
+  s.build.textWidened = [4];
+  s.build.coded.push({ code: schema.CODE.TEXT_WIDENED_TO_SOURCE_LINES, i: 4, detail: "widened by 40 px, 2 -> 1 lines" });
+  rowOf(s, 4)[ROW.w] += 40;
+  rowOf(s, 1)[ROW.absX] += 30;                                // an unrelated rectangle 30 px off
+  let J = judge(s);
+  check(J.geometry.visibleOver1 === 1 && J.geometry.worst.some((w) => w.i === 1 && w.dx === 30) && J.geometry.classified.textWidened === 1,
+    "a node no flow links to a widened text is not excused by the widening (a rectangle 30 px off beside a text widened 40 px)", show(J.geometry));
+  const s2 = widenScene(200);
+  s2.ir.nodes[15].props.layoutMode = "NONE";
+  rowOf(s2, 4)[ROW.w] += 200;
+  rowOf(s2, 16)[ROW.absX] -= 180;                             // in a sibling frame of no flow of its own, moved left
+  J = judge(s2);
+  check(J.geometry.visibleOver1 === 0 && J.geometry.classified.textWidened === 2,
+    "inside a flow sibling's subtree a push is excused in either direction (CENTER alignment moves earlier siblings too)", show(J.geometry));
+  const s3 = widenScene(6);
+  rowOf(s3, 4)[ROW.w] += 9; rowOf(s3, 0)[ROW.w] += 9;         // Figma's text 3 px wider than the build's widening
+  J = judge(s3);
+  check(J.geometry.sizeVisibleOver1 === 2, "a text grown past the widening the build coded is a size finding, and so is its parent", show(J.geometry));
+  const s4 = widenScene(6);
+  s4.build.coded = s4.build.coded.filter((c) => c.code !== schema.CODE.TEXT_WIDENED_TO_SOURCE_LINES);
+  rowOf(s4, 4)[ROW.w] += 6;
+  check(judge(s4).geometry.sizeVisibleOver1 === 1, "a widening the build did not code excuses nothing");
 }
 {
   const s = scene(); rowOf(s, 1)[ROW.sides] = [2, 0, 2, 1];
