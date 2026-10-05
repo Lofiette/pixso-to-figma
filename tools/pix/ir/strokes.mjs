@@ -87,14 +87,15 @@ function alignOf(cx, n, type) {
   let box = null;
   for (const p of n.strokePaddingPath || []) { const b = cx.blob(p.blobIndex); if (b && b.length) box = unionBox(box, blobPointBounds(b)); }
   const W = n.size ? n.size.x : NaN, H = n.size ? n.size.y : NaN, w = weightOf(n);
-  let decided = def;
+  // Counted by outcome; one decided with no path to measure is counted under "default:" + the type's.
+  let decided = def, key = "default:" + def;
   if (box && isFin(W) && isFin(H) && w > 0) {
     const reach = Math.max(-box.x0, -box.y0, box.x1 - W, box.y1 - H);
     const cand = [["INSIDE", 0], ["CENTER", w / 2], ["OUTSIDE", w]];
     cand.sort((a, b) => Math.abs(reach - a[1]) - Math.abs(reach - b[1]));
-    decided = cand[0][0];
+    decided = key = cand[0][0];
   }
-  cx.stats.strokeAlignDecided[decided] = (cx.stats.strokeAlignDecided[decided] || 0) + 1;
+  cx.stats.strokeAlignDecided[key] = (cx.stats.strokeAlignDecided[key] || 0) + 1;
   return decided;
 }
 
