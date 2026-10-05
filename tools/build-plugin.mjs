@@ -3,12 +3,21 @@
 //   node build-plugin.mjs --out <dir> [--token <64 hex>]
 //   node build-plugin.mjs --out figma-plugin/dist --force      (only with no runner alive; see below)
 //
-// No dependencies and no bundler: the plugin is three sources pasted together in a fixed order.
+// No dependencies and no bundler: the plugin is its sources pasted together in a fixed order.
 //
 //   dist/code.js  = the builder (tools/builder4.js BUILDER_SRC) as an ordinary async function, PXF_BUILD
 //                 + the verifier (VERIFIER_SRC) the same way, PXF_VERIFY
+//                 + the IR layer (docs/M1.md §5.3), irBundleSource():
+//                     tools/ir/props.mjs, schema.mjs, task.mjs and pathgeom.mjs, each with `export `
+//                     removed and wrapped in an IIFE that returns its exports: PXF_PROPS, PXF_SCHEMA,
+//                     PXF_TASK, PXF_PATHGEOM
+//                     figma-plugin/src/ir/common.js as it stands (it defines PXF_IR)
+//                     every other figma-plugin/src/ir/*.js, sorted by name, as (function (IR) { … })(PXF_IR);
 //                 + figma-plugin/src/code.js, the host, inside its own function scope
 //   dist/ui.html  = figma-plugin/src/ui.html with this run's key written in, or none, and the build id
+//
+// The IR files never yield through a timer (P2): a figma-plugin/src/ir/*.js that names setTimeout or
+// setInterval outside a comment is refused here, before anything is written.
 //
 // The builder and the verifier used to travel inside every job payload as text and be compiled in
 // Figma from that text. Now they are part of the plugin, compiled once when Figma loads it, and a
@@ -26,7 +35,7 @@
 // and must never be committed: it holds the key of the last run. For the same reason the command line
 // will not write figma-plugin/dist unasked: a live runner's key is in there, and replacing it would
 // make that runner's next plugin window ask for the code.
-import { readFileSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, realpathSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { Script } from "node:vm";
 import { dirname, join, resolve } from "node:path";
@@ -57,6 +66,69 @@ export function forbiddenIn(text) {
 }
 
 const lineCount = (s) => s.split(NL).length - 1;
+
+// ---------- the IR layer ----------
+export const IR_MODULES = Object.freeze([["props.mjs", "PXF_PROPS"], ["schema.mjs", "PXF_SCHEMA"], ["task.mjs", "PXF_TASK"],
+  ["pathgeom.mjs", "PXF_PATHGEOM"]]);
+export const IR_SRC_DIR = join(PLUGIN_DIR, "src", "ir");
+const TOOLS_IR = join(HERE, "ir");
+
+// Code lines only: whole-line comments (// and the * lines of a block comment) may name what the code avoids.
+const codeLines = (src) => src.split(/\r?\n/).filter((l) => !/^\s*(\/\/|\/?\*)/.test(l)).join(NL);
+export function irLint(src) {
+  const hits = [];
+  const code = codeLines(src);
+  if (/\bsetTimeout\b/.test(code)) hits.push("setTimeout");
+  if (/\bsetInterval\b/.test(code)) hits.push("setInterval");
+  return hits;
+}
+
+// One import-free module as an IIFE that returns its exports. Only `export const` and `export
+// function` at the start of a line are understood; anything else is refused rather than guessed at.
+export function moduleAsIIFE(name, global, src) {
+  const text = src.replace(/\r\n/g, NL);
+  if (/^\s*import\b/m.test(codeLines(text))) throw new Error("build-plugin: tools/ir/" + name + " imports; a bundled module imports nothing");
+  const names = [];
+  for (const line of text.split(NL)) {
+    if (!/^export\b/.test(line)) continue;
+    const m = /^export (?:const|function) ([A-Za-z_$][\w$]*)/.exec(line);
+    if (!m) throw new Error("build-plugin: tools/ir/" + name + " has an export the bundler does not understand: " + line.slice(0, 60));
+    names.push(m[1]);
+  }
+  const body = text.replace(/^export (const|function) /gm, "$1 ");
+  return ["var " + global + " = (function () {", "\"use strict\";", body, "return { " + names.map((k) => k + ": " + k).join(", ") + " };", "})();", ""].join(NL);
+}
+
+// The IR layer's text, and where each source starts in it (0-based line), for the compile line map.
+// `sources.irModules` ({ "schema.mjs": text, … }) replaces a module; `sources.irFiles`
+// ({ "common.js": text, … }) replaces the whole figma-plugin/src/ir listing (tests).
+export function irBundle(sources = {}) {
+  const parts = [];
+  let text = "";
+  const add = (label, chunk, srcOffset) => {
+    parts.push([lineCount(text) + srcOffset, label, 1]);
+    text += chunk;
+  };
+  for (const [name, global] of IR_MODULES) {
+    const src = sources.irModules && sources.irModules[name] !== undefined ? sources.irModules[name] : readFileSync(join(TOOLS_IR, name), "utf8");
+    add("tools/ir/" + name, "// ---- tools/ir/" + name + " ----" + NL + moduleAsIIFE(name, global, src), 3);
+  }
+  let files;
+  if (sources.irFiles) files = Object.keys(sources.irFiles).map((f) => [f, sources.irFiles[f]]);
+  else files = readdirSync(IR_SRC_DIR).filter((f) => f.endsWith(".js")).map((f) => [f, readFileSync(join(IR_SRC_DIR, f), "utf8")]);
+  const common = files.find((f) => f[0] === "common.js");
+  if (!common) throw new Error("build-plugin: figma-plugin/src/ir/common.js is missing; it defines PXF_IR");
+  const rest = files.filter((f) => f[0] !== "common.js").sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  for (const [f, src] of [common].concat(rest)) {
+    const hits = irLint(src);
+    if (hits.length) throw new Error("build-plugin: figma-plugin/src/ir/" + f + " uses " + hits.join(" and ") + "; the IR layer never yields through a timer (docs/M1.md §5.3, P2)");
+    const body = src.replace(/\r\n/g, NL);
+    if (f === "common.js") add("figma-plugin/src/ir/" + f, "// ---- figma-plugin/src/ir/common.js ----" + NL + body + NL, 1);
+    else add("figma-plugin/src/ir/" + f, "// ---- figma-plugin/src/ir/" + f + " ----" + NL + "(function (IR) {" + NL + body + NL + "})(PXF_IR);" + NL, 2);
+  }
+  return { text, parts, files: [common[0]].concat(rest.map((f) => f[0])) };
+}
+export function irBundleSource(sources = {}) { return irBundle(sources).text; }
 // The line of builder4.js on which a template-literal source begins, so a compile error can name the
 // line a person would open; 1 (the string's own first line) when the source was given in `sources`.
 function fileLine(given, marker) {
@@ -94,12 +166,13 @@ export function generatePlugin({ token = "", sources = {} } = {}) {
   const verifier = sources.verifier !== undefined ? sources.verifier : VERIFIER_SRC;
   const host = sources.host !== undefined ? sources.host : readFileSync(join(PLUGIN_DIR, "src", "code.js"), "utf8");
   const uiSrc = sources.ui !== undefined ? sources.ui : readFileSync(join(PLUGIN_DIR, "src", "ui.html"), "utf8");
+  const ir = irBundle(sources);
 
   // Names the plugin build in its own log, in every report, and in every request the window makes, so
   // the runner can tell a window that runs what it wrote from one that runs something older. A hash
   // of the inputs, not a time: the same sources give the same build.
   const version = createHash("sha256").update(builder).update(NL).update(verifier).update(NL)
-    .update(host).update(NL).update(uiSrc).digest("hex").slice(0, 12);
+    .update(ir.text).update(NL).update(host).update(NL).update(uiSrc).digest("hex").slice(0, 12);
 
   const head = [
     "// GENERATED by tools/build-plugin.mjs from tools/builder4.js and figma-plugin/src/code.js. Do not edit:",
@@ -118,11 +191,13 @@ export function generatePlugin({ token = "", sources = {} } = {}) {
     "let RESULT = null;",
     "",
   ].join(NL);
-  const mid2 = ["", "return RESULT;", "}", "", "// ---- figma-plugin/src/code.js ----", "(function () {", ""].join(NL);
+  const mid2 = ["", "return RESULT;", "}", "", "// ---- the IR layer (tools/build-plugin.mjs irBundleSource) ----", ""].join(NL);
+  const mid3 = ["// ---- figma-plugin/src/code.js ----", "(function () {", ""].join(NL);
   const tail = ["", "})();", ""].join(NL);
-  const code = head + builder + mid1 + verifier + mid2 + host + tail;
+  const code = head + builder + mid1 + verifier + mid2 + ir.text + mid3 + host + tail;
   // Where each source starts in the generated file, for the compile error's line number.
-  const bAt = lineCount(head) + 1, vAt = bAt + lineCount(builder + mid1), hAt = vAt + lineCount(verifier + mid2);
+  const bAt = lineCount(head) + 1, vAt = bAt + lineCount(builder + mid1), irAt = vAt + lineCount(verifier + mid2);
+  const hAt = irAt + lineCount(ir.text + mid3);
 
   for (const [slot, what] of [[TOKEN_SLOT, "key"], [VERSION_SLOT, "build id"]]) {
     const n = uiSrc.split(slot).length - 1;
@@ -137,8 +212,9 @@ export function generatePlugin({ token = "", sources = {} } = {}) {
   }
   compileOrThrow(code, "dist/code.js", [
     [bAt, "tools/builder4.js (BUILDER_SRC)", fileLine(sources.builder, "export const BUILDER_SRC = ")],
-    [vAt, "tools/builder4.js (VERIFIER_SRC)", fileLine(sources.verifier, "export const VERIFIER_SRC = ")],
-    [hAt, "figma-plugin/src/code.js", 1]]);
+    [vAt, "tools/builder4.js (VERIFIER_SRC)", fileLine(sources.verifier, "export const VERIFIER_SRC = ")]]
+    .concat(ir.parts.map(([at, name, line]) => [irAt + at, name, line]))
+    .concat([[hAt, "figma-plugin/src/code.js", 1]]));
   const a = ui.indexOf("<script>"), b = ui.lastIndexOf("</script>");
   if (a < 0 || b < a) throw new Error("build-plugin: src/ui.html has no <script> block");
   // The script's first line is the <script> line itself; the generated header is one line more.

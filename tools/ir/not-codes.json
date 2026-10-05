@@ -1,0 +1,4 @@
+{
+  "comment": "UPPER_SNAKE words in docs/REWRITE.md that are Pixso or Figma enum values, not reason codes. tools/test-ir.mjs reads this list; part F edits it (docs/M1.md §9).",
+  "notCodes": ["FOREGROUND_BLUR", "LAYER_BLUR", "SPACE_BETWEEN", "SPACE_EVENLY"]
+}

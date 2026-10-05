@@ -25,13 +25,56 @@
 // it would pair and build with that, silently. So a different build gets 409 — before the key and
 // before /pair, and without spending a pairing try — and the window asks to be closed and reopened.
 // The build id is a hash of the plugin's public sources: not a secret, and 409 reveals nothing else.
+//
+// Liveness (docs/REWRITE.md §6, docs/M1.md §6 E). A job posted with opts.liveness and opts.ceilingMs
+// (the IR path's tasks) is watched by its progress counter, not by the heartbeat: the plugin posts
+// { t: "progress", id, done } whenever its main thread completes a chunk or a pass, the window
+// forwards it as POST /alive?id=<job>&done=<n>, and only a larger n for the pending job counts as an
+// advance (so does the window fetching the job's payload or one of its images: that is the job moving
+// too). After warnMs without an advance the runner says so, once per stall; after failMs without one,
+// or once ceilingMs has passed since the job was posted, post() rejects with code PLUGIN_STALLED
+// (e.resumable: the task is failed, and a re-run resumes it). A heartbeat (/alive with no count) keeps
+// the old "is the window there" signal and never extends a task.
+//
+// The image transport. A job's images cross the window as base64 text by default; "binary" sends them
+// as Uint8Array slices of at most 4 MB. tools/double/verdicts.json P4 decides the default once the live
+// probe has run (transport "binary"); a job may name its own (job.imageTransport).
 import { createServer } from "node:http";
 import { randomBytes, randomInt, timingSafeEqual, createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { CODE } from "./ir/schema.mjs";
 
 // The only kinds of job the plugin runs (figma-plugin/src/code.js); anything else is refused here
 // before it is queued, and refused again there.
-export const JOB_KINDS = Object.freeze(["build", "verify", "clean", "render", "probe"]);
+export const JOB_KINDS = Object.freeze(["build", "verify", "clean", "render", "probe", "ir"]);
 const MAX_PAIR_TRIES = 5;
+
+// The shape of post()'s opts, or what is wrong with it (null when it is fine or absent).
+export function checkPostOpts(opts) {
+  if (opts === undefined || opts === null) return null;
+  if (typeof opts !== "object" || Array.isArray(opts)) return "opts must be an object";
+  for (const k of Object.keys(opts)) if (["liveness", "ceilingMs", "onProgress"].indexOf(k) < 0) return "unknown option " + JSON.stringify(k);
+  const pos = (v) => typeof v === "number" && isFinite(v) && v > 0;
+  if (opts.liveness !== undefined) {
+    const l = opts.liveness;
+    if (!l || typeof l !== "object" || !pos(l.warnMs) || !pos(l.failMs) || Object.keys(l).some((k) => k !== "warnMs" && k !== "failMs")) return "liveness is { warnMs, failMs }, both positive";
+    if (l.warnMs >= l.failMs) return "liveness.warnMs must be below failMs";
+  }
+  if (opts.ceilingMs !== undefined && !pos(opts.ceilingMs)) return "ceilingMs must be a positive number";
+  if (opts.onProgress !== undefined && typeof opts.onProgress !== "function") return "onProgress must be a function";
+  return null;
+}
+
+export const IMAGE_TRANSPORTS = Object.freeze(["base64", "binary"]);
+// The transport P4 chose, from tools/double/verdicts.json; base64 while P4 is pending.
+export function defaultImageTransport() {
+  try {
+    const v = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "double", "verdicts.json"), "utf8"));
+    return v.probes.P4.verdicts.transport === "binary" ? "binary" : "base64";
+  } catch (e) { return "base64"; }
+}
 
 export function newSecrets() {
   return { token: randomBytes(32).toString("hex"), pairCode: String(randomInt(0, 1000000)).padStart(6, "0") };
@@ -63,6 +106,16 @@ export function startJobServer(port = 3778, opts = {}) {
   const warn = opts.log || ((m) => console.log(m));
   const pluginVersion = opts.pluginVersion ? String(opts.pluginVersion) : "";
   const extraOrigin = process.env.PX_ALLOW_ORIGIN || "";
+  const transport = IMAGE_TRANSPORTS.indexOf(opts.imageTransport) >= 0 ? opts.imageTransport : defaultImageTransport();
+  // The liveness state of the job being watched: { id, at (last advance), done, warned, onProgress }.
+  let live = null;
+  const advance = (id, done) => {
+    if (!live || !pending || live.id !== id || pending.id !== id) return;
+    if (done === undefined) { live.at = Date.now(); live.warned = false; return; }
+    if (!(done > live.done)) return;
+    live.done = done; live.at = Date.now(); live.warned = false;
+    if (live.onProgress) { try { live.onProgress(done, id); } catch (e) {} }
+  };
   let hosts = null;                // filled in once the real port is known
   let boundPort = port;
   let pairTries = 0, paired = false;
@@ -284,6 +337,7 @@ export function startJobServer(port = 3778, opts = {}) {
     const pm = url.pathname.match(/^\/job\/([^/]+)\/payload$/);
     if (pm && req.method === "GET") {
       if (!pending || pending.id !== pm[1]) { cors(); res.writeHead(404); return res.end("no such job"); }
+      advance(pm[1]);
       cors("text/plain; charset=utf-8");
       return res.end(payload);
     }
@@ -292,6 +346,7 @@ export function startJobServer(port = 3778, opts = {}) {
     if (im && req.method === "GET") {
       const b = blobs.get(im[1]);
       if (!b) { cors(); res.writeHead(404); return res.end("no such image"); }
+      if (pending) advance(pending.id);
       // Bytes used to cross into the plugin as a JS array of numbers, one element per byte. An
       // object carrying 102 MB of photographs turned that into an array of a hundred million
       // numbers and the sandbox never came back — the build sat there until the watchdog freed
@@ -310,6 +365,9 @@ export function startJobServer(port = 3778, opts = {}) {
     // closed window look identical from here.
     if (url.pathname === "/alive" && req.method === "POST") {
       lastPoll = Date.now();
+      // The progress counter, when the window forwards one; a bare heartbeat carries none.
+      const doneQ = url.searchParams.get("done"), idQ = url.searchParams.get("id");
+      if (doneQ !== null && idQ !== null && /^\d{1,12}$/.test(doneQ)) advance(idQ, Number(doneQ));
       req.resume();
       cors("application/json");
       return res.end(JSON.stringify({ ok: true }));
@@ -398,22 +456,36 @@ export function startJobServer(port = 3778, opts = {}) {
     lastPoll: () => lastPoll,
     // Queue one job and resolve when the plugin reports back. One job at a time by construction:
     // the plugin only ever sees the job that is pending right now.
-    post(job, payloadText, images = new Map(), timeoutMs = 20 * 60 * 1000) {
+    //
+    // opts (docs/M1.md §5.3, the IR path) = { liveness: { warnMs, failMs }, ceilingMs, onProgress(done, id) }:
+    // warn after warnMs without an advancing progress counter, fail with PLUGIN_STALLED after failMs
+    // without one or once ceilingMs has passed (the header says what an advance is); onProgress hears
+    // every advance of the counter.
+    post(job, payloadText, images = new Map(), timeoutMs = 20 * 60 * 1000, opts = undefined) {
       if (!job || !JOB_KINDS.includes(job.kind)) {
         return Promise.reject(new Error("refused: unknown job kind " + JSON.stringify(job && job.kind) +
           " — the plugin runs only " + JOB_KINDS.join(", ")));
       }
       if (typeof payloadText !== "string") return Promise.reject(new Error("a job's payload is JSON text"));
+      const badOpts = checkPostOpts(opts);
+      if (badOpts) return Promise.reject(new Error("post: " + badOpts));
       const id = "j" + (++seq);
+      if (job.imageTransport !== undefined && IMAGE_TRANSPORTS.indexOf(job.imageTransport) < 0) {
+        return Promise.reject(new Error("post: imageTransport is " + IMAGE_TRANSPORTS.join(" or ")));
+      }
       pending = { id, kind: job.kind, rootNodeId: job.rootNodeId || null,
                   cleanupRootId: job.cleanupRootId || null, page: job.page || null,
-                  pageBg: job.pageBg || null, images: [...images.keys()] };
+                  pageBg: job.pageBg || null, images: [...images.keys()], imageTransport: job.imageTransport || transport,
+                  // The plugin window sets its own watchdog above this, so the runner's PLUGIN_STALLED
+                  // (resumable) always fires before the window gives the job up as a failed build.
+                  ceilingMs: opts && opts.ceilingMs > 0 ? opts.ceilingMs : null };
       payload = payloadText;
       blobs = images;
       // Wake anything that is holding a /job request rather than making it wait out its own timeout.
       while (waiters.length) waiters.shift()();
       return new Promise((resolve, reject) => {
         waiting.set(id, { resolve, reject });
+        watchLiveness(id, opts, reject);
         // Say something long before the timeout: a silent twenty-minute wait tells nobody whether
         // the plugin is working, closed, or wedged.
         let warned = 0, everSeen = lastPoll > 0;
@@ -461,5 +533,39 @@ export function startJobServer(port = 3778, opts = {}) {
       });
     },
     close() { try { server.close(); } catch {} try { server6.close(); } catch {} },
+    // The image transport a job gets unless it names one.
+    imageTransport: transport,
   };
+
+  // Liveness for one job (see the header): warn once per stall, fail on failMs without an advance or
+  // once the ceiling passes. Checked often enough to keep a short limit honest, at most once a second.
+  function watchLiveness(id, o, reject) {
+    if (!o || (!o.liveness && o.ceilingMs === undefined)) { if (live && live.id !== id) live = null; return; }
+    const t0 = Date.now();
+    live = { id, at: t0, done: -1, warned: false, onProgress: o.onProgress || null };
+    const limits = [o.liveness && o.liveness.warnMs, o.liveness && o.liveness.failMs, o.ceilingMs].filter((v) => v > 0);
+    const tick = Math.max(5, Math.min(1000, Math.floor(Math.min.apply(null, limits) / 4)));
+    const fail = (why, kind) => {
+      clearInterval(timer);
+      if (!waiting.has(id)) return;
+      waiting.delete(id);
+      if (pending && pending.id === id) { pending = null; payload = ""; blobs = new Map(); }
+      if (live && live.id === id) live = null;
+      const e = new Error(CODE.PLUGIN_STALLED + ": job " + id + " " + why + "; the task is failed and a re-run resumes it");
+      e.code = CODE.PLUGIN_STALLED; e.resumable = true; e.stall = kind;
+      warn("  " + e.message);
+      reject(e);
+    };
+    const timer = setInterval(() => {
+      if (!waiting.has(id) || !live || live.id !== id) { clearInterval(timer); return; }
+      const now = Date.now(), quiet = now - live.at;
+      if (o.ceilingMs !== undefined && now - t0 > o.ceilingMs) return fail("passed its ceiling of " + Math.round(o.ceilingMs / 1000) + " s", "ceiling");
+      if (!o.liveness) return;
+      if (quiet > o.liveness.failMs) return fail("made no progress for " + Math.round(quiet / 1000) + " s (the limit is " + Math.round(o.liveness.failMs / 1000) + " s)", "stalled");
+      if (quiet > o.liveness.warnMs && !live.warned) {
+        live.warned = true;
+        warn("  waiting: job " + id + " has made no progress for " + Math.round(quiet / 1000) + " s; it fails at " + Math.round(o.liveness.failMs / 1000) + " s without any");
+      }
+    }, tick);
+  }
 }

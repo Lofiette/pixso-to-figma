@@ -88,8 +88,9 @@ check("the other root fields come back, every builtin type among them", () => {
 });
 check("the schema read from the file is the one written", () => { deepStrictEqual(pix.schema.defs, defs); });
 check("the archive holds what was written, the schema deflated", () => {
-  deepStrictEqual(pix.entries.map((e) => e.name), ["pixso.binary", "VERSION", FIXTURE_DOC_NAME, hashHex(fx.image.hash) + ".png"]);
-  deepStrictEqual(pix.entries.map((e) => e.method), [8, 0, 0, 0]);
+  deepStrictEqual(pix.entries.map((e) => e.name), ["pixso.binary", "VERSION", FIXTURE_DOC_NAME, hashHex(fx.image.hash) + ".png",
+    hashHex(fx.jpeg.hash) + ".png", hashHex(fx.mismatch.name) + ".png"]);
+  deepStrictEqual(pix.entries.map((e) => e.method), [8, 0, 0, 0, 0, 0]);
 });
 check("the document header is read", () => {
   deepStrictEqual([pix.document.name, pix.document.version, pix.document.tag], [FIXTURE_DOC_NAME, 1, "compress:zstd"]);
@@ -112,7 +113,7 @@ const page = byName("Page 1"), internal = byName("Internal Only Canvas");
 check("siblings follow their positions by plain string order, not file order", () => {
   const sorted = kids.get(guidKey(page.guid)).map((n) => n.name);
   const stored = pix.nodes.filter((n) => n.parentIndex && guidKey(n.parentIndex.guid) === guidKey(page.guid)).map((n) => n.name);
-  deepStrictEqual(sorted, ["Card instance", "Button instance", "Styled", "Badge instance", "Unsupported widget"]);
+  deepStrictEqual(sorted, ["Card instance", "Button instance", "Styled", "Badge instance", "Unsupported pattern"]);
   if (stored.join() === sorted.join()) throw new Error("the fixture stores them in order, so this proves nothing");
   return sorted.join(" < ");
 });
@@ -129,14 +130,14 @@ check("the state group's variants name their axes in different orders", () => {
 });
 check("every variant carries unnamed BOOL aliases of the set's own property ids", () => {
   const set = byName("Button");
-  const roots = set.componentPropDefs;
+  const roots = set.componentPropDef;
   if (!roots.every((d) => d.name) || roots.map((d) => d.type).join() !== [E.ComponentPropType.TEXT, E.ComponentPropType.BOOL].join()) return false;
   for (const v of kids.get(guidKey(set.guid))) {
-    deepStrictEqual(v.componentPropDefs.map((d) => guidKey(d.id)), roots.map((d) => guidKey(d.id)));
-    if (!v.componentPropDefs.every((d) => d.name === "" && d.type === E.ComponentPropType.BOOL)) return false;
+    deepStrictEqual(v.componentPropDef.map((d) => guidKey(d.id)), roots.map((d) => guidKey(d.id)));
+    if (!v.componentPropDef.every((d) => d.name === "" && d.type === E.ComponentPropType.BOOL)) return false;
   }
   const inst = byName("Button instance");
-  deepStrictEqual(inst.componentPropAssignments.map((a) => guidKey(a.defID)), roots.map((d) => guidKey(d.id)));
+  deepStrictEqual(inst.componentPropAssignment.map((a) => guidKey(a.defID)), roots.map((d) => guidKey(d.id)));
 });
 check("a component with a nested instance and a swapped one", () => {
   const card = byName("Card");
@@ -163,10 +164,11 @@ check("a local style resolves; a dangling reference and the two no-style values 
   if (byGuid.has(guidKey(d.inheritFillStyleID))) return false;
   return guidKey(d.inheritFillStyleID) + " dangles; " + guidKey(d.inheritStrokeStyleID) + " and " + guidKey(d.inheritEffectStyleID) + " mean none";
 });
-check("one image paint has its PNG in the archive and one does not", () => {
+check("four image paints: a PNG and a JPEG in the archive, an entry filed under another name, one missing", () => {
   const hashes = pix.nodes.flatMap((n) => (n.fillPaints || []).filter((p) => p.type === E.PaintType.IMAGE).map((p) => hashHex(p.image.hash)));
   const present = hashes.filter((h) => pix.images.has(h));
-  return present.length === 1 && hashes.length === 2 && !pix.images.has(hashHex(fx.missingHash));
+  return present.length === 3 && hashes.length === 4 && !pix.images.has(hashHex(fx.missingHash)) &&
+    pix.images.get(hashHex(fx.jpeg.hash)).data()[0] === 0xff;
 });
 check("the vector's path blob decodes to the expected SVG path", () => {
   const star = byName("Star");
@@ -181,7 +183,18 @@ check("the vector's network blob is where vectorData points", () => {
   const net = pix.blobs[star.vectorData.vectorNetworkBlob];
   return net.length > 12 && net.readUInt32LE(0) === 3 && net.readUInt32LE(4) === 3 && net.readUInt32LE(8) === 1;
 });
-check("a node type the builder does not support", () => byName("Unsupported widget").type === E.NodeType.WIDGET);
+check("a node type the IR has no type for", () => byName("Unsupported pattern").type === E.NodeType.RADIAL_PATTERN);
+check("no DOCUMENT node is stored, as in real files: pages hang from a guid that is not in the file", () => {
+  const roots = pix.nodes.filter((n) => !n.parentIndex || !byGuid.has(guidKey(n.parentIndex.guid)));
+  deepStrictEqual(roots.map((n) => n.type).sort(), [E.NodeType.CANVAS, E.NodeType.CANVAS, E.NodeType.DIRECTORY].sort());
+  return roots.length + " roots";
+});
+check("the fixture's schema numbers enums as Pixso's does, and the renumbered variant does not", () => {
+  if (E.NodeType.FRAME !== 5 || E.NodeType.SECTION !== 104 || E.StrokeAlign.INSIDE !== 2) return false;
+  const r = makeFixture("renumbered");
+  const RE = Object.fromEntries(r.defs.filter((d) => d.kind === 0).map((d) => [d.name, Object.fromEntries(d.fields.map((f) => [f.name, f.value]))]));
+  return RE.NodeType.FRAME !== E.NodeType.FRAME && RE.StrokeAlign.INSIDE !== E.StrokeAlign.INSIDE;
+});
 check("a library copy carries publishFile, publishID, componentKey and overrideKey", () => {
   const b = byName("Badge");
   const layer = kids.get(guidKey(b.guid))[0];
@@ -432,27 +445,29 @@ try {
   const has = (label, line) => (lines.includes(line) ? ok("pix-open prints " + label) : fail("pix-open does not print " + label + ": " + JSON.stringify(line)));
   if (res.status !== 0) fail("pix-open failed on the fixture: " + res.stderr);
   else {
-    has("the archive", "  entries 4, images 1, document " + pix.document.size + " bytes");
+    has("the archive", "  entries 6, images 3, document " + pix.document.size + " bytes");
     has("the schema", "  schema: " + defs.length + " definitions");
     has("the document size", "  document decompresses to " + fx.message.length + " bytes");
     const decoded = lines.find((l) => l.startsWith("  decoded "));
-    if (/^  decoded 30 nodes and 4 blobs in \d+\.\ds — every byte consumed$/.test(decoded || "")) ok("pix-open prints the node and blob counts");
+    if (/^  decoded 89 nodes and 31 blobs in \d+\.\ds — every byte consumed$/.test(decoded || "")) ok("pix-open prints the node and blob counts");
     else fail("pix-open's decode line: " + JSON.stringify(decoded));
-    // 8 rectangles counting the style node; 6 symbols: 2 variants, 2 icons, Card, Badge; 5 instances:
-    // 3 on the page, 2 nested in Card.
-    has("the type counts", "  RECTANGLE 8, SYMBOL 6, INSTANCE 5, TEXT 3, CANVAS 2, FRAME 2, VECTOR 2, DOCUMENT 1, WIDGET 1");
+    // 30 rectangles counting the style node; 6 symbols: 2 variants, 2 icons, Card, Badge; 5 instances:
+    // 3 on the page, 2 nested in Card; the M1 cases bring the rest.
+    has("the type counts", "  RECTANGLE 30, VECTOR 11, TEXT 7, FRAME 6, SYMBOL 6, BOOLEAN_OPERATION 6, INSTANCE 5, ELLIPSE 4, CANVAS 3, LINE 3, GROUP 2, DIRECTORY 1, RADIAL_PATTERN 1, CONNECTLINE 1, SECTION 1, STAR 1, REGULAR_POLYGON 1");
     // Page 1: 5 children; as stored 1+1+5+1+1 = 9; expanded, each instance adds its derived entries:
     // Card instance 1+5, Button instance 1+2, Styled 5, Badge instance 1+1, widget 1 = 17.
     has("the user page", '    "Page 1"                                5 top-level        9 /      17');
-    // Internal: set 7, Star 2, Heart 2, Card 4 (6 expanded: each nested icon adds one), Badge 2, style 1.
-    has("the internal canvas", '    "Internal Only Canvas"                  6 top-level       18 /      20');
-    has("the geometry", "  geometry: 2 nodes carry paths, 3 blobs decoded, 0 refused");
-    has("the box check", "  the path's own bounding box matches the node's size on 2 of 2 — a second field of the format agreeing with the first");
-    check("pix-open --out writes 30 nodes, the image and two shapes", () => {
+    // Internal: set 7, Star 2, Heart 2, Card 4 (6 expanded: each nested icon adds one), Badge 2, two styles.
+    has("the internal canvas", '    "Internal Only Canvas"                  7 top-level       19 /      21');
+    has("the page inside the directory", '    "M1 cases"                             28 top-level       57 /      57');
+    has("the geometry", "  geometry: 19 nodes carry paths, 22 blobs decoded, 0 refused");
+    // The one that does not: the vector whose size is NaN.
+    has("the box check", "  the path's own bounding box matches the node's size on 14 of 15 — a second field of the format agreeing with the first");
+    check("pix-open --out writes 89 nodes, the images and 15 shapes", () => {
       const out = join(tmp, "out");
-      if (JSON.parse(readFileSync(join(out, "nodes.json"), "utf8")).length !== 30) return false;
+      if (JSON.parse(readFileSync(join(out, "nodes.json"), "utf8")).length !== 89) return false;
       deepStrictEqual(readFileSync(join(out, "img", hashHex(fx.image.hash) + ".png")), fx.image.png);
-      return readdirSync(join(out, "svg")).length === 2;
+      return readdirSync(join(out, "img")).length === 3 && readdirSync(join(out, "svg")).length === 15;
     });
   }
   const badImage = join(tmp, "bad-image.pix");
@@ -460,8 +475,8 @@ try {
   const r3 = run(badImage, "--out", join(tmp, "out-bad"));
   const errs = r3.stderr.split(/\r?\n/).filter(Boolean);
   if (r3.status === 1 && errs.length === 1 && /^PIX_CORRUPT: .*CRC/.test(errs[0]) &&
-      r3.stdout.split(/\r?\n/).some((l) => l.endsWith("img/ (0 of 1 images, 1 refused), svg/ (2 shapes)")) &&
-      existsSync(join(tmp, "out-bad", "nodes.json")) && readdirSync(join(tmp, "out-bad", "img")).length === 0) {
+      r3.stdout.split(/\r?\n/).some((l) => l.endsWith("img/ (2 of 3 images, 1 refused), svg/ (15 shapes)")) &&
+      existsSync(join(tmp, "out-bad", "nodes.json")) && readdirSync(join(tmp, "out-bad", "img")).length === 2) {
     ok("pix-open --out skips an image that fails its CRC with one PIX_CORRUPT line, writes the rest and exits 1");
   } else fail("pix-open --out on a damaged image: exit " + r3.status + ", stderr " + JSON.stringify(r3.stderr.slice(0, 300)));
   const r4 = run(badImage);

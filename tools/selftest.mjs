@@ -77,6 +77,14 @@ try {
   line("runner never started", { sawDone: false, phase: "idle" }, "Раннер не запущен", "wait");
   line("stopped by an error", { link: "up", phase: "stopped" }, "остановлен", "off");
 
+  // ---------- the watchdog waits past the runner's ceiling ----------
+  // A K-sized task at 30 ms a node has a 542 s ceiling; the window's 8-minute floor would report it
+  // lost first, as a plain failed build, while the sandbox is still working (review S10).
+  if (typeof ctx.watchdogMinutes !== "function") fail("the plugin window has no watchdogMinutes");
+  else if (ctx.watchdogMinutes(0) !== 8 || ctx.watchdogMinutes(542000) !== 12 || ctx.watchdogMinutes(401540) !== 9) {
+    fail("the watchdog: " + [ctx.watchdogMinutes(0), ctx.watchdogMinutes(542000), ctx.watchdogMinutes(401540)].join(", ") + " minutes");
+  } else ok("the window's watchdog is 8 minutes, or the job's ceiling plus 2 minutes when that is longer");
+
   // ---------- the scope the button carries ----------
   // The runner cannot ask what to migrate after the press — by then it is already busy in Pixso —
   // so the choice has to travel with the press or it is lost.
@@ -157,6 +165,18 @@ try { execFileSync(process.execPath, [join(HERE, "test-mcp.mjs")], { stdio: "inh
 
 // ---------- 8. the plugin's fixed commands and the runner's door: tools/test-plugin.mjs ----------
 try { console.log(""); execFileSync("node", [join(HERE, "test-plugin.mjs")], { stdio: "inherit" }); } catch (e) { fail("tools/test-plugin.mjs failed (exit " + e.status + ")"); }
+
+// ---------- 9. M1: the frozen contract, then each part's tests (docs/M1.md §5.5) ----------
+// test-m1-contract.mjs is part P0's and stays. The others start as stubs that print "pending: part X"
+// and exit 0; each part replaces only its own file, in this order: the reader (A), the double (E),
+// the builder (B), verify and the judge (C), the planner and acceptance (D), end to end (F).
+const M1_TESTS = [["test-m1-contract.mjs", "P0"], ["test-irread.mjs", "A"], ["test-double.mjs", "E"], ["test-irbuild.mjs", "B"],
+  ["test-irverify.mjs", "C"], ["test-pixrun.mjs", "D"], ["test-m1-e2e.mjs", "F"]];
+for (const [t, part] of M1_TESTS) {
+  console.log("");
+  try { execFileSync(process.execPath, [join(HERE, t)], { stdio: "inherit" }); }
+  catch (e) { fail("tools/" + t + " (part " + part + ") failed (exit " + e.status + ")"); }
+}
 
 console.log("");
 console.log(failed ? failed + " check" + (failed === 1 ? "" : "s") + " FAILED" : "all checks pass");

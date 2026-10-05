@@ -1,0 +1,40 @@
+{
+  "comment": "Probe verdicts the headless double reproduces (docs/M1.md §5.4, §6 E, D9). Results already recorded come from docs/REWRITE.md §9 (2026-10-04); P4, P8 and P19B are pending until the live session (docs/M1.md §10 step 1), after which part F records them here from tools/plugin-probe.mjs. A case is ok, throw, drop, empty or pending; the P19B geometry cases may also read differs (Figma did something else; the probe result says what), and P4 has its own values: transport base64 or binary, sameHash ok or differs. tools/double/behaviour.mjs says what each value means to the double and which value it assumes while a case is pending; a recorded value it does not model refuses to build the double, so the double changes first. The image chain treats throw and drop as move to the next link. Counts and behaviours only: no file names, no keys.",
+  "version": 1,
+  "probes": {
+    "P2": {
+      "status": "run 2026-10-04",
+      "verdicts": { "performanceNow": "absent", "timerYieldWhenMinimised": "throttled", "getNodeByIdAsyncWhenMinimised": "ok", "windowRoundTripWhenMinimised": "ok" },
+      "timings": { "setTimeout0MedianMsFront": 8, "setTimeout0MedianMsMinimised": 997, "getNodeByIdAsyncMs": 0.02, "windowRoundTripMs": 0.05 }
+    },
+    "P13": {
+      "status": "run 2026-10-04",
+      "verdicts": {
+        "instanceSublayer": {
+          "fills": "ok", "strokes": "ok", "strokeWeightPerSide": "ok", "strokeAlign": "ok", "effects": "ok", "opacity": "ok",
+          "blendMode": "ok", "name": "ok", "cornerRadii": "ok", "visible": "ok", "fontSize": "ok", "textAutoResize": "ok",
+          "relativeTransform": "throw", "constraints": "throw", "resize": "drop", "resizeWithoutConstraints": "drop"
+        }
+      }
+    },
+    "P19": {
+      "status": "run 2026-10-04",
+      "verdicts": { "perVertexCornerRadius": "ok", "perRegionFills": "ok", "openRegionlessNetworkFilled": "empty" }
+    },
+    "P4": { "status": "pending", "verdicts": { "transport": "pending", "sameHash": "pending" } },
+    "P8": {
+      "status": "pending",
+      "verdicts": { "png4096": "pending", "png4097": "pending", "longStrip": "pending", "jpegAsPng": "pending",
+        "webpAsPng": "pending", "unknownHash": "pending" }
+    },
+    "P19B": {
+      "status": "pending",
+      "verdicts": { "autoClosedLoop": "pending", "offsetNetwork": "pending", "regionlessFill": "pending",
+        "fillGeometryAgainstNetwork": "pending", "booleanUnion": "pending", "booleanSubtract": "pending",
+        "booleanIntersect": "pending", "booleanExclude": "pending", "nestedBoolean": "pending",
+        "singleOperandUnion": "pending", "lineOperand": "pending", "strokedOperand": "pending",
+        "frameMask": "pending", "maskInGroupAsFrame": "pending", "flattenedWithStroke": "pending",
+        "arcFullSweep": "pending" }
+    }
+  }
+}

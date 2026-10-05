@@ -1,9 +1,9 @@
-# The intermediate representation (IR), version 1
+# The intermediate representation (IR), version 2
 
-Status: **M0, format of record.** Specified from `docs/REWRITE.md` §4–§8, the plan of record (on branch
-`claude/rewrite-plan` until it is merged). The validator is `tools/ir/schema.mjs`, its tests are
-`tools/test-ir.mjs`, and the complete example at the end of this file is one of those tests. Every value in
-this document is synthetic.
+Status: **M1, format of record.** Specified from `docs/REWRITE.md` §4–§8 and, for version 2, `docs/M1.md` §2 and
+§5.1. The validator is `tools/ir/schema.mjs` with the per-type prop tables of `tools/ir/props.mjs`, called through
+`tools/ir/validate.mjs`; its tests are `tools/test-ir.mjs`, and the complete example at the end of this file is one of
+those tests. Every value in this document is synthetic. §15 lists what changed from version 1.
 
 ## 1. What it is
 
@@ -21,9 +21,17 @@ MCP reader ──┘
 - **It speaks Figma.** Property names, units and enums are Figma's plugin-API ones. The readers translate Pixso's:
   - colours 0–255 become 0–1, percent spacing stored as a fraction becomes a percent, a miter stored as an angle
     becomes Figma's miter limit;
-  - SPACE_EVENLY becomes SPACE_BETWEEN, XOR becomes EXCLUDE, image STRETCH becomes CROP, FOREGROUND_BLUR becomes
-    LAYER_BLUR;
-  - a missing per-corner radius is 0.
+  - SPACE_EVENLY becomes SPACE_BETWEEN (a single visible flow child follows the `spaceEvenlySingle` setting), XOR
+    becomes EXCLUDE, image STRETCH becomes CROP, FOREGROUND_BLUR becomes LAYER_BLUR;
+  - a missing per-corner radius is 0;
+  - the winding rule ODD becomes EVENODD, and mask type OUTLINE becomes VECTOR;
+  - RESIZE_TO_FIT and the child sizing modes become Figma's sizing (`primaryAxisSizingMode`,
+    `counterAxisSizingMode`, `layoutSizingHorizontal`, `layoutSizingVertical`);
+  - `autoLayoutAbsolutePos` becomes `layoutPositioning: "ABSOLUTE"`, `itemReverseDraw` becomes `itemReverseZIndex`,
+    `includeBorders` becomes `strokesIncludedInLayout`, and `frameMaskDisabled` becomes `clipsContent: false`;
+  - a minimum or maximum size stored as NaN or FLT_MAX is unset, and is left out;
+  - `count` becomes `pointCount` and `starInnerScale` becomes `innerRadius`;
+  - a colour's `a` becomes the paint's `opacity`.
 - **It says what it knows.** The header's capabilities declare what the source provides. The builder, the kit-map
   resolver and the verifier use only what is declared, and the validator refuses content that the header does not
   declare.
@@ -54,11 +62,18 @@ IR is a documented format and not the channel. Tasks (at most 4 MB each) are cut
     included), radii, stroke weights, spacing and font sizes.
 - **Evidence labels** are REWRITE.md's: (C) confirmed by measurement, (I) inferred, (A) assumed until a probe or a
   real file checks it.
-- **Defaults.** A property may be left out only when its value equals the builder's default for it (today the
-  `DROP` table in `tools/pack4.mjs`). Paint lists always travel, empty ones included, because Figma's default paints
-  differ by node type.
+- **Defaults.** A property may be left out only when its value equals its entry in `DEFAULTS`
+  (`tools/ir/props.mjs`); the builder writes `DEFAULTS` explicitly wherever the prop applies to the type. The
+  `NEVER_OMIT` props are written on every record whose type has them, even at their default: `fills`, `strokes`,
+  `strokeAlign`, `strokeWeight`, `clipsContent`, `blendMode`, `textAutoResize`, `layoutMode`,
+  `primaryAxisSizingMode` and `counterAxisSizingMode`, because Figma's defaults for them differ by node type (a new
+  Figma frame's axis sizing is not the source's absent FIXED), and `characters`, `fontName`, `fontSize`,
+  `booleanOperation`, `pointCount` and `innerRadius`, which have no IR default at all. Empty paint lists travel too.
 - **Closed records.** Every record has a fixed set of keys, and an unknown key is an error, so a misspelt key cannot
-  be silently ignored. `props` and override `fields` are open sets of Figma property names in version 1.
+  be silently ignored. Since version 2 `props` are closed too: `KNOWN_PROPS` in `tools/ir/props.mjs` lists, per node
+  type, the props it may carry and the kind of each (`num`, `int`, `bool`, `str`, `enum:A|B|…`, `value`, `style`, or
+  `own` for an IR-own prop with its own rule here), and text range `fields` are closed to `RANGE_FIELDS`. Override
+  `fields` stay an open set of Figma property names until M2a.
 
 ## 3. Top level
 
@@ -82,7 +97,7 @@ Every table may be empty; `header` is required.
 | key | value |
 |---|---|
 | `format` | always `"pix2fig.ir"` |
-| `version` | `1` |
+| `version` | `2` |
 | `source` | the source snapshot |
 | `scope` | what was read |
 | `capabilities` | what the source provides |
@@ -114,8 +129,11 @@ the current IR's. `snapshotId()` in the schema module gives the string: `pix:<sh
 
 The validator enforces the first seven against the content: `overrideKey` needs `overrideKeys`, `publishID` needs
 `publishIds`, `sharedSymbolVersion` needs `symbolVersions`, `derived` needs `derivedBoxes`, `inkBounds` needs
-`inkBounds`, and an instance's `overrideBasis` needs the matching override capability. `renders` describes the source
-for the planner and has no content of its own in the IR.
+`inkBounds`, and an instance's `overrideBasis` needs the matching override capability. `renders` describes the IR's
+own source for the planner and has no content of its own in the IR: a `.pix` IR declares `false`. Live Pixso is a
+second source the planner may use beside a `.pix` (missing images, renders), and it is the planner's, not the IR's:
+the planner checks that the open file is the `.pix` (root name, page guids, a sample of node guids) before it uses
+it, and records the outcome in its own state (`docs/M1.md` D9, SOURCE_IDENTITY_MISMATCH).
 
 **`settings`.** Every policy in REWRITE.md §11, plus the mode; all keys are required.
 
@@ -127,12 +145,18 @@ for the planner and has no content of its own in the IR.
 | `deleted` | `publish`, `skip` | `--deleted` | `publish` (decision 3) |
 | `resync` | `pixso-unless-edited`, `report-only` | `--resync` | `pixso-unless-edited` (decision 8) |
 | `textFit` | `widen`, `source-box` | `--text-fit` | `widen` (decision 9) |
+| `booleans` | `auto`, `native`, `flatten` | `--booleans` | `auto` (`docs/M1.md` D5) |
+| `spaceEvenlySingle` | `between`, `center` | `--space-evenly-single` | `between` until P18 (`docs/M1.md` D14) |
 | `kitmaps` | `"default"` (the per-user folder) or the directory given | `--kitmaps` | `"default"` (decision 4) |
+
+`SETTING_DEFAULTS` in the schema holds the defaults of this table.
 
 ## 5. Pages
 
-`{ guid, name, internal }`. `internal` is `true` for Pixso's internal canvas, which holds library copies and
-soft-deleted masters. Top-level node records name their page by index.
+`{ guid, name, internal, background? }`. `internal` is `true` for Pixso's internal canvas, which holds library copies
+and soft-deleted masters. `background` is a `values` index of a fills list: the page's own paints. Top-level node
+records name their page by index. A Pixso DIRECTORY is a folder of pages, not a node: its canvases become pages and
+the folder itself is not carried.
 
 ## 6. Values
 
@@ -140,11 +164,21 @@ Repeated values are stored once in `values` and referenced by index. The interne
 (node `props`, text range `fields`, override `fields`), are:
 
 `fills`, `strokes`, `effects`, `layoutGrids`, `exportSettings`, `dashPattern`, `constraints`, `fontName`,
-`letterSpacing`, `lineHeight`, `arcData`, `vectorNetwork`, `fillGeometry`, `strokeGeometry`.
+`letterSpacing`, `lineHeight`, `arcData`, `vectorNetwork`, `fillGeometry`, `strokeGeometry`, `oracleFillGeometry`,
+`hyperlink`, `listOptions`.
 
-A value appears once (compared as canonical JSON, keys sorted), in order of first use. `fills`, `strokes`,
-`effects`, `layoutGrids`, `exportSettings`, `dashPattern`, `fillGeometry` and `strokeGeometry` point at lists; the
-others point at objects. A style's value is a `values` index too.
+A value appears once (compared as canonical JSON, keys sorted, `canonicalJSON` in the schema), in order of first use.
+`fills`, `strokes`, `effects`, `layoutGrids`, `exportSettings`, `dashPattern`, `fillGeometry`, `strokeGeometry` and
+`oracleFillGeometry` point at lists; the others point at objects. A style's value is a `values` index too.
+
+Two value shapes are checked:
+- **geometry** (`fillGeometry`, `strokeGeometry`, `oracleFillGeometry`): `[{ windingRule, data }]`, `windingRule`
+  `NONZERO` or `EVENODD`, `data` a Figma path string: commands `M`, `L`, `Q`, `C` and `Z`, every letter and number
+  separated by white space (`"M 0 0 L 10 0 L 10 10 Z"`);
+- **vector network**: `{ vertices, segments, regions }` as Figma's `VectorNetwork`: a vertex is `{ x, y,
+  strokeCap?, strokeJoin?, cornerRadius?, handleMirroring? }` (`NONE`, `ANGLE` or `ANGLE_AND_LENGTH`; Pixso's
+  RIGHT_ANGLE is stripped by the reader), a segment `{ start, end, tangentStart?, tangentEnd? }` with vertex indices,
+  a region `{ windingRule, loops, fills? }` whose loops are closed lists of segment indices.
 
 ## 7. Nodes
 
@@ -170,18 +204,52 @@ Rules:
 - a `COMPONENT_SET` record holds only `COMPONENT` records;
 - every `COMPONENT` record has an entry in `components`, and every `COMPONENT_SET` record one in `sets`;
 - a source node of a type not listed is not carried, and neither is its subtree; the loss is a
-  `NODE_TYPE_UNSUPPORTED` note.
+  `NODE_TYPE_UNSUPPORTED` note;
+- **style definitions are not node records** (the nodes Pixso keeps as the bodies of styles, with no transform):
+  styles land in M2b, and the reader counts them as not carried;
+- every record has `props`, with `relativeTransform`, `width` and `height` at least;
+- a prop is one `KNOWN_PROPS` lists for the record's type, of the kind it lists (§2); the `NEVER_OMIT` props the
+  type has are always present;
+- the Figma properties the IR expresses another way are refused: `x`, `y` and `rotation` (in `relativeTransform`),
+  the four `stroke*Weight` sides (in `strokeWeights`) and the four `*Radius` corners (in `cornerRadii`).
+
+Version 2's decisions about what a record is (`docs/M1.md` §2):
+- **Vectors (D3).** The reader decides each vector's build source, exactly one per `VECTOR` record: its
+  `vectorNetwork` (a network with a region, or with no stored fill geometry), or its stored `fillGeometry` with
+  `strokeGeometry` (a network with no region but with fill geometry, an auto-closed loop). A network record keeps the
+  stored fill geometry as `oracleFillGeometry`, which tasks never carry; a geometry record is its own oracle and
+  carries a `VECTOR_FROM_GEOMETRY`, `BOOLEAN_FLATTENED` or `SOURCE_FEATURE_UNSUPPORTED` note saying why it is built
+  from geometry. `strokeGeometry` is never a source on its own. `LINE`, `STAR`, `POLYGON` and `BOOLEAN_OPERATION`
+  are built natively and carry no build-source geometry, only, optionally, `oracleFillGeometry`. A Pixso CONNECTLINE
+  becomes a `VECTOR` from its network and a LINE with a height a `VECTOR` from its geometry, each with a
+  `SOURCE_FEATURE_UNSUPPORTED` note. Where the network and the stored geometry disagree in a known way the record has
+  a `VECTOR_ORACLE_DIFFERS` note whose detail starts with the class (`region-no-fill`, `network-bounds`,
+  `winding`).
+- **Groups (D4)** keep the type `GROUP`; the builder makes them frames with no paints and no clipping.
+- **Booleans (D5).** Under `booleans: auto` a boolean whose operands are all filled shapes stays a
+  `BOOLEAN_OPERATION` over its operands; one with an operand that only strokes (or has no geometry) is written as one
+  `VECTOR` record from its stored fill geometry with the boolean's own paints, its operands are not carried, and a
+  `BOOLEAN_FLATTENED` note gives the operation and the folded count. `native` keeps every boolean, `flatten` none. A
+  boolean with no operand and no geometry is not carried (`GEOMETRY_INVALID`).
+- **State groups (D7)** are `FRAME` records holding standalone `COMPONENT` records (`set: null`, no properties),
+  until M2a parses variants.
+- **Side strokes (D15).** No `border*Weight` field means four sides at `strokeWeight`; any field present means a
+  missing side is 0. Where the stroke-area path shows which sides Pixso draws, the reader writes `oracleSides`, and
+  where the rule and the path disagree the IR follows the path and notes `SIDE_RULE_UNPROVEN`.
+- **Section strokes (D13)** are dropped: a `SECTION` has fills only.
 
 The IR's own `props`:
 
 | prop | |
 |---|---|
-| `relativeTransform` | `[a, b, tx, c, d, ty]`, relative to the parent record (groups included); composing the chain gives Pixso's absolute transform |
-| `width`, `height` | the layout box |
-| `strokeWeights` | `[top, right, bottom, left]`, only when the sides differ |
-| `cornerRadii` | `[topLeft, topRight, bottomRight, bottomLeft]`, only when the corners differ, and then instead of `cornerRadius` |
-| `textRanges` | `[{ start, end, fields }]`: ascending, non-overlapping ranges in UTF-16 units of `characters` (Figma's indexing; the reader converts Pixso's per-code-point style ids) |
-| `lines` | the number of lines Pixso drew, from its stored baselines (decision 9) |
+| `relativeTransform` | `[a, b, tx, c, d, ty]`, relative to the parent record (groups included); composing the chain gives Pixso's absolute transform. Required |
+| `width`, `height` | the layout box, finite and at least 0. Required |
+| `strokeWeights` | `[top, right, bottom, left]`, finite and at least 0, only when the sides differ |
+| `cornerRadii` | `[topLeft, topRight, bottomRight, bottomLeft]`, finite and at least 0, only when the corners differ, and then instead of `cornerRadius` |
+| `oracleSides` | `[top, right, bottom, left]` booleans: whether Pixso's stroke-area path draws that side (D15); never in a task |
+| `oracleFillGeometry` | the stored fill geometry of a network-built `VECTOR` or a natively built vector type, a `values` index (D3); never in a task |
+| `textRanges` | `[{ start, end, fields }]`: ascending, non-overlapping ranges in UTF-16 units of `characters` (Figma's indexing; the reader converts Pixso's per-code-point style ids). No bound splits a surrogate pair; `fields` holds only what differs from the node, from `RANGE_FIELDS` |
+| `lines` | the number of lines Pixso drew, from its stored baselines (decision 9); a text with none has no `lines` and a `TEXT_LINES_UNKNOWN` note |
 | `inkBounds` | `[x, y, width, height]` of the rendered ink, in the node's own frame (capability `inkBounds`) |
 | `fillStyle`, `strokeStyle`, `textStyle`, `effectStyle`, `gridStyle` | index into `styles`, of type PAINT, PAINT, TEXT, EFFECT and GRID |
 | `componentPropertyReferences` | `{ characters \| visible \| mainComponent: property id }`, bound to TEXT, BOOLEAN and INSTANCE_SWAP properties of the enclosing definition's family |
@@ -189,8 +257,7 @@ The IR's own `props`:
 A style is referenced only when it binds: on ordinary nodes the node's own value is what Pixso draws, so the style is
 bound when its value equals the node's within 1/255 per channel. Otherwise the raw value stays, there is no
 reference, and a `STYLE_VALUE_DIFFERS` note says so. A reference that resolves nowhere is a
-`STYLE_MISSING_IN_SOURCE` note. A vector built from its stored geometry instead of its network carries `fillGeometry`
-and `strokeGeometry` and a `VECTOR_FROM_GEOMETRY` note.
+`STYLE_MISSING_IN_SOURCE` note.
 
 ## 8. Component definitions
 
@@ -232,10 +299,9 @@ the variant-local aliases newer Pixso writes.
 
 **Library identity**: `{ publishFile, publishID?, componentKey?, sharedSymbolVersion? }`.
 - `publishFile` is the library's Pixso file key and is required.
-- `publishID` is the master's guid in that library; `componentKey` is 40 lowercase hex (A: REWRITE.md shows only
-  that keys match by their 12-hex prefix, and its probe Q4 compares full keys; M1 and M2a confirm the length and
-  case on a real file, and if they differ, every real IR fails validation until this rule is corrected). At least
-  one of them is required. The kit map resolves `publishFile@publishID`; an MCP source resolves through
+- `publishID` is the master's guid in that library; `componentKey` is 40 lowercase hex: measured (C) on every
+  library copy of the three local files M1 is planned on (`docs/M1.md`: D, K and M). At least one of them is
+  required. The kit map resolves `publishFile@publishID`; an MCP source resolves through
   `componentKey`.
 - `sharedSymbolVersion` is opaque and is only compared for equality.
 - Identity is never the name: names drift.
@@ -293,9 +359,11 @@ styleKey with different values are two styles; two with the same key and value a
 
 `{ hash, present, format? }`.
 - `hash` is the SHA-1 of the bytes, 40 lowercase hex. It is the same hash in Pixso and Figma.
-- `present` says whether the bytes are in the source archive. Often they are not: then the planner's chain is MCP
-  bytes by hash (SHA-1 checked), then a Pixso render, then a counted placeholder (`IMAGE_PLACEHOLDER`), never an empty
-  fill.
+- `present` says whether the bytes are in the source archive: an archive entry named by the hash whose SHA-1 is the
+  hash. An entry whose SHA-1 differs from its name counts as missing and is noted `IMAGE_HASH_MISMATCH`, a file-level
+  note with no `node` (the entry's name, which is the hash it claims, is in the detail). Often the
+  bytes are not there: then the planner's chain is MCP bytes by hash (SHA-1 checked), then a Pixso render, then a
+  counted placeholder (`IMAGE_PLACEHOLDER`), never an empty fill.
 - `format` is the sniffed format, because some `.png` entries are JPEG or WebP: `png`, `jpeg`, `webp`, `gif` or
   `unknown`.
 
@@ -312,7 +380,14 @@ values) is listed, because every font is loaded before the first text write.
 ## 13. Notes and the reason-code vocabulary
 
 `notes`: `[{ code, node?, guid?, path?, detail? }]`. `node` is a record index; `guid` names a source node with no
-record (a rejected set, an unsupported node); `path` is a guidPath inside an instance; `detail` is free text.
+record (a rejected set, an unsupported node); `path` is a guidPath inside an instance; `detail` is free text, except
+that a `VECTOR_ORACLE_DIFFERS` detail starts with its class (`ORACLE_CLASSES` in the schema), optionally followed by
+`: ` and text, and names a network-built `VECTOR` record. An IR's notes carry **read-stage codes only**; the other
+stages go to the run's own reports.
+
+Code writes a code as `CODE.X` (the frozen map in the schema), never as a quoted string, through one helper per
+side that throws on an unknown code: the reader's `note()`, the plugin's `ctx.code()` and the runner's `count()`.
+`tools/test-ir.mjs` scans every M1 file for quoted codes and for a `CODE.X` that names no code.
 
 The same vocabulary serves IR notes and run reports, and an unknown code is an error. The **stage** says where a
 code arises: *run* codes are the run's own and go to its reports (`states.json`, the reader's errors): they stop the
@@ -337,6 +412,13 @@ from the preflight and the kit-map resolution, and *build* codes come from Figma
 | `OVERRIDE_STALE` | read | an override entry whose path is absent from `derivedSymbolData`; dropped | named here (§3) |
 | `OVERRIDE_ECHO` | read | an override field equal to the master's value; dropped | named here (§3, P9b) |
 | `NODE_TYPE_UNSUPPORTED` | read | a source node type the IR has no type for; it and its subtree are not carried | named here (§7, §8) |
+| `TEXT_LINES_UNKNOWN` | read | a buildable text with no stored baselines; it has no `lines` | named here (§3) |
+| `SOURCE_FEATURE_UNSUPPORTED` | read | a Pixso feature Figma lacks, named in the detail, which starts with the feature from an open list (CONNECTLINE, LINE with height, SECTION strokes, RIGHT_ANGLE, vibrance, hue filter, dashCap, deformationTransform, fontVariations, GRID, counter alignment <X>, strokeCap <X>, effect <TYPE>, export format <X>, paint type <X>, image paint without an image, text without a font name, inverse winding, open region loop, operand strokes under `--booleans native`, an operand without fill geometry, boolean without stored geometry, built natively, no stored geometry (a STAR or POLYGON), layoutGrids, fontVariantNumeric, fontVariantPosition, OpenType features), optionally followed by `: ` and text; dropped or converted, and counted per feature in `stats.unsupported`. The judge excuses a vector's paths only for the features that change the drawing (`judge.mjs` SFU_GEOMETRY, docs/M1.md §8.3) | named here (§7) |
+| `GEOMETRY_INVALID` | read | a NaN size, transform or path, or a boolean with no operand and no geometry; the box comes from the geometry or the children, or the node is not carried | named here (§7) |
+| `IMAGE_HASH_MISMATCH` | read | an archive image entry whose SHA-1 is not its name; treated as missing | named here (§4) |
+| `VECTOR_ORACLE_DIFFERS` | read | the stored network and the stored fill geometry disagree in a pre-registered class (`region-no-fill`, `network-bounds`, `winding`) | named here (§3) |
+| `SIDE_RULE_UNPROVEN` | read | the side rule and the stroke-area path disagree; the IR follows the path | named here (§3) |
+| `BOOLEAN_FLATTENED` | read | a boolean carried as one `VECTOR` from its stored fill geometry; its operands are not carried | named here (§7) |
 | `KIT_MAP_MISSING` | plan | no kit map is loaded for the copy's library | §5 |
 | `MASTER_NOT_IN_MAP` | plan | the kit map has no `publishFile@publishID` entry | §5 |
 | `MASTER_NOT_BUILT` | plan | the master is in the map but was not built in the Figma kit | §5 |
@@ -350,6 +432,9 @@ from the preflight and the kit-map resolution, and *build* codes come from Figma
 | `OVERRIDE_PATH_UNRESOLVED` | plan | an override path that does not translate hop by hop to a kit layer (decision 1) | §5 |
 | `OVERRIDE_VIA_LOCAL_MIRROR` | plan | warning: translated through an unpublished local duplicate of the library set, matched exactly once | §5 |
 | `OVERRIDE_FIELD_UNSUPPORTED` | plan | a field Figma refuses or ignores on instance sublayers: size, position, rotation, constraints (decision 1) | §5, P13 |
+| `OUT_OF_SCOPE` | plan | an IR record the chosen M1 scope does not build; the detail names its population | named here (§6) |
+| `FONT_MISSING` | plan | an IR font Figma does not have, listed in the preflight with "install, restart Figma, run again" | named here (§4) |
+| `SOURCE_IDENTITY_MISMATCH` | plan | the file open in Pixso is not the `.pix` (root name, page guids or the guid sample differ); the MCP image links are skipped | named here (§4) |
 | `OVERRIDE_APPLY_FAILED` | build | Figma threw while applying an override (decision 1) | §5 |
 | `INSTANCE_DEFERRED` | build | an instance built as a counted placeholder with its box (M1) | §10 |
 | `TEXT_WIDENED_TO_SOURCE_LINES` | build | a text Pixso draws on one line, widened so that Figma does too | §11, decision 9 |
@@ -357,19 +442,38 @@ from the preflight and the kit-map resolution, and *build* codes come from Figma
 | `FILTER_UNRENDERED` | build | a filter Figma lacks that Pixso could not render; the paint is built without it | named here (§4) |
 | `FONT_SUBSTITUTED` | build | a font missing in Figma; the text uses the fixed fallback font, counted per node and per style | named here (§4) |
 | `STYLE_TARGET_NOT_BUILT` | build | the style is soft-deleted and was not built; raw values kept | named here (§3) |
+| `VECTOR_NETWORK_REFUSED` | build | `setVectorNetworkAsync` threw; the vector keeps no paths | named here (§10, M1) |
+| `BOOLEAN_FALLBACK` | build | Figma threw on the boolean operation; the operands stay in a frame | named here (§6) |
+| `MASK_UNSUPPORTED` | build | Figma refused or ignored a mask on a group built as a frame; built unmasked | named here (§7) |
+| `VECTOR_GEOMETRY_DIFFERS` | build | the judge found a vector whose built paths differ from the oracle outside every excuse; a defect | named here (§10, M1) |
+| `TEXT_LINES_DIFFER` | build | the built text's line count differs from the stored baselines | named here (§10, M1) |
+| `PLUGIN_STALLED` | run | the progress counter did not advance for the fail time, or the task passed its ceiling; failed, resumable | named here (§6) |
+| `BUILD_FAILED` | run | the plugin refused the task or threw outside a counted fallback; the full error is kept | named here (§6) |
+| `ROOT_NOT_FOUND` | run | VERIFY found no root for the task, by registry or by stamp | named here (§4) |
 
 "Named here" marks a condition that REWRITE.md counts without naming. The quoted sentence is in `REASON_CODES[code].from`.
 
 ## 14. What the validator checks
 
-`validateIR(ir)` returns `{ ok, errors: [{ path, message }] }`. A path looks like `nodes[3].instance.master`, and at
-most 200 errors are listed. It checks:
+`validate(ir)` (`tools/ir/validate.mjs`, which calls `validateIR(ir, { props })` with the tables of
+`tools/ir/props.mjs`) returns `{ ok, errors: [{ path, message }] }`. A path looks like `nodes[3].instance.master`, and
+at most 200 errors are listed. `validateIR` without the tables throws: a caller that forgot them must not be told
+"ok". It checks:
 - the format and the version, and nothing else when either is wrong;
 - the header: the snapshot, the scope, eight boolean capabilities, the setting enums;
 - parent-first order, the page of each top-level record, one guid space, node types, and that no record sits under
   an instance;
 - every index: `values` (and whether it points at a list or an object), `styles` (and the style type), `sets`,
-  `pages`, note `node`;
+  `pages`, note `node`, a page's `background`;
+- props (version 2): every record has `relativeTransform` (six finite numbers) and a finite `width` and `height` of
+  at least 0; every prop is known for the type and of its kind, and the `NEVER_OMIT` ones are present; no superseded
+  prop, and no `cornerRadius` next to `cornerRadii`; `strokeWeights` and `cornerRadii` are four finite numbers of at
+  least 0 that are not all equal (four equal ones are `strokeWeight` or `cornerRadius`) and `oracleSides` four
+  booleans;
+- vectors: geometry props only on vector types (and in derived boxes); one build source per `VECTOR` record, a
+  geometry-built one with its note, `strokeGeometry` only next to `fillGeometry`, `oracleFillGeometry` only next to
+  a network or on a natively built type; geometry values and networks of the shapes in §6, with closed loops;
+- text: ranges inside `characters`, ascending, not splitting a surrogate pair, with `RANGE_FIELDS` of their kinds;
 - definitions: one entry per component and set record, axes, unique variant coordinates, members as children of
   their set, properties only on the family root, and property references bound to the right type;
 - instances: master references, swaps and INSTANCE_SWAP values resolve; assignments match the master's family and
@@ -377,7 +481,7 @@ most 200 errors are listed. It checks:
   path; and no instance sits inside its own master;
 - styles: signatures, and identity unique per styleKey;
 - images: every IMAGE paint has a hash and the hash is listed; fonts: every `fontName` is listed;
-- notes: codes from the vocabulary;
+- notes: codes from the vocabulary, read-stage only, and the `VECTOR_ORACLE_DIFFERS` class;
 - capabilities: the content claims nothing the header does not declare.
 
 It does not repeat what the reader computes and tests on its own: variant parsing, swap-aware path resolution beyond
@@ -385,32 +489,47 @@ the first hop, and the stale and echo classification (M2a).
 
 ## 15. Changing the format
 
-The version changes whenever a version 1 reader would misread or refuse the new IR. Because records are closed, a
-new key changes it too. A change updates this document, `tools/ir/schema.mjs` and `tools/test-ir.mjs` together.
+The version changes whenever a reader of the previous version would misread or refuse the new IR. Because records
+are closed, a new key changes it too. A change updates this document, `tools/ir/schema.mjs`, `tools/ir/props.mjs` and
+`tools/test-ir.mjs` together. The validator knows one version only; no IR is migrated.
+
+**Version 2** (M1, `docs/M1.md` D2), one bump for all of M1, made before any IR was written, so nothing migrates:
+- props are closed per node type (`KNOWN_PROPS`), text range fields to `RANGE_FIELDS`, and the `NEVER_OMIT` props
+  are required where they apply;
+- every record has `props` with `relativeTransform`, `width` and `height`; `x`, `y`, `rotation`, the side weights
+  and the corner radii as separate props are refused;
+- the IR-own props `oracleFillGeometry` and `oracleSides`; interned `oracleFillGeometry`, `hyperlink` and
+  `listOptions`;
+- one build source per `VECTOR` record, the shapes of geometry values and networks;
+- `pages[].background`;
+- the settings `booleans` and `spaceEvenlySingle`;
+- the codes `TEXT_LINES_UNKNOWN` to `ROOT_NOT_FOUND` in §13; IR notes carry read-stage codes only.
 
 ## 16. Complete example
 
 A design file with one page and an internal canvas. The canvas holds a library variant set copied from a library
-(two members, a TEXT property) and a soft-deleted own component with a BOOLEAN property. The page holds an instance of
-one member with a property value, a fill override and its derived box, a rectangle whose image is missing from the
-archive, and a text bound to a library paint style with one coloured range. Two notes record what the reader dropped.
-`tools/test-ir.mjs` validates this block.
+(two members, a TEXT property) and a soft-deleted own component with a BOOLEAN property. The page, with a white
+background, holds an instance of one member with a property value, a fill override and its derived box, a rectangle
+whose image is missing from the archive and whose border Pixso draws on the bottom side only, a text bound to a library
+paint style with one coloured range, and a vector built from its stored geometry. Three notes record what the reader
+dropped or decided. `tools/test-ir.mjs` validates this block.
 
 <!-- ir-example: valid -->
 ```json
 {
   "header": {
     "format": "pix2fig.ir",
-    "version": 1,
+    "version": 2,
     "source": { "kind": "pix", "sha256": "00000000000000000000000000000000000000000000000000000000000000a1", "fileKey": null, "documentName": "Synthetic example" },
     "scope": { "kind": "file" },
     "capabilities": { "authoredOverrides": true, "resolvedOverrides": false, "overrideKeys": true, "publishIds": true,
       "symbolVersions": true, "derivedBoxes": true, "inkBounds": false, "renders": false },
     "settings": { "mode": "design", "overrides": "fidelity", "drift": "link", "deleted": "publish",
-      "resync": "pixso-unless-edited", "textFit": "widen", "kitmaps": "default" }
+      "resync": "pixso-unless-edited", "textFit": "widen", "booleans": "auto", "spaceEvenlySingle": "between",
+      "kitmaps": "default" }
   },
   "pages": [
-    { "guid": "0:1", "name": "Page 1", "internal": false },
+    { "guid": "0:1", "name": "Page 1", "internal": false, "background": 0 },
     { "guid": "0:2", "name": "Internal canvas", "internal": true }
   ],
   "values": [
@@ -418,11 +537,15 @@ archive, and a text bound to a library paint style with one coloured range. Two 
     [{ "type": "SOLID", "color": { "r": 0.8, "g": 0.1, "b": 0.1 } }],
     [{ "type": "IMAGE", "scaleMode": "FILL", "imageHash": "da7a000000000000000000000000000000000001" }],
     { "family": "Inter", "style": "Regular" },
-    [{ "type": "SOLID", "color": { "r": 0.1, "g": 0.1, "b": 0.1 } }]
+    [{ "type": "SOLID", "color": { "r": 0.1, "g": 0.1, "b": 0.1 } }],
+    [],
+    [{ "windingRule": "NONZERO", "data": "M 0 0 L 24 0 L 12 20 Z" }]
   ],
   "nodes": [
     { "parent": -1, "page": 0, "guid": "1:10", "type": "FRAME", "name": "Screen",
-      "props": { "relativeTransform": [1, 0, 0, 0, 1, 0], "width": 360, "height": 200, "fills": 0 } },
+      "props": { "relativeTransform": [1, 0, 0, 0, 1, 0], "width": 360, "height": 200, "fills": 0, "strokes": 5,
+        "strokeWeight": 1, "strokeAlign": "INSIDE", "blendMode": "PASS_THROUGH", "clipsContent": true, "layoutMode": "NONE",
+        "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" } },
     { "parent": 0, "guid": "1:11", "type": "INSTANCE", "name": "Button",
       "props": { "relativeTransform": [1, 0, 16, 0, 1, 16], "width": 120, "height": 40 },
       "instance": {
@@ -434,28 +557,45 @@ archive, and a text bound to a library paint style with one coloured range. Two 
         "derived": [{ "path": ["2:24"], "size": [88, 20], "transform": [1, 0, 16, 0, 1, 10] }]
       } },
     { "parent": 0, "guid": "1:12", "type": "RECTANGLE", "name": "Photo",
-      "props": { "relativeTransform": [1, 0, 16, 0, 1, 72], "width": 100, "height": 80, "fills": 2 } },
+      "props": { "relativeTransform": [1, 0, 16, 0, 1, 72], "width": 100, "height": 80, "fills": 2, "strokes": 4,
+        "strokeWeight": 2, "strokeWeights": [0, 0, 2, 0], "oracleSides": [false, false, true, false],
+        "strokeAlign": "INSIDE", "blendMode": "PASS_THROUGH" } },
     { "parent": 0, "guid": "1:13", "type": "TEXT", "name": "Title",
       "props": { "relativeTransform": [1, 0, 132, 0, 1, 72], "width": 200, "height": 20, "characters": "Hello, world",
-        "fontName": 3, "fontSize": 16, "fills": 4, "fillStyle": 0, "lines": 1,
+        "fontName": 3, "fontSize": 16, "fills": 4, "fillStyle": 0, "strokes": 5, "strokeWeight": 1, "strokeAlign": "OUTSIDE",
+        "blendMode": "PASS_THROUGH", "textAutoResize": "WIDTH_AND_HEIGHT", "lines": 1,
         "textRanges": [{ "start": 0, "end": 5, "fields": { "fills": 1 } }] } },
     { "parent": -1, "page": 1, "guid": "2:20", "type": "COMPONENT_SET", "name": "Button",
-      "props": { "relativeTransform": [1, 0, 0, 0, 1, 0], "width": 280, "height": 40 } },
+      "props": { "relativeTransform": [1, 0, 0, 0, 1, 0], "width": 280, "height": 40, "fills": 5, "strokes": 5,
+        "strokeWeight": 1, "strokeAlign": "INSIDE", "blendMode": "PASS_THROUGH", "clipsContent": false, "layoutMode": "NONE",
+        "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" } },
     { "parent": 4, "guid": "2:21", "type": "COMPONENT", "name": "State=Default",
-      "props": { "relativeTransform": [1, 0, 0, 0, 1, 0], "width": 120, "height": 40 } },
+      "props": { "relativeTransform": [1, 0, 0, 0, 1, 0], "width": 120, "height": 40, "fills": 0, "strokes": 5,
+        "strokeWeight": 1, "strokeAlign": "INSIDE", "blendMode": "PASS_THROUGH", "clipsContent": true, "layoutMode": "NONE",
+        "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" } },
     { "parent": 5, "guid": "2:22", "type": "TEXT", "name": "Label", "overrideKey": "5:22",
       "props": { "relativeTransform": [1, 0, 16, 0, 1, 10], "width": 88, "height": 20, "characters": "Button",
-        "fontName": 3, "fontSize": 14, "componentPropertyReferences": { "characters": "Label#0:1" } } },
+        "fontName": 3, "fontSize": 14, "fills": 4, "strokes": 5, "strokeWeight": 1, "strokeAlign": "OUTSIDE",
+        "blendMode": "PASS_THROUGH", "textAutoResize": "NONE", "componentPropertyReferences": { "characters": "Label#0:1" } } },
     { "parent": 4, "guid": "2:23", "type": "COMPONENT", "name": "State=Hover",
-      "props": { "relativeTransform": [1, 0, 160, 0, 1, 0], "width": 120, "height": 40 } },
+      "props": { "relativeTransform": [1, 0, 160, 0, 1, 0], "width": 120, "height": 40, "fills": 0, "strokes": 5,
+        "strokeWeight": 1, "strokeAlign": "INSIDE", "blendMode": "PASS_THROUGH", "clipsContent": true, "layoutMode": "NONE",
+        "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" } },
     { "parent": 7, "guid": "2:24", "type": "TEXT", "name": "Label", "overrideKey": "5:24",
       "props": { "relativeTransform": [1, 0, 16, 0, 1, 10], "width": 88, "height": 20, "characters": "Button",
-        "fontName": 3, "fontSize": 14, "componentPropertyReferences": { "characters": "Label#0:1" } } },
+        "fontName": 3, "fontSize": 14, "fills": 4, "strokes": 5, "strokeWeight": 1, "strokeAlign": "OUTSIDE",
+        "blendMode": "PASS_THROUGH", "textAutoResize": "NONE", "componentPropertyReferences": { "characters": "Label#0:1" } } },
     { "parent": -1, "page": 1, "guid": "2:30", "type": "COMPONENT", "name": "Badge",
-      "props": { "relativeTransform": [1, 0, 0, 0, 1, 100], "width": 24, "height": 24 } },
+      "props": { "relativeTransform": [1, 0, 0, 0, 1, 100], "width": 24, "height": 24, "fills": 5, "strokes": 5,
+        "strokeWeight": 1, "strokeAlign": "INSIDE", "blendMode": "PASS_THROUGH", "clipsContent": true, "layoutMode": "NONE",
+        "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" } },
     { "parent": 9, "guid": "2:31", "type": "ELLIPSE", "name": "Dot",
-      "props": { "relativeTransform": [1, 0, 8, 0, 1, 8], "width": 8, "height": 8, "fills": 1,
-        "componentPropertyReferences": { "visible": "Dot#0:2" } } }
+      "props": { "relativeTransform": [1, 0, 8, 0, 1, 8], "width": 8, "height": 8, "fills": 1, "strokes": 5,
+        "strokeWeight": 1, "strokeAlign": "INSIDE", "blendMode": "PASS_THROUGH",
+        "componentPropertyReferences": { "visible": "Dot#0:2" } } },
+    { "parent": 0, "guid": "1:14", "type": "VECTOR", "name": "Arrow",
+      "props": { "relativeTransform": [1, 0, 320, 0, 1, 16], "width": 24, "height": 20, "fills": 1, "strokes": 5,
+        "strokeWeight": 1, "strokeAlign": "CENTER", "blendMode": "PASS_THROUGH", "fillGeometry": 6 } }
   ],
   "sets": [
     { "node": 4, "axes": [{ "name": "State", "values": ["Default", "Hover"] }],
@@ -479,7 +619,8 @@ archive, and a text bound to a library paint style with one coloured range. Two 
   "fonts": [{ "family": "Inter", "style": "Regular" }],
   "notes": [
     { "code": "STALE_ASSIGNMENT", "node": 1, "detail": "an assignment to a property of another family" },
-    { "code": "OVERRIDE_STALE", "node": 1, "path": ["2:99"], "detail": "path absent from derivedSymbolData" }
+    { "code": "OVERRIDE_STALE", "node": 1, "path": ["2:99"], "detail": "path absent from derivedSymbolData" },
+    { "code": "VECTOR_FROM_GEOMETRY", "node": 11, "detail": "a network with no region, built from its stored geometry" }
   ]
 }
 ```

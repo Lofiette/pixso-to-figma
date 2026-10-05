@@ -7,6 +7,15 @@
   Milestones M0–M6 in its §10, owner decisions in §11, probes in §9. Everything below describes the current tool.
 - **2026-10-04: M0 is merged and accepted live** in the owner's Figma: the bundled builder reproduces the pre-M0
   baseline field for field, CLEAN passes, and P1–P3 are measured (`docs/REWRITE.md` §9). Next: M1.
+- **2026-10-05: M1 is built and tested offline** on branch `claude/m1` (not pushed): the `.pix` reader to IR v2, the
+  IR builder and VERIFY in the plugin, the judge, the planner, image chain and acceptance, the headless double and
+  probes, and an end-to-end test (`docs/M1.md` §15). On the three local test files the reader and planner run
+  without Figma and the balance adds up (§15.5). Nothing has been built in Figma yet. Next: the M1 live session
+  (`docs/M1.md` §10): probes P4, P8 and P19B, then the first real build of the test design file.
+- **2026-10-05: the M1 review's 36 confirmed findings are applied** on `claude/m1` (`docs/M1.md` §15.7): split
+  roots judged in their parent, the judge's excuses narrowed, G3 and G4 measured on the build, judgements kept on
+  disk, pages per snapshot, the reader's stroke align, text style, line height and region fills read as Pixso draws
+  them. The reader choices are inferred from stored data; §10 lists the renders that settle them.
 
 - **Task:** Pixso -> Figma migration, 1:1, whole files, no model in the loop.
 - **Status:** five files migrated. Day three went into the *instrument* rather than the algorithm:

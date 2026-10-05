@@ -265,6 +265,16 @@ its clapper, the info icon's dot fused into the ring, the house lost its door.
 
 Fix: build them as unpainted frame containers and let the children paint themselves.
 
+> **Correction (2026-10-05, M1, `docs/M1.md` §1.1 and D5).** Measured on the stored geometry of the two test
+> files, this holds only for booleans whose operands only draw a stroke (or have no fill geometry): 13 such booleans
+> in the test kit, 0 in the test design file. For every boolean whose operands are filled shapes, Pixso's stored
+> result equals the boolean operation of the operands (297 / 297), and the union of the operands, which is what a
+> group covers, does not (60 of the 69 non-union booleans fall below 0.80 overlap). M1 therefore builds the filled
+> class as native Figma booleans with the boolean's own paints and carries the stroked class as one vector from
+> its stored result (`--booleans auto`; `native` and `flatten` are the other settings). The defect seen here (a
+> true union destroying interior detail) belongs to the stroked class. This round's file is not among the local
+> files, so its 0 / 143 paint count was not re-measured.
+
 ## 2. `vectorPaths` silently drops per-vertex corner radius — 37% of vectors affected
 
 The bell body exports as `M 14 14 L 0 14 L 1 0 L 13 0 L 14 14 Z`, a straight trapezoid, yet Pixso

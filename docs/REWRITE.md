@@ -1,6 +1,6 @@
 # The rewrite: two sources, one IR, native components, kit mode
 
-Status: **plan of record, second edition (2026-10-04); milestones not started.** Agreed in direction with the owner
+Status: **plan of record, second edition (2026-10-04); M0 accepted live, M1 built and tested offline (`docs/M1.md` §15), its live session pending.** Agreed in direction with the owner
 on 2026-10-04, then revised after an independent review of the first edition and new measurements on two Сова
 files. This document replaces the "Open, in order" list in `.product-os/STATE.md` (§10 says where each item went).
 Engineering notes in English, like `METHOD.md` and `FINDINGS.md`; the designer's README stays in Russian.
@@ -62,7 +62,9 @@ described in our own words and marked "(seen in Rainbow)".
 - **Reading.**
   - A `.pix` is a ZIP: the Kiwi schema `pixso.binary` travels inside, so nothing is guessed.
   - The document is one zstd frame holding `PixsoMsg { pixsoNodes, blobs }`.
-  - Decoding takes 0.6 s for the test design file and 3.5 s for the test kit.
+  - Decoding takes 0.6 s for the test design file and 3.5 s for the test kit. (M1 correction, `docs/M1.md` §0.2: `readPix`
+    takes 0.23-0.27 s and 1.33 s; the M1 reader reports unzip, zstd, Kiwi decode and IR write apart, about 0.2 s and
+    1.4 s of decoding before the IR write.)
 - **Placement.**
   - Each node's `transform` is relative to its direct parent (groups included). Composing it reproduces Pixso's
     absolute position for 3 987/3 987 and 21 359/21 359 nodes.
@@ -77,13 +79,18 @@ described in our own words and marked "(seen in Rainbow)".
   test kit. 2 975 of them are an instance or sit inside one; 370 lie outside instances.
 - **Vectors.**
   - Path blobs use only opcodes 0/1/2/4, with a winding rule per path.
-  - The vector-network blob decodes exactly on every vector (1 397 + 8 935), including per-vertex radii.
+  - The vector-network blob decodes exactly on every vector (1 397 + 8 935), including per-vertex radii. (M1: the
+    8 935 are 8 927 VECTOR and 8 CONNECTLINE; the M1 reader decodes all of them, and the Сова-based product file's
+    2 200 + 4.)
   - So vectors can be built natively from the network instead of through SVG import (I: Figma's acceptance of
     decoded networks, per-vertex radii and per-region fills is untested, P19).
   - Regions and `fillGeometry` disagree on 35 and 220 vectors. The harmful part is 10 and 136 vectors with fill
     geometry but no region (auto-closed loops): they are built from their stored `fillGeometry` and
     `strokeGeometry` and counted as VECTOR_FROM_GEOMETRY, unless P19 shows that Figma fills a region-less open
-    network the same way. The other 25 and 84 have a region but no fill to draw.
+    network the same way. The other 25 and 84 have a region but no fill to draw. (M1 as built, `docs/M1.md` §15: Pixso
+    also stores open region loops; under no visible fill the reader drops them, which leaves 6 and 20 vectors with a
+    region and no fill geometry, and closes the 10 and 10 with a visible fill with straight segments. The
+    region-less vectors built from geometry are 10 and 122: 12 more in the kit have an empty path blob.)
 - **Text.**
   - Per-range style ids come per code point.
   - Lists, hyperlinks and truncation are stored.
@@ -133,7 +140,9 @@ described in our own words and marked "(seen in Rainbow)".
     its own published components, if it consumes itself (5 100 internal-canvas copies in the Сова UI kit file; none
     in the test kit). Those self-copies also carry `componentKey`, so they can feed componentKey enrichment (I).
 - **Images are often not in the archive.** 0 of 5 referenced images in one file and 41 of 66 missing in the other;
-  some `.png` entries are JPEG or WebP.
+  some `.png` entries are JPEG or WebP. (M1 correction, `docs/M1.md` §0.3: those counts include `imageThumbnail`
+  hashes, which are never needed. Fill paints only: 3 and 34 distinct hashes, 3 and 21 missing from the archive;
+  every archive entry's SHA-1 equals its name, and none is over 4 096 px.)
 
 ## 4. Architecture
 
@@ -164,7 +173,7 @@ described in our own words and marked "(seen in Rainbow)".
     what the header declares.
 - **The `.pix` source** builds the IR straight from the file in seconds, but it is not fully standalone. Three things
   need live Pixso with the **same file open**: image bytes missing from the archive (all 5 in the test design file,
-  41 of 66 in the test kit), Hue and other filters Figma lacks (rendered by Pixso), and the render-vs-render audit.
+  41 of 66 in the test kit; fill paints only, 3 of 3 and 21 of 34, M1 §0.3), Hue and other filters Figma lacks (rendered by Pixso), and the render-vs-render audit.
   - The image chain: archive bytes; Pixso MCP bytes by hash (the SHA-1 is checked); a Pixso render of the smallest
     carrier node (needs the same file open, and Q5); a counted placeholder. A missing image is never an empty fill.
   - Before it uses Pixso for renders, the runner checks that the open file matches the `.pix` (root name, page ids,
@@ -479,7 +488,7 @@ adds (counts only, §8).
 | # | milestone | gated by | accepted when |
 |---|---|---|---|
 | M0 | **Foundation**: IR schema. Today's builder, verifier, guarded clean and render bundled in the plugin as fixed commands (BUILD, VERIFY, CLEAN, RENDER, PROBE) that consume today's payload; `visual-all.mjs`, `visual.mjs`, `build-lib.mjs` (clean) and `test-clean.mjs` moved onto them. Token transport; recorded object states and circuit breaker in the current MCP path; synthetic `.pix` fixture; `.gitignore` guards. Before the cut-over, today's tool runs once on the test design file and on the test-kit objects that build today; its build reports and render audit are kept outside the repository as the baseline. Decision 6 is made | P1, P2, P3, P9 | selftest proves no code over the network; a killed Pixso mid-run gives FAIL with the error, not PASS; the same payloads rebuilt through the bundled builder give the same node counts and verifier numbers as the baseline; `test-clean.mjs` passes through CLEAN; the render baseline exists; selftest passes on the synthetic fixture with no real file present; the `.gitignore` guards are in place |
-| M1 | **`.pix` → IR → Figma for ordinary nodes**: the bounds-checked reader, native vectors with the geometry fallback, per-side strokes, text ranges, auto layout, the image fallback chain (through the current MCP path kept in M0: bytes by hash with a SHA-1 check, then a render). Instances are built as counted placeholders (INSTANCE_DEFERRED) with the instance's box. Masters that contain no instance (386 in the test design file, 2 500 in the test kit, own and library copies) are built as plain components without properties on a service page, so the vector and text work is exercised where it lives | P4, P5, P6, P8, P18, P19, run on the first build before the creation order is frozen | node count equals the IR for every non-instance node; geometry within 1 px; side stroke weights equal the IR on every built node, including the 370 lost borders outside instances; for every vector, VERIFY's fill path count and per-path bounds equal the `.pix` `fillGeometry` within 1 px, or the vector carries a reason code; every text whose Figma line count differs from Pixso's stored `baselines` is counted and named; every placeholder is counted; without Pixso the verdict is NOT VISUALLY AUDITED; build time is reported per phase and per 1 000 stored nodes and becomes the baseline (today 3.8 s) |
+| M1 | **`.pix` → IR → Figma for ordinary nodes**: the bounds-checked reader, native vectors with the geometry fallback, per-side strokes, text ranges, auto layout, the image fallback chain (through the current MCP path kept in M0: bytes by hash with a SHA-1 check, then a render). Instances are built as counted placeholders (INSTANCE_DEFERRED) with the instance's box. Masters that contain no instance (386 in the test design file, 2 500 in the test kit, own and library copies) are built as plain components without properties on a service page, so the vector and text work is exercised where it lives. M1's scope, populations and balance are defined in `docs/M1.md` D1 and §8.2: by default the user pages and the internal masters with no instance, with every other population counted as OUT_OF_SCOPE | P4, P5, P6, P8, P18, P19, run on the first build before the creation order is frozen | node count equals the IR for every non-instance node; geometry within 1 px; side stroke weights equal the IR on every built node, including the 370 lost borders outside instances (in the `.pix` the condition names 258 and 2 989 non-instance nodes, `docs/M1.md` §0.5); for every vector, VERIFY's fill path count and per-path bounds equal the `.pix` `fillGeometry` within 1 px, or the vector carries a reason code; every text whose Figma line count differs from Pixso's stored `baselines` is counted and named; every placeholder is counted; without Pixso the verdict is NOT VISUALLY AUDITED; build time is reported per phase and per 1 000 stored nodes and becomes the baseline (today 3.8 s) |
 | M2a | **IR for components, offline** (needs no Figma; can run in parallel with M1): family validation, property roots, swap-aware guidPath resolver, stale and echo classification | — | derived entries resolve 35 808/35 808 and 160 980/160 982; a non-root override resolves exactly when its path is in `derivedSymbolData` (6 353/726 and 42 456/950); families parse 64/67 and 308/312, and the rest are REJECTED with a reason; the 130 and 2 034 stale assignments are dropped and counted; no property is declared with a type other than its root definition's; two runs give byte-identical IR |
 | M2b | **Components in Figma**: definitions, variant sets, properties, instances, overrides, local styles | P9b, P10, P13, P14, P16 | every `derivedSymbolData` entry is within 1 px or in a named class (§7), zero unclassified; every unapplied override and every dropped property assignment is counted with a reason; all 3 345 lost borders present; with the same file open in Pixso, the render audit against the M0 baseline is no worse than today; override time per 1 000 overrides and stamping time are reported; whole-file build time on both test files is no worse than the M1 baseline plus the override time |
 | M3 | **Kit mode and design mode** (from `.pix`): kit map, stamps, VERIFY, preflight, linking, fallbacks, dependency order, in-place re-run, the designer's run flow. Decision 7 is made | P7, P11, P11b, P12, P15, P17 | of the test design file's 335 direct instances of test-kit masters, every one is linked (`remote === true`, key equal to the map's) or carries a reason code, and instances of the 12 masters deleted in the kit follow decision 3; for every linked instance, the overrides applied equal the overrides intended, or the lost ones are listed under decision 1; the per-library table lists all 14 libraries the design file uses; a second kit run changes no Figma component key; the run flow (§5) is walked through on the test pair without the console |
