@@ -285,6 +285,13 @@ refuses("a baseline whose end character is outside the text", () => pixToIR(muta
 refuses("a baseline whose first character is past its end", () => pixToIR(mutated((v, at) => { at(IDS.text).textData.baselines[1].firstCharacter = 13; at(IDS.text).textData.baselines[1].endCharacter = 12; })), /baseline/);
 refuses("more characterStyleIDs than code points", () => pixToIR(mutated((v, at) => { at(IDS.text).textData.characterStyleIDs.push(0); })), /code points/);
 refuses("a geometry path naming a blob that does not exist", () => pixToIR(mutated((v, at) => { at(IDS.heart).fillGeometry[0].blobIndex = 500; })), /blob 500/);
+check("a full sweep with no hole is the plain ellipse (no arcData); a full donut keeps its arcData (review figma F1)", () => {
+  const full = Math.fround(2 * Math.PI);
+  const a = pixToIR(mutated((v, at) => { at(IDS.absolute).arcData = { startingAngle: 0, endingAngle: full, innerRadius: 0 }; })).ir;
+  const b = pixToIR(mutated((v, at) => { at(IDS.absolute).arcData = { startingAngle: 0, endingAngle: full, innerRadius: 0.5 }; })).ir;
+  eq(rec(IDS.absolute, a).props.arcData, undefined);
+  eq(val(rec(IDS.absolute, b).props.arcData, b), { startingAngle: 0, endingAngle: 6.283185, innerRadius: 0.5 });
+});
 check("a text with empty characters and no style ids reads as plain", () => {
   const r = pixToIR(mutated((v, at) => { at(IDS.textNoLines).textData = { characters: "", characterStyleIDs: [] }; }));
   const p = rec(IDS.textNoLines, r.ir).props;

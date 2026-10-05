@@ -244,7 +244,13 @@ function propsOf(cx, p, rec, parentNode, internal) {
 
   if (type === "FRAME" || type === "COMPONENT") frameLayoutProps(cx, n, put, cx.childrenOf(n));
   else if (type === "ELLIPSE") {
-    if (n.arcData) put("arcData", { startingAngle: r6(n.arcData.startingAngle || 0), endingAngle: r6(isFin(n.arcData.endingAngle) ? n.arcData.endingAngle : 6.283185), innerRadius: r6(n.arcData.innerRadius || 0) });
+    if (n.arcData) {
+      const a0 = isFin(n.arcData.startingAngle) ? n.arcData.startingAngle : 0, a1 = isFin(n.arcData.endingAngle) ? n.arcData.endingAngle : a0 + 2 * Math.PI;
+      const hole = isFin(n.arcData.innerRadius) ? n.arcData.innerRadius : 0;
+      // A full sweep with no hole is the plain ellipse (Figma's default, left out); a donut's full
+      // sweep is written, and the builder writes it as exactly 2π (rounded, it would be an arc).
+      if (!(Math.abs(a1 - a0 - 2 * Math.PI) < 1e-5 && !(hole > 0))) put("arcData", { startingAngle: r6(a0), endingAngle: r6(a1), innerRadius: r6(hole) });
+    }
   } else if (type === "STAR" || type === "POLYGON") {
     put("pointCount", Number.isInteger(n.count) && n.count >= 3 ? n.count : type === "STAR" ? 5 : 3);
     if (type === "STAR") put("innerRadius", r6(isFin(n.starInnerScale) ? n.starInnerScale : 0.382));

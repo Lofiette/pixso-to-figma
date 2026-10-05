@@ -131,7 +131,7 @@ export const DEFAULTS = {
   layoutWrap: "NO_WRAP", counterAxisAlignContent: "AUTO", primaryAxisAlignItems: "MIN", counterAxisAlignItems: "MIN", paddingLeft: 0, paddingRight: 0,
   paddingTop: 0, paddingBottom: 0, itemSpacing: 0, counterAxisSpacing: 0, itemReverseZIndex: false,
   strokesIncludedInLayout: false, layoutGrids: [], overflowDirection: "NONE",
-  arcData: { startingAngle: 0, endingAngle: 6.283185, innerRadius: 0 },
+  arcData: { startingAngle: 0, endingAngle: 6.283185307179586, innerRadius: 0 },
   letterSpacing: { unit: "PIXELS", value: 0 }, lineHeight: { unit: "AUTO" }, paragraphIndent: 0, paragraphSpacing: 0,
   listSpacing: 0, textAlignHorizontal: "LEFT", textAlignVertical: "TOP", textCase: "ORIGINAL", textDecoration: "NONE",
   textTruncation: "DISABLED", leadingTrim: "NONE", hangingPunctuation: false, hangingList: false,

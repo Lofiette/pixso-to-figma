@@ -109,6 +109,23 @@ export function ellipsePath(w, h) {
     "C " + p(rx - k * rx, h) + " " + p(0, ry + k * ry) + " " + p(0, ry), "C " + p(0, ry - k * ry) + " " + p(rx - k * rx, 0) + " " + p(rx, 0),
     "C " + p(rx + k * rx, 0) + " " + p(w, ry - k * ry) + " " + p(w, ry), "Z"].join(" ");
 }
+// An arc (arcData whose sweep, in Figma's 32-bit storage, is short of a full turn): the pie, or the
+// ring piece with an inner radius, from startingAngle to endingAngle, the curve as a polyline of
+// 64 steps a turn (bounds within a fraction of a pixel). A full sweep is the ellipse (null here).
+const f32 = (x) => Math.fround(x);
+export function arcPath(w, h, arc) {
+  if (!arc) return null;
+  const a0 = Number(arc.startingAngle) || 0, a1 = Number(arc.endingAngle), inner = Number(arc.innerRadius) || 0;
+  if (!(isFinite(a1)) || f32(a1 - a0) >= f32(2 * Math.PI)) return null;
+  const rx = w / 2, ry = h / 2, steps = Math.max(2, Math.ceil(Math.abs(a1 - a0) / (2 * Math.PI) * 64));
+  const at = (a, r) => r4(rx + r * rx * Math.cos(a)) + " " + r4(ry + r * ry * Math.sin(a));
+  const outer = [];
+  for (let k = 0; k <= steps; k++) outer.push(at(a0 + (a1 - a0) * k / steps, 1));
+  if (!(inner > 0)) return "M " + r4(rx) + " " + r4(ry) + " L " + outer.join(" L ") + " Z";
+  const back = [];
+  for (let k = steps; k >= 0; k--) back.push(at(a0 + (a1 - a0) * k / steps, inner));
+  return "M " + outer.join(" L ") + " L " + back.join(" L ") + " Z";
+}
 // Figma stretches a polygon or a star to fill its box: the points of the regular shape, starting at
 // the top, scaled so their own bounds are the node's box.
 function fitted(points, w, h) {

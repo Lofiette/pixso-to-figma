@@ -43,6 +43,8 @@
 //        maskInGroupAsFrame   isMask on a shape inside a FRAME: ok; drop; throw
 //        flattenedWithStroke  a vector built from vectorPaths with a stroke: ok (its strokeGeometry is
 //                      drawn); empty (none)
+//        arcFullSweep  an ellipse whose arcData sweep is 6.283185 (one 32-bit step below Figma's 2π):
+//                      arc (drawn as a pie short of a turn, the assumption); ok (Figma closes it)
 //   P4   transport and sameHash: sameHash "differs" makes createImage's hash differ from the bytes'
 //        SHA-1 (a re-encoding Figma); transport is the runner's choice, not a double behaviour
 //   P2   recorded: the IR layer has no performance.now and no timer (tools/ir/plugin-vm.mjs gives it
@@ -87,6 +89,7 @@ export const MODEL = {
     frameMask: { assumed: "ok", values: ["ok", "drop", "throw"] },
     maskInGroupAsFrame: { assumed: "ok", values: ["ok", "drop", "throw"] },
     flattenedWithStroke: { assumed: "ok", values: ["ok", "empty"] },
+    arcFullSweep: { assumed: "arc", values: ["arc", "ok"] },
   },
 };
 

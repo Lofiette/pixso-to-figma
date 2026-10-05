@@ -169,6 +169,13 @@ B.writeProps = function (st, k, node) {
     if (q === "cornerRadius" && rec.props.cornerRadii !== undefined) continue;
     var w = ctx.prop(rec, q);
     if (w === undefined) continue;
+    // A full sweep is written as exactly 2π past its start: Figma stores the angle in 32 bits, and
+    // 6.283185 (the IR's six decimals) lands one step below its own 2π, an arc a hair short of a
+    // closed ellipse whose stroke would draw a radial seam (builder4/pack4 never wrote a full one).
+    if (q === "arcData" && w && typeof w.endingAngle === "number" && typeof w.startingAngle === "number" &&
+      Math.abs(w.endingAngle - w.startingAngle - 2 * Math.PI) < 1e-5) {
+      w = { startingAngle: w.startingAngle, endingAngle: w.startingAngle + 2 * Math.PI, innerRadius: w.innerRadius || 0 };
+    }
     B.set(st, node, i, q, w);
   }
   // Assigning strokeWeight resets the four sides, so they come after it (builder4.js:181-191).

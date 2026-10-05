@@ -30,13 +30,17 @@
 //   maskInGroupAsFrame   isMask = true on a rectangle inside a frame built as a group (no fill, no clip)
 //   flattenedWithStroke  a vector from a closed vectorPaths with a 2 px stroke: ok if it has a fill
 //                    path and a stroke geometry, empty if no stroke geometry
+//   arcFullSweep     an ellipse given arcData endingAngle 6.283185 (six decimals of 2π, one 32-bit
+//                    step below Figma's own) beside one given exactly 2π: ok if both draw the same
+//                    fill path (Figma closes it), arc if the first is a pie short of a turn (part F,
+//                    review: the builder writes a full sweep as exactly 2π either way)
 // and, as the recorded P19 asked them (so the double's conformance test reads them from here too):
 //   p19.perVertexCornerRadius (a vertex radius reads back), p19.perRegionFills (a region's fills
 //   read back), p19.openRegionlessNetworkFilled (an open chain with no region: empty when unfilled)
 
 var P19B_CASES = ["autoClosedLoop", "offsetNetwork", "regionlessFill", "fillGeometryAgainstNetwork", "booleanUnion", "booleanSubtract",
   "booleanIntersect", "booleanExclude", "nestedBoolean", "singleOperandUnion", "lineOperand", "strokedOperand", "frameMask",
-  "maskInGroupAsFrame", "flattenedWithStroke"];
+  "maskInGroupAsFrame", "flattenedWithStroke", "arcFullSweep"];
 var ORIGIN = 1000, TOL = 0.5;
 var BLACK = { type: "SOLID", color: { r: 0, g: 0, b: 0 }, opacity: 1, visible: true, blendMode: "NORMAL" };
 var GREY = { type: "SOLID", color: { r: 0.6, g: 0.6, b: 0.6 }, opacity: 1, visible: true, blendMode: "NORMAL" };
@@ -181,6 +185,21 @@ var CASES = {
     v.strokes = [BLACK]; v.strokeWeight = 2;
     var d = drawn(v), sg = v.strokeGeometry || [];
     return { verdict: !d.paths ? "differs" : sg.length ? "ok" : "empty", m: { paths: d.paths, strokePaths: sg.length } };
+  },
+  arcFullSweep: async function (box) {
+    var mk = function (x, end) {
+      var e = figma.createEllipse();
+      box.appendChild(e);
+      e.resize(20, 20);
+      e.relativeTransform = [[1, 0, x], [0, 1, 0]];
+      e.fills = [GREY];
+      e.arcData = { startingAngle: 0, endingAngle: end, innerRadius: 0 };
+      return e;
+    };
+    var short = mk(0, 6.283185), full = mk(30, Math.PI * 2);
+    var gs = short.fillGeometry || [], gf = full.fillGeometry || [];
+    var same = gs.length === gf.length && gs.every(function (g, k) { return String(g.data) === String(gf[k].data); });
+    return { verdict: same ? "ok" : "arc", m: { endingRead: short.arcData ? short.arcData.endingAngle : null, paths: gs.length } };
   }
 };
 

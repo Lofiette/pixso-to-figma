@@ -74,7 +74,7 @@ import { layoutTree, applyConstraints, isAutoLayout, inFlow, flowFills } from ".
 import { textMetrics, DEFAULT_TEXT_RATIO } from "./text.mjs";
 import { sniffImage, p8Case } from "./images.mjs";
 import { behaviour } from "./behaviour.mjs";
-import { parsePath, formatPath, mapPath, pathsBox, networkBox, shiftNetwork, scaleNetwork, networkPathAll, rectPath, ellipsePath,
+import { parsePath, formatPath, mapPath, pathsBox, networkBox, shiftNetwork, scaleNetwork, networkPathAll, rectPath, ellipsePath, arcPath,
   polygonPath, starPath, booleanResult } from "./geom.mjs";
 
 export { textMetrics, DEFAULT_TEXT_RATIO } from "./text.mjs";
@@ -323,7 +323,13 @@ export function makeDouble(opts = {}) {
     switch (st.type) {
       case "VECTOR": return vectorFill(st);
       case "FRAME": case "COMPONENT": case "RECTANGLE": return [{ windingRule: "NONZERO", data: rectPath(st.w, st.h) }];
-      case "ELLIPSE": return [{ windingRule: "NONZERO", data: ellipsePath(st.w, st.h) }];
+      case "ELLIPSE": {
+        // A sweep short of Figma's 32-bit 2π is an arc (P19B arcFullSweep "arc", assumed); under "ok"
+        // Figma closes any sweep within 1e-5 of a full turn.
+        const a = st.props.arcData;
+        const closed = V("P19B", "arcFullSweep") === "ok" && a && Math.abs(a.endingAngle - a.startingAngle - 2 * Math.PI) < 1e-5 && !(a.innerRadius > 0);
+        return [{ windingRule: "NONZERO", data: (!closed && arcPath(st.w, st.h, a)) || ellipsePath(st.w, st.h) }];
+      }
       case "POLYGON": return [{ windingRule: "NONZERO", data: polygonPath(st.props.pointCount, st.w, st.h) }];
       case "STAR": return [{ windingRule: "NONZERO", data: starPath(st.props.pointCount, st.props.innerRadius, st.w, st.h) }];
       case "BOOLEAN_OPERATION": return clone(st.boolPaths || []);

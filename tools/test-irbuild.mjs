@@ -210,6 +210,19 @@ const mixedNodes = () => [
   const el = findTree(tr, ctx.S.nodes["5"]), sr = findTree(tr, ctx.S.nodes["6"]), pg = findTree(tr, ctx.S.nodes["7"]), ln = findTree(tr, ctx.S.nodes["8"]);
   check(near(el.props.arcData.endingAngle, 3.14) && sr.props.pointCount === 5 && near(sr.props.innerRadius, 0.4) && pg.props.pointCount === 6 && ln.width === 30 && ln.height === 0,
     "an ellipse takes its arcData, a star and a polygon their points, a line its length with height 0");
+  {
+    // Review figma F1: a full sweep (the IR default, or a donut stored at 6.283185) is written as
+    // exactly 2π past its start, never one 32-bit step short of Figma's 2π (an arc with a seam).
+    const E2 = env();
+    const { ctx: c2 } = await build(E2, mkTask({ nodes: [frame(0, -1, [T6(0, 0), 100, 100]), rec(1, 0, "ELLIPSE", [T6(0, 0), 20, 20], painted()),
+      rec(2, 0, "ELLIPSE", [T6(30, 0), 20, 20], painted({ arcData: { startingAngle: 0, endingAngle: 6.283185, innerRadius: 0.5 } }))] }));
+    const full = E2.D.node(c2.S.nodes["1"]), donut = E2.D.node(c2.S.nodes["2"]);
+    const raw = E2.D.figma.createEllipse(); raw.resize(20, 20); raw.arcData = { startingAngle: 0, endingAngle: 6.283185, innerRadius: 0 };
+    check(full.arcData.endingAngle === 2 * Math.PI && donut.arcData.endingAngle === 2 * Math.PI && donut.arcData.innerRadius === 0.5 &&
+      !/^M 10 10 L/.test(full.fillGeometry[0].data) && /^M 10 10 L/.test(raw.fillGeometry[0].data),
+      "a full sweep is written as exactly 2π, so the ellipse stays closed (6.283185 written as is draws a pie in the double, as it would in Figma)",
+      JSON.stringify([full.arcData, donut.arcData]));
+  }
   const cmp = findTree(tr, ctx.S.nodes["12"]);
   check(cmp.type === "COMPONENT" && (cmp.sharedPluginData.pix2fig || {}).pxDef === "1:112", "a COMPONENT record is a component stamped pxDef (its guid)");
   const rs = r0.sharedPluginData.pix2fig || {};

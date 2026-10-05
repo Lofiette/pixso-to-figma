@@ -33,7 +33,8 @@
         "fillGeometryAgainstNetwork": "pending", "booleanUnion": "pending", "booleanSubtract": "pending",
         "booleanIntersect": "pending", "booleanExclude": "pending", "nestedBoolean": "pending",
         "singleOperandUnion": "pending", "lineOperand": "pending", "strokedOperand": "pending",
-        "frameMask": "pending", "maskInGroupAsFrame": "pending", "flattenedWithStroke": "pending" }
+        "frameMask": "pending", "maskInGroupAsFrame": "pending", "flattenedWithStroke": "pending",
+        "arcFullSweep": "pending" }
     }
   }
 }
