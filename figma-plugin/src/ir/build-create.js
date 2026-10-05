@@ -242,10 +242,12 @@ B.writeChildSizes = function (st, k) {
 };
 
 // The text box pin (builder4.js:225-230): Figma's metrics are not Pixso's, so where the built box
-// differs from the source's by more than half a pixel, the box is fixed at the source's. Reads layout.
-B.pinText = function (st, k) {
+// differs from the source's by more than half a pixel, the box is fixed at the source's. Reads layout,
+// unless the size read before is given ([width, height]: MEASURE reads every text first, then pins).
+B.pinText = function (st, k, size) {
   var node = st.node[k], rec = st.recs[k], w = st.want[k].w, h = st.want[k].h;
-  if (Math.abs(node.width - w) <= 0.5 && Math.abs(node.height - h) <= 0.5) return false;
+  var nw = size ? size[0] : node.width, nh = size ? size[1] : node.height;
+  if (Math.abs(nw - w) <= 0.5 && Math.abs(nh - h) <= 0.5) return false;
   B.set(st, node, rec.i, "textAutoResize", "NONE");
   try { B.resize(node, "TEXT", w, h); st.textPinned.push(rec.i); return true; }
   catch (e) { st.ctx.failure(rec.i, "resize", msgOf(e)); return false; }

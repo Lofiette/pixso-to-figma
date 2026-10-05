@@ -454,6 +454,23 @@ const mixedNodes = () => [
     "a truncated one-line label in a fixed box is not widened, and countLines counts the one line it draws", JSON.stringify([n.width, R.textWidened, m]));
 }
 {
+  // Review figma F6: the pin reads every text and then writes, so MEASURE costs a fixed number of
+  // layout passes, not one per text (a read after the previous text's write lays the tree out again).
+  const passesIn = async (N, textRead) => {
+    const nodes = [frame(0, -1, [T6(0, 0), 300, 20 * N], { layoutMode: "VERTICAL", primaryAxisSizingMode: "AUTO", counterAxisSizingMode: "FIXED" })];
+    for (let i = 1; i <= N; i++) nodes.push(text(i, 0, [T6(0, 20 * (i - 1)), 37, 20], "Label " + i, { textAutoResize: "WIDTH_AND_HEIGHT" }));
+    const E = env();
+    const by = {}; let cur = null, last = 0;
+    const set = E.host.phase;
+    E.host.phase = (p) => { by[cur] = (by[cur] || 0) + E.D.layoutPasses - last; last = E.D.layoutPasses; cur = p; set(p); };
+    const { R } = await build(E, mkTask({ nodes, settings: { textRead, textFit: "source-box" } }));
+    return { measure: by.measure || 0, pinned: R.textPinned.length };
+  };
+  const a = await passesIn(20, "measure"), b = await passesIn(80, "measure");
+  check(a.pinned === 20 && b.pinned === 80 && a.measure === b.measure && b.measure <= 3,
+    "MEASURE pins 20 or 80 texts in the same few layout passes (" + b.measure + "), not one per text", JSON.stringify([a, b]));
+}
+{
   // Review figma F5: the measuring scratch is reused; a bulleted, indented text measured first must
   // not leave its list style on the next text (new characters take the first character's style).
   const list = text(1, 0, [T6(0, 0), 200, 14], "Item", { lines: 1, textRanges: [{ start: 0, end: 4, fields: { listOptions: { type: "UNORDERED" }, indentation: 1 } }] });

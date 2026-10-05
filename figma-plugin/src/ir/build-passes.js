@@ -91,13 +91,20 @@ B.widenText = function (st, k, first) {
   ctx.code(CODE.TEXT_WIDENED_TO_SOURCE_LINES, i, "widened by " + r2(dw) + " px, " + first.lines + " -> " + lines + " lines" + (s ? ", moved " + r2(s) + " px" : ""));
 };
 
+// In passes, so the pin costs one layout, not one per text (part F, review figma F6): every text's
+// size is read once (the first read settles the tree, the rest find nothing to lay out), then every
+// text that differs is pinned with no read between the writes, then one settle, then decision 9.
 B.measurePhase = async function (st) {
-  var ctx = st.ctx, widen = st.settings.textFit === "widen";
-  for (var k = 0; k < st.n; k++) {
-    var rec = st.recs[k];
-    if (rec.type !== "TEXT" || st.builtType[k] !== "TEXT") continue;
+  var ctx = st.ctx, widen = st.settings.textFit === "widen", texts = [], sizes = [];
+  for (var a = 0; a < st.n; a++) if (st.recs[a].type === "TEXT" && st.builtType[a] === "TEXT") texts.push(a);
+  if (st.settings.textRead !== "inLoop" && texts.length) {
+    for (var b = 0; b < texts.length; b++) { await B.tick(st, texts[b]); sizes.push([st.node[texts[b]].width, st.node[texts[b]].height]); }
+    for (var c = 0; c < texts.length; c++) { await B.tick(st, texts[c]); B.pinText(st, texts[c], sizes[c]); }
+    await ctx.settle(firstRoot(st));
+  }
+  for (var t = 0; t < texts.length; t++) {
+    var k = texts[t], rec = st.recs[k];
     await B.tick(st, k);
-    if (st.settings.textRead !== "inLoop") B.pinText(st, k);
     // A truncated text (ENDING) is drawn cut with an ellipsis in its box, as Pixso draws it: it is
     // never widened (part F, review figma F2).
     if (!widen || rec.props.lines !== 1 || ctx.prop(rec, "textTruncation") === "ENDING") continue;

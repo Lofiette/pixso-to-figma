@@ -620,9 +620,10 @@ export function makeDouble(opts = {}) {
       });
       case "resize": case "resizeWithoutConstraints": return call((w, h) => {
         if (!(typeof w === "number" && typeof h === "number" && isFinite(w) && isFinite(h) && w >= 0 && h >= 0)) throw new Error("double: " + name + " takes two finite sizes >= 0");
-        // The size a resize starts from matters to a text (its auto-resize mode), a vector (its
-        // drawing scales) and a container (its children's constraints): lay those out first.
-        if (st.type === "TEXT" || st.type === "VECTOR" || (st.children && st.children.length)) settle(st);
+        // The size a resize starts from matters to an auto-sized text (its auto-resize mode), a
+        // vector (its drawing scales) and a container (its children's constraints): lay those out
+        // first. A fixed text (textAutoResize NONE) becomes the size given, whatever it was.
+        if ((st.type === "TEXT" && st.props.textAutoResize !== "NONE") || st.type === "VECTOR" || (st.children && st.children.length)) settle(st);
         if (st.type === "TEXT") resizeText(st, w, h);
         setSize(st, w, h, name === "resize");
         logWrite(st, name + "()", [w, h]);
