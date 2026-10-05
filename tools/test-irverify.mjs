@@ -357,6 +357,20 @@ const widenScene = (by) => {
   check(same(judge(s3).vectors.differs, [{ i: 2, kind: "bounds" }]), "VECTOR_GEOMETRY_DIFFERS itself excuses nothing");
 }
 {
+  // Review F3: SOURCE_FEATURE_UNSUPPORTED excuses a vector only for a feature that changes its drawing.
+  const s = scene(); s.task.notes.push({ code: schema.CODE.SOURCE_FEATURE_UNSUPPORTED, i: 2, detail: "dashCap" });
+  rowOf(s, 2)[ROW.vec] = [V("EVENODD", 40, 10, 100, 70), V("EVENODD", 40, 10, 60, 30)];
+  let J = judge(s);
+  check(same(J.vectors.differs, [{ i: 2, kind: "count" }]) && !J.vectors.excused.SOURCE_FEATURE_UNSUPPORTED,
+    "a dash-cap note does not excuse a vector drawn wrong (G9)", show(J.vectors));
+  s.task.notes.push({ code: schema.CODE.SOURCE_FEATURE_UNSUPPORTED, i: 2, detail: "RIGHT_ANGLE: 2 vertices" });
+  J = judge(s);
+  check(J.vectors.differs.length === 0 && J.vectors.excused.SOURCE_FEATURE_UNSUPPORTED === 1, "a RIGHT_ANGLE note (a feature of the drawing) does", show(J.vectors));
+  const s2 = scene(); s2.task.notes.push({ code: schema.CODE.SOURCE_FEATURE_UNSUPPORTED, i: 2, detail: "no stored geometry: a STAR built natively, its paths unchecked" });
+  rowOf(s2, 2)[ROW.vec] = [V("NONZERO", 40, 10, 50, 18), V("NONZERO", 40, 10, 50, 18)];
+  check(judge(s2).vectors.excused.SOURCE_FEATURE_UNSUPPORTED === 1, "so does a native shape with no stored geometry (review S3)");
+}
+{
   const s = scene(); rowOf(s, 3)[ROW.vec] = [V("NONZERO", 45, 30, 55, 38)];
   const J = judge(s);
   check(J.vectors.differs.length === 0 && J.vectors.excused.VECTOR_FROM_GEOMETRY === 1 && same(J.vectors.excusedBuiltFromOracle, { VECTOR_FROM_GEOMETRY: 1 }),

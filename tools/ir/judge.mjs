@@ -82,7 +82,8 @@
 //     otherwise a mismatch of kinds (VECTOR_DIFF_KINDS): missing (no row), count, bounds, winding.
 //   A mismatch is EXCUSED only by a code set before VERIFY, counted once under the first that
 //   applies: build-stage VECTOR_NETWORK_REFUSED, BOOLEAN_FALLBACK (build.coded), then read-stage
-//   BOOLEAN_FLATTENED, VECTOR_FROM_GEOMETRY, GEOMETRY_INVALID, SOURCE_FEATURE_UNSUPPORTED (task notes
+//   BOOLEAN_FLATTENED, VECTOR_FROM_GEOMETRY, GEOMETRY_INVALID, and SOURCE_FEATURE_UNSUPPORTED whose
+//   feature changes the drawing (SFU_GEOMETRY: the note's detail opens with its name) (task notes
 //   or IR notes), each excusing any kind but missing; then VECTOR_ORACLE_DIFFERS, which excuses only
 //   its class: region-no-fill the count (and only while the Figma paths' union stays inside the
 //   record's box + 1 px), network-bounds the bounds, winding the winding, and every kind found must
@@ -192,7 +193,13 @@ export const JUDGE_IMPLEMENTED = true;
 const POS = 1, HALF = 0.5, SIDE_TOL = 0.01, VEC_TOL = 1, EPS = 1e-6;
 // The codes that excuse any vector mismatch but a missing node, in the order one is counted under.
 const EXCUSE_ANY = [CODE.VECTOR_NETWORK_REFUSED, CODE.BOOLEAN_FALLBACK, CODE.BOOLEAN_FLATTENED, CODE.VECTOR_FROM_GEOMETRY,
-  CODE.GEOMETRY_INVALID, CODE.SOURCE_FEATURE_UNSUPPORTED];
+  CODE.GEOMETRY_INVALID];
+// SOURCE_FEATURE_UNSUPPORTED excuses a vector, after those, only when its feature changes the drawn
+// geometry (the reader's feature names, which open the note's detail). A dash cap, an effect, an
+// export format or a paint type says nothing about the paths and excuses nothing (review F3).
+export const SFU_GEOMETRY = ["open region loop", "CONNECTLINE", "LINE with height", "RIGHT_ANGLE", "inverse winding", "operand strokes",
+  "an operand without fill geometry", "boolean without stored geometry", "deformationTransform", "no stored geometry"];
+const sfuGeometry = (detail) => typeof detail === "string" && SFU_GEOMETRY.some((f) => detail === f || detail.startsWith(f + ":") || detail.startsWith(f + ","));
 const BUILT_FROM_ORACLE = [CODE.VECTOR_FROM_GEOMETRY, CODE.BOOLEAN_FLATTENED];
 // The one mismatch kind each VECTOR_ORACLE_DIFFERS class excuses (schema.ORACLE_CLASSES).
 const CLASS_KIND = { "region-no-fill": "count", "network-bounds": "bounds", winding: "winding" };
@@ -549,6 +556,7 @@ export function judgeTask(args) {
     let excuse = null;
     if (kinds.indexOf("missing") < 0) {
       excuse = EXCUSE_ANY.find((c) => has(t.i, c)) || null;
+      if (!excuse && (codesOf.get(t.i) || []).some((n) => n.code === CODE.SOURCE_FEATURE_UNSUPPORTED && sfuGeometry(n.detail))) excuse = CODE.SOURCE_FEATURE_UNSUPPORTED;
       if (!excuse && kinds.every((k) => covered.has(k))) excuse = CODE.VECTOR_ORACLE_DIFFERS;
     }
     if (excuse) {
