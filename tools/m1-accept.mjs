@@ -13,8 +13,9 @@
 // above 0 and all four side weights 0, on a node that is not an instance and not inside one. Each is
 // looked up in this run's IR by guid and reported as built, and with its sides matching (not in the
 // judge's side mismatches). Without it the .pix lost-border population is reported (docs/M1.md §0.5).
-// --audit: a render audit made by hand ({ format: "pix2fig.audit", version: 1, roots: [{ i, ok }] });
-// PASS needs one covering every built root.
+// --audit: a render audit made by hand ({ format: "pix2fig.audit", version: 2, snapshot, runId,
+// roots: [{ i, guid, ok }] }; version 1 has no run identity); PASS needs one covering every built root
+// of this run (an audit naming another snapshot or runId, or other guids, does not count).
 //
 // Exit code: 0 when the verdict is not FAIL, 3 when it is, 1 when the run folder cannot be read.
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
@@ -68,7 +69,7 @@ export function accept(runDir, opts) {
   const lines = [], priv = [];
   const nameOf = (i) => (ir && ir.nodes[i] ? ir.nodes[i].guid + "  " + JSON.stringify(ir.nodes[i].name) : "record " + i);
   lines.push("M1 ACCEPTANCE  " + states.snapshot.slice(0, 16) + "…  run " + states.runId);
-  lines.push(...m1Verdict(totals, states, { audit: o.audit || null }));
+  lines.push(...m1Verdict(totals, states, { audit: o.audit || null, ir }));
   lines.push("");
   lines.push(...balanceLines(states.balance));
   lines.push("plan codes: " + (Object.keys(states.balance.planCodes || {}).map((k) => k + " " + states.balance.planCodes[k]).join(", ") || "none"));
@@ -110,7 +111,7 @@ export function accept(runDir, opts) {
     for (const d of totals.sides.mismatchOracle) priv.push("sides differ from the oracle: " + nameOf(d.i) + "  oracle " + JSON.stringify(d.oracle) + " figma " + JSON.stringify(d.figma));
     for (const i of totals.placeholders.misaligned) priv.push("placeholder misaligned: " + nameOf(i));
   }
-  return { lines, privateLines: priv, gates: m1Gates(totals, states, { audit: o.audit || null }) };
+  return { lines, privateLines: priv, gates: m1Gates(totals, states, { audit: o.audit || null, ir }) };
 }
 export function main(argv) {
   const a = argv.slice();

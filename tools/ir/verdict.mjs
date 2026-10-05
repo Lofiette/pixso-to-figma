@@ -7,8 +7,13 @@
 //
 // totals   judgeRun's result (TOTALS_SHAPE of tools/ir/judge.mjs), or null when nothing was judged
 // states   states.json v2 (tools/ir/runstate.mjs)
-// audit    null, or { format: "pix2fig.audit", version: 1, roots: [{ i, ok }] }: a render audit made by
-//          hand with the M0 tooling (§10); PASS needs one that covers every built root, all ok
+// audit    null, or { format: "pix2fig.audit", version: 1 | 2, snapshot, runId, roots: [{ i, guid?, ok }] }: a
+//          render audit made by hand with the M0 tooling (§10); PASS needs one that covers every
+//          built root, all ok. snapshot and runId tie it to one run (states.snapshot, states.runId):
+//          required in version 2, checked whenever present, and an audit made for another run is
+//          ignored. A root's guid, when given and opts.ir is, must be that IR record's: IR indices
+//          change with the reader's settings and scope.
+// opts.ir  the run's IR (optional), for the audit's guids
 //
 // Any FAIL gate makes the verdict FAIL with the gate names. Without one, the best outcome without a
 // covering audit is BUILT, NOT VISUALLY AUDITED with the placeholder, IMAGE_PLACEHOLDER,
@@ -133,13 +138,20 @@ export function m1Gates(totals, states, opts) {
   if (audit) {
     const roots = new Set();
     for (const t of T) if (t.op === "build") for (const i of t.roots) roots.add(i);
-    const got = new Map(((audit && audit.roots) || []).map((r) => [r.i, r.ok === true]));
+    const ir = opts && opts.ir;
+    // A root entry naming a guid that is not its IR record's was made for other records.
+    const entries = ((audit && audit.roots) || []).filter((r) => r && (typeof r.guid !== "string" || !ir || (ir.nodes[r.i] && ir.nodes[r.i].guid === r.guid)));
+    const got = new Map(entries.map((r) => [r.i, r.ok === true]));
     const covered = [...roots].filter((i) => got.has(i)).length;
     const bad = [...roots].filter((i) => got.has(i) && !got.get(i)).length;
-    const shapeOk = audit.format === AUDIT_FORMAT && audit.version === 1;
-    auditFail = shapeOk && bad > 0;
-    audited = shapeOk && covered === roots.size && bad === 0 && roots.size > 0;
-    auditLine = shapeOk ? "audit: " + covered + " of " + roots.size + " built roots covered, " + bad + " failed" : "audit: not a " + AUDIT_FORMAT + " version 1 report; ignored";
+    const shapeOk = audit.format === AUDIT_FORMAT && (audit.version === 1 || (audit.version === 2 && typeof audit.snapshot === "string" && typeof audit.runId === "string"));
+    const otherRun = (audit.snapshot !== undefined && audit.snapshot !== states.snapshot) || (audit.runId !== undefined && audit.runId !== states.runId);
+    const usable = shapeOk && !otherRun;
+    auditFail = usable && bad > 0;
+    audited = usable && covered === roots.size && bad === 0 && roots.size > 0;
+    auditLine = !shapeOk ? "audit: not a " + AUDIT_FORMAT + " version 1 or 2 report; ignored"
+      : otherRun ? "audit: made for another run (its snapshot or runId is not this run's); ignored"
+      : "audit: " + covered + " of " + roots.size + " built roots covered, " + bad + " failed";
   }
 
   const failed = gates.filter((g) => g.fail).map((g) => g.id + " " + g.name);
@@ -150,11 +162,16 @@ export function m1Gates(totals, states, opts) {
   counts[CODE.FILTER_UNRENDERED] += B.filtersUnrendered || 0;
   counts.excusedVectors = J ? sum(J.vectors.excused) : 0;
   let verdict;
+  // Sides that follow the stored stroke-area path where the side fields say otherwise
+  // (SIDE_RULE_UNPROVEN) are unproven until a live render settles which one Pixso draws: they
+  // keep a PASS from being unqualified (review R5).
+  const unproven = J ? J.sides.unproven : 0;
   if (failed.length) verdict = "FAIL (" + failed.join(", ") + ")";
-  else if (audited) verdict = "PASS";
-  else verdict = BUILT_NOT_AUDITED + ": placeholders " + counts.placeholders + ", " + COUNTED.map((c) => c + " " + counts[c]).join(", ") + ", excused vectors " + counts.excusedVectors;
+  else if (audited) verdict = unproven > 0 ? "PASS, with attention: " + unproven + " " + CODE.SIDE_RULE_UNPROVEN + " sides follow the stored path, not settled by a live render" : "PASS";
+  else verdict = BUILT_NOT_AUDITED + ": placeholders " + counts.placeholders + ", " + COUNTED.map((c) => c + " " + counts[c]).join(", ") + ", excused vectors " + counts.excusedVectors +
+    (unproven > 0 ? ", " + CODE.SIDE_RULE_UNPROVEN + " " + unproven : "");
   const pending = Object.keys(states.probes || {}).filter((k) => states.probes[k] === "pending");
-  return { gates, verdict, failed, counts, auditLine, pending };
+  return { gates, verdict, failed, counts, auditLine, pending, unproven };
 }
 
 export function m1Verdict(totals, states, opts) {

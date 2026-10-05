@@ -217,7 +217,16 @@ const GOOD = await runOnce("built");
   const roots = GOOD.plan.tasks.filter((t) => t.op === "build").flatMap((t) => t.roots.map((r) => ({ i: r.i, ok: true })));
   const pass = accept(GOOD.runDir, { audit: { format: "pix2fig.audit", version: 1, roots } }).gates;
   const part = accept(GOOD.runDir, { audit: { format: "pix2fig.audit", version: 1, roots: roots.slice(1) } }).gates;
-  check(pass.verdict === "PASS" && part.verdict.indexOf(BUILT_NOT_AUDITED) === 0, "with a render audit covering every built root the verdict is PASS; one root short, it stays BUILT, NOT VISUALLY AUDITED");
+  // The fixture plants one side the stored path decides against the side fields (SIDE_RULE_UNPROVEN):
+  // a PASS with it is qualified until a live render settles it (review R5).
+  check(/^PASS, with attention: [0-9]+ SIDE_RULE_UNPROVEN/.test(pass.verdict) && part.verdict.indexOf(BUILT_NOT_AUDITED) === 0 && /SIDE_RULE_UNPROVEN [1-9]/.test(G.verdict),
+    "with a render audit covering every built root the verdict is PASS, qualified by the unproven sides; one root short, it stays BUILT, NOT VISUALLY AUDITED", pass.verdict);
+  // Review F4: an audit tied to another run, or naming other records by guid, covers nothing.
+  const v2 = (o) => accept(GOOD.runDir, { audit: Object.assign({ format: "pix2fig.audit", version: 2, snapshot: S.snapshot, runId: S.runId, roots: roots.map((r) => ({ i: r.i, guid: IR.nodes[r.i].guid, ok: true })) }, o) }).gates;
+  const stale = v2({ runId: "ffffffffffffffff" }), other = v2({ roots: roots.map((r) => ({ i: r.i, guid: "9:" + r.i, ok: true })) }), bare = v2({ snapshot: undefined });
+  check(/^PASS/.test(v2({}).verdict) && stale.verdict.indexOf(BUILT_NOT_AUDITED) === 0 && /made for another run/.test(stale.auditLine) &&
+    other.verdict.indexOf(BUILT_NOT_AUDITED) === 0 && bare.verdict.indexOf(BUILT_NOT_AUDITED) === 0,
+    "an audit of version 2 names its run: this run's passes; another runId, other guids, or no snapshot is not an audit of this run", [stale.auditLine, other.auditLine, bare.auditLine].join(" | "));
   check(quiet(() => acceptMain([GOOD.runDir])) === 0, "m1-accept exits 0 on the run");
 }
 
