@@ -637,19 +637,19 @@ function goodRun() {
   check(!/PASS/.test(m1Gates(failG, G.states, { audit: audit(true) }).verdict) && !/PASS/.test(m1Verdict(T, G.states, {}).join("\n")),
     "no PASS with a failing gate, and none without an audit");
   // Every gating probe pending, as before the live session (planted), and as recorded: P4 and P8 run on
-  // 2026-10-05; P5, P6 and P18 are builder settings, which verdicts.json does not record.
+  // 2026-10-05, and P5 and P6 (builder settings) after that day's live rebuilds; P18 waits for Pixso.
   const before = JSON.parse(JSON.stringify(VERDICTS));
-  for (const p of ["P4", "P8", "P19B"]) before.probes[p].status = "pending";
+  for (const p of ["P4", "P5", "P6", "P8", "P19B"]) before.probes[p].status = "pending";
   const pend = JSON.parse(JSON.stringify(G.states)); pend.probes = probeStatus(before);
   const lines = m1Verdict(T, pend, {});
   const now = JSON.parse(JSON.stringify(G.states)); now.probes = probeStatus(VERDICTS);
   const nowLines = m1Verdict(T, now, {}), nowLast = nowLines[nowLines.length - 1];
   const pendingNamed = (/\(pending: ([^)]*)\)/.exec(nowLast) || [])[1] || "";
   check(lines.some((l) => /^probes: P4 pending, P5 pending, P6 pending, P8 pending, P18 pending, P19B pending$/.test(l)) && /creation order not frozen/.test(lines[lines.length - 1]) &&
-    nowLines.some((l) => /^probes: P4 run 2026-10-05, P5 pending, P6 pending, P8 run 2026-10-05, P18 pending, P19B (pending|run \d{4}-\d{2}-\d{2})$/.test(l)) &&
-    /creation order not frozen/.test(nowLast) && /^P5, P6, P18(, P19B)?$/.test(pendingNamed) &&
+    nowLines.some((l) => /^probes: P4 run 2026-10-05, P5 run 2026-10-05, P6 run 2026-10-05, P8 run 2026-10-05, P18 pending, P19B run 2026-10-05$/.test(l)) &&
+    /creation order not frozen/.test(nowLast) && pendingNamed === "P18" &&
     !/creation order/.test(m1Verdict(T, G.states, {}).slice(-1)[0]),
-    "the probe status line names each gating probe, P4 and P8 as recorded; while one is pending the verdict says the creation order is not frozen, naming only the pending ones",
+    "the probe status line names each gating probe, the recorded ones as run; while one is pending the verdict says the creation order is not frozen, naming only the pending ones",
     JSON.stringify(nowLines.filter((l) => /^probes: |^VERDICT: /.test(l))));
   check(probeStatus(VERDICTS).P2 === undefined && probeStatus({ probes: { P8: { status: "run 2026-10-07" }, P4: { status: "pending" } } }).P8 === "run 2026-10-07",
     "probe status comes from verdicts.json: run <date> or pending");
@@ -700,7 +700,7 @@ function acceptGroup() {
 
 function pixRunGroup() {
   const o = parseArgs(["x.pix"]);
-  check(o.scope === "file" && o.m1Scope === "default" && o.booleans === "auto" && o.spaceEvenlySingle === "between" && o.textFit === "widen" && o.layoutOrder === "creation" &&
+  check(o.scope === "file" && o.m1Scope === "default" && o.booleans === "auto" && o.spaceEvenlySingle === "between" && o.textFit === "widen" && o.layoutOrder === "deepestFirst" &&
     o.textRead === "measure" && o.images === "archive,mcp,render" && o.missingFonts === "ask" && o.fallbackFont === "Inter/Regular" && o.maxTaskMb === 4 &&
     o.livenessWarnS === 60 && o.livenessFailS === 300 && o.ceilingMsPerNode === 20 && !o.noPixso && !o.yes && !o.dry,
     "pix-run's defaults are docs/M1.md §3's");

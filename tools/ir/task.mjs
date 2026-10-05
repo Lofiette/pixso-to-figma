@@ -77,7 +77,7 @@ export const BUILT_TYPE = Object.freeze({ FRAME: "FRAME", GROUP: "FRAME", SECTIO
   VECTOR: "VECTOR", BOOLEAN_OPERATION: "BOOLEAN_OPERATION", TEXT: "TEXT" });
 // The builder's settings (docs/M1.md §3, D11); textFit's values are the IR's (schema.SETTINGS.textFit).
 export const TASK_SETTINGS = { layoutOrder: ["creation", "deepestFirst"], textRead: ["measure", "inLoop"] };
-export const TASK_SETTING_DEFAULTS = { textFit: "widen", layoutOrder: "creation", textRead: "measure",
+export const TASK_SETTING_DEFAULTS = { textFit: "widen", layoutOrder: "deepestFirst", textRead: "measure",
   fallbackFont: { family: "Inter", style: "Regular" } };
 export const IMAGE_SOURCES = ["archive", "mcp", "render", "none"];
 // The build op's phase table (docs/M1.md §6 B), in order. ctx.phase is called with these names, the

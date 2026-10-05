@@ -46,7 +46,7 @@ export const SETTINGS = {
   "--booleans": ["booleans", IR_SETTINGS.booleans, "auto"],
   "--space-evenly-single": ["spaceEvenlySingle", IR_SETTINGS.spaceEvenlySingle, "between"],
   "--text-fit": ["textFit", IR_SETTINGS.textFit, "widen"],
-  "--layout-order": ["layoutOrder", TASK_SETTINGS.layoutOrder, "creation"],
+  "--layout-order": ["layoutOrder", TASK_SETTINGS.layoutOrder, "deepestFirst"],   // P5, 2026-10-05
   "--text-read": ["textRead", TASK_SETTINGS.textRead, "measure"],
   "--images": ["images", (v) => parseLinks(v).join(","), LINKS.join(",")],
   "--missing-fonts": ["missingFonts", ["ask", "substitute"], "ask"],
