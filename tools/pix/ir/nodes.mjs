@@ -236,6 +236,9 @@ function propsOf(cx, p, rec, parentNode, internal) {
   put("effects", effectsOf(cx, n.effects));
   if ((n.exportSettings || []).length) put("exportSettings", exportSettingsOf(cx, n.exportSettings));
   if (n.deformationTransform) cx.feature("deformationTransform");
+  // Layout grids draw nothing, but they are the designer's: not mapped in M1, so each frame or master
+  // with one is counted (props.mjs knows layoutGrids; part F, review R7).
+  if ((n.layoutGrids || []).length && (type === "FRAME" || type === "COMPONENT")) cx.feature("layoutGrids", n.layoutGrids.length + " grids, not carried");
   if (type === "GROUP") return;     // built as a frame with no paints and no clipping (docs/M1.md D4)
 
   const sides = RECT_LIKE.has(type);

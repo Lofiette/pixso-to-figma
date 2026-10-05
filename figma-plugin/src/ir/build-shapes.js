@@ -61,6 +61,12 @@ B.vectorsPhase = async function (st) {
     var node = st.node[k], pr = rec.props;
     if (pr.vectorNetwork !== undefined) {
       var net = ctx.value(pr.vectorNetwork), ok = true;
+      // A region's own fills are IR paints, written as Figma paints like a node's (review R4).
+      if (net && Array.isArray(net.regions) && net.regions.some(function (g) { return g && g.fills; })) {
+        net = { vertices: net.vertices, segments: net.segments, regions: net.regions.map(function (g) {
+          return g.fills ? { windingRule: g.windingRule, loops: g.loops, fills: IR.mapPaints(ctx, g.fills, rec.i) } : g;
+        }) };
+      }
       ctx.progress();
       try { await node.setVectorNetworkAsync(net); }
       catch (e) { ok = false; ctx.code(CODE.VECTOR_NETWORK_REFUSED, rec.i, msgOf(e)); }

@@ -236,6 +236,15 @@ const mixedNodes = () => [
   const v3 = E.D.node(ctx.S.nodes["3"]), v4 = E.D.node(ctx.S.nodes["4"]);
   check(same(v3.vectorNetwork.vertices, NET_SQUARE.vertices) && v3.fillGeometry.length === 1 && R.counters.vectorsNetwork === 1,
     "a network record is built through setVectorNetworkAsync (vectorsNetwork)");
+  {
+    // Review R4: a region's own fills reach Figma as the region's fills.
+    const net = clone(NET_SQUARE); net.regions[0].fills = [SOLID(1, 1, 1)];
+    const E2 = env();
+    const { ctx: c2 } = await build(E2, mkTask({ nodes: [frame(0, -1, [T6(0, 0), 50, 50]), vector(1, 0, [T6(5, 5), 10, 10], { vectorNetwork: net, fills: [SOLID(0, 0.6, 0)] })] }));
+    const back = E2.D.node(c2.S.nodes["1"]).vectorNetwork;
+    check(back.regions.length === 1 && Array.isArray(back.regions[0].fills) && back.regions[0].fills.length === 1 && back.regions[0].fills[0].color.r === 1,
+      "a region's own fills are written with the network (a white region on a green vector)", JSON.stringify(back.regions));
+  }
   check(same(v4.vectorPaths, GEO_TRI) && R.counters.vectorsGeometry === 1 && writesOf(E, v4.id).every((w) => w.prop !== "resize()"),
     "a geometry record is built from its fillGeometry as vectorPaths (vectorsGeometry), and a vector is never resized");
   // Determinism: the same task on a fresh double writes the same things in the same order.

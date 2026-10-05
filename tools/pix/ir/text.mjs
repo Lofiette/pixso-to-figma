@@ -4,10 +4,18 @@
 //   characters (Figma's indexing) that hold only the fields that differ from the node;
 // - paragraphStyle list entries become listOptions and indentation range fields, hyperlinks a
 //   hyperlink field;
-// - PERCENT is stored by Pixso as a fraction: 1.2 means 120 %. A line height of PERCENT 0 is AUTO, and
-//   RAW is a multiplier (PERCENT × 100);
-// - a missing fontName (31 in M) and fontSize come from the text style the node names by guid;
-//   failing that, fontSize is 14 (the table of absent defaults) and a missing font is counted;
+// - PERCENT is stored by Pixso as a fraction: 1.2 means 120 %. A line height of PERCENT 0 or 1, or
+//   any RAW, is drawn at the font's natural line height (the stored baselines say so: K, M), Figma's
+//   AUTO; other PERCENT values are the fraction × 100 (part F, review R3);
+// - a text bound to a text style is drawn with the style's fontSize (absent: 14), lineHeight and
+//   letterSpacing where the style has them, whatever the node stores (P's glyphs and baselines
+//   agree with the style on every text where the two differ); its font is the node's unless only the
+//   style's is in textData.fontMetaData (the fonts Pixso laid the text out in). Each node whose own
+//   value is overridden is counted (stats.text.styleValueOverridden; part F, review R2). With no
+//   style a missing fontName is counted and fontSize is 14 (the table of absent defaults);
+// - number forms (fontVariantNumeric*), the sub/superscript position and OpenType features
+//   (toggledOnOTFeatures) have no Figma plugin value: each counted once per record as
+//   SOURCE_FEATURE_UNSUPPORTED "fontVariantNumeric", "fontVariantPosition", "OpenType features" (review R8);
 // - lines = baselines.length; a buildable text with none gets TEXT_LINES_UNKNOWN.
 //
 // Text data is checked before any of it is used: a glyph blob index out of range, a glyph path that
@@ -27,8 +35,12 @@ export function numberOf(cx, msg, num, kind) {
   const v = isFin(num.value) ? num.value : 0;
   if (kind === "lineHeight") {
     if (unit === "PIXELS") return { unit: "PIXELS", value: r2(v) };
-    if (unit === "PERCENT") return v === 0 ? { unit: "AUTO" } : { unit: "PERCENT", value: r2(v * 100) };
-    if (unit === "RAW") { cx.stats.text.rawLineHeight++; return v === 0 ? { unit: "AUTO" } : { unit: "PERCENT", value: r2(v * 100) }; }
+    if (unit === "PERCENT") {
+      if (v === 0) return { unit: "AUTO" };
+      if (Math.abs(v - 1) < 1e-6) { cx.stats.text.percentOneAuto++; return { unit: "AUTO" }; }
+      return { unit: "PERCENT", value: r2(v * 100) };
+    }
+    if (unit === "RAW") { cx.stats.text.rawLineHeight++; return { unit: "AUTO" }; }
     return { unit: "AUTO" };
   }
   if (unit === "PIXELS") return { unit: "PIXELS", value: r2(v) };
@@ -93,17 +105,28 @@ export function textProps(cx, n, put) {
   const chars = td.characters || "";
   const style = guidSet(n.inheritTextStyleID) ? cx.byGuid.get(guidStr(n.inheritTextStyleID)) : null;
   put("characters", chars);
-  let font = fontOf(n.fontName) || (style && fontOf(style.fontName));
+  // The style draws (review R2): its size (absent 14), line height and letter spacing over the
+  // node's; the font the node's unless only the style's is among the fonts Pixso laid the text out in.
+  const ownFont = fontOf(n.fontName), styleFont = style && fontOf(style.fontName);
+  let font = ownFont || styleFont, overridden = false;
+  if (ownFont && styleFont && (ownFont.family !== styleFont.family || ownFont.style !== styleFont.style)) {
+    const listed = new Set((td.fontMetaData || []).map((m) => m && m.key ? m.key.family + "|" + m.key.style : ""));
+    if (listed.has(styleFont.family + "|" + styleFont.style) && !listed.has(ownFont.family + "|" + ownFont.style)) { font = styleFont; overridden = true; }
+  }
   if (!n.fontName && font) cx.stats.text.fontFromStyle++;
   if (!font) { font = FALLBACK_FONT; cx.feature("text without a font name"); }
   put("fontName", font);
-  const size = isFin(n.fontSize) ? n.fontSize : style && isFin(style.fontSize) ? style.fontSize : 14;
+  const size = style ? (isFin(style.fontSize) ? style.fontSize : 14) : isFin(n.fontSize) ? n.fontSize : 14;
+  if (style && isFin(n.fontSize) && r2(n.fontSize) !== r2(size)) overridden = true;
   put("fontSize", r2(size));
   const base = { fontName: font, fontSize: r2(size) };
-  const ls = numberOf(cx, "Number", n.letterSpacing || (style && style.letterSpacing), "letterSpacing");
+  const pick = (f) => (style && style[f] ? style[f] : n[f]);
+  const ls = numberOf(cx, "Number", pick("letterSpacing"), "letterSpacing");
   if (ls) { put("letterSpacing", ls); base.letterSpacing = ls; }
-  const lh = numberOf(cx, "Number", n.lineHeight || (style && style.lineHeight), "lineHeight");
+  const lh = numberOf(cx, "Number", pick("lineHeight"), "lineHeight");
   if (lh) { put("lineHeight", lh); base.lineHeight = lh; }
+  for (const f of ["letterSpacing", "lineHeight"]) if (style && style[f] && n[f] && (n[f].value !== style[f].value || n[f].units !== style[f].units)) overridden = true;
+  if (overridden) cx.stats.text.styleValueOverridden++;
   base.fills = paintsOf(cx, n.fillPaints);
   if (isFin(n.paragraphIndent)) { put("paragraphIndent", r2(n.paragraphIndent)); base.paragraphIndent = r2(n.paragraphIndent); }
   if (isFin(n.paragraphSpacing)) { put("paragraphSpacing", r2(n.paragraphSpacing)); base.paragraphSpacing = r2(n.paragraphSpacing); }
@@ -124,6 +147,17 @@ export function textProps(cx, n, put) {
   if (n.hangingPunctuation) put("hangingPunctuation", true);
   if (n.hangingList) put("hangingList", true);
   if ((n.fontVariations || []).length) cx.feature("fontVariations");
+  // Number forms, the sub/superscript position and OpenType features have no Figma plugin value:
+  // counted once per record, on the node or any of its style entries (review R8).
+  const set = (src, msg, fields) => fields.some((f) => {
+    if (src[f] === undefined || src[f] === null) return false;
+    const v = cx.en(msg, f)(src[f]);
+    return v === undefined ? !!src[f] : v !== "NORMAL";
+  });
+  const anyOf = (fields) => set(n, "PixsoNode", fields) || (td.styleOverrideTable || []).some((e) => set(e, "TextStyleData", fields));
+  if (anyOf(["fontVariantNumericFigure", "fontVariantNumericSpacing", "fontVariantNumericFraction"])) cx.feature("fontVariantNumeric");
+  if (anyOf(["fontVariantPosition"])) cx.feature("fontVariantPosition");
+  if ((n.toggledOnOTFeatures || []).length || (td.styleOverrideTable || []).some((e) => (e.toggledOnOTFeatures || []).length)) cx.feature("OpenType features");
   const nodeLink = hyperlinkOf(n.hyperlink);
 
   const ranges = textRanges(cx, n, chars, base, nodeLink);

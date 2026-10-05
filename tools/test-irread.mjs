@@ -29,7 +29,7 @@ if (typeof zlib.zstdCompressSync !== "function") {
   console.log("FAIL the reader's checks need Node 22.15 or newer (built-in zstd); this is node " + process.version);
   process.exit(1);
 }
-const { makeFixture, IDS, encodeVectorNetwork } = await import("./pix/fixture.mjs");
+const { makeFixture, IDS, encodeVectorNetwork, encodePath } = await import("./pix/fixture.mjs");
 const { pixToIR, decodeVectorNetwork } = await import("./pix/ir/index.mjs");
 const { validate } = await import("./ir/validate.mjs");
 const { CODE, REASON_CODES, canonicalJSON } = await import("./ir/schema.mjs");
@@ -179,9 +179,27 @@ check("an absent strokeAlign on a visible stroke is decided by the stroke-area p
   eq([rec(IDS.ring, r.ir).props.strokeAlign, r.stats.strokeAlignDecided.INSIDE], ["INSIDE", 1]);
   // Strokes with no path to measure take the type's default, counted apart.
   eq(stats.strokeAlignDecided, { "default:CENTER": 5 });
+  // Review R1: a reach of the whole weight is OUTSIDE only with a band only OUTSIDE draws. The ring's
+  // 1 px stroke on its 40 x 20 box, given a band outside the box (-1..0: profile 100), and a band
+  // across the edge (-1..+1: profile 110, stored INSIDE on most nodes that store an align).
+  const rectCW = (x0, y0, x1, y1) => [[1, x0, y0], [2, x1, y0], [2, x1, y1], [2, x0, y1], [0]];
+  const rectCCW = (x0, y0, x1, y1) => [[1, x0, y0], [2, x0, y1], [2, x1, y1], [2, x1, y0], [0]];
+  const withBand = (inner) => pixToIR(mutated((v, at) => {
+    v.blobs.push({ bytes: encodePath([...rectCW(-1, -1, 41, 21), ...rectCCW(inner, inner, 40 - inner, 20 - inner)]) });
+    delete at(IDS.ring).strokeAlign; at(IDS.ring).strokePaddingPath[0].blobIndex = v.blobs.length - 1;
+  }));
+  const out = withBand(0), across = withBand(1);
+  eq([rec(IDS.ring, out.ir).props.strokeAlign, out.stats.strokeAlignDecided.OUTSIDE], ["OUTSIDE", 1]);
+  eq([rec(IDS.ring, across.ir).props.strokeAlign, across.stats.strokeAlignDecided["guess:INSIDE"], across.stats.strokeAlignDecided.OUTSIDE], ["INSIDE", 1, undefined]);
+  // A reach of the whole weight on one side only (blob 4 on a 39 px box) is no OUTSIDE band either.
   const c = pixToIR(mutated((v, at) => { delete at(IDS.ring).strokeAlign; at(IDS.ring).strokePaddingPath[0].blobIndex = 4; at(IDS.ring).size = { x: 39, y: 20 }; }));
-  // blob 4 reaches 1 px past a 39 px box with a 1 px stroke: OUTSIDE.
-  eq(rec(IDS.ring, c.ir).props.strokeAlign, "OUTSIDE");
+  eq([rec(IDS.ring, c.ir).props.strokeAlign, c.stats.strokeAlignDecided["guess:INSIDE"]], ["INSIDE", 1]);
+});
+check("a stroke with no visible paint has no side oracle and no SIDE_RULE_UNPROVEN note (review R5)", () => {
+  const r = pixToIR(mutated((v, at) => { at(IDS.planted).strokePaints[0].visible = false; }));
+  const p = rec(IDS.planted, r.ir).props;
+  eq([p.oracleSides, codesOf(IDS.planted, r.ir).indexOf(CODE.SIDE_RULE_UNPROVEN)], [undefined, -1]);
+  eq(codesOf(IDS.planted).indexOf(CODE.SIDE_RULE_UNPROVEN) >= 0, true);
 });
 check("corner fields: the four, a missing one 0; cornerRadius alone; four equal fields as cornerRadius", () => {
   const a = rec(IDS.cornersFields).props, b = rec(IDS.cornerRadiusOnly).props, c = rec(IDS.cornersEqual).props;
@@ -202,6 +220,13 @@ check("child layout: grow, stretch, absolute, constraints (FIXED_MAX is MAX)", (
   const a = rec(IDS.absolute).props;
   eq([a.layoutPositioning, val(a.constraints)], ["ABSOLUTE", { horizontal: "MAX", vertical: "SCALE" }]);
   eq(val(a.arcData), { startingAngle: 0, endingAngle: 3.141593, innerRadius: 0.5 });
+});
+check("a child filling the counter axis is STRETCH only when stored at the parent's inner size, or its own min or max (review R6)", () => {
+  eq([rec(IDS.cornersEqual).props.layoutAlign, stats.counterFillKeptFixed], ["STRETCH", 0]);
+  const short = pixToIR(mutated((v, at) => { at(IDS.cornersEqual).size = { x: 20, y: 30 }; }));
+  const capped = pixToIR(mutated((v, at) => { at(IDS.cornersEqual).size = { x: 20, y: 30 }; at(IDS.cornersEqual).maxSize = { x: 1e31, y: 30 }; }));
+  eq([rec(IDS.cornersEqual, short.ir).props.layoutAlign, short.stats.counterFillKeptFixed], [undefined, 1]);
+  eq([rec(IDS.cornersEqual, capped.ir).props.layoutAlign, capped.stats.counterFillKeptFixed], ["STRETCH", 0]);
 });
 check("SPACE_EVENLY: two visible flow children → SPACE_BETWEEN; one → the setting (between, center)", () => {
   eq([rec(IDS.evenlyTwo).props.primaryAxisAlignItems, rec(IDS.evenlyOne).props.primaryAxisAlignItems], ["SPACE_BETWEEN", "SPACE_BETWEEN"]);
@@ -237,10 +262,36 @@ check("a text with no baselines has no lines and TEXT_LINES_UNKNOWN; PERCENT 0 i
   eq([p.lines, p.lineHeight, p.textTruncation, p.maxLines], [undefined, undefined, "ENDING", 2]);
   return codesOf(IDS.textNoLines).includes(CODE.TEXT_LINES_UNKNOWN);
 });
-check("a missing font comes from the text style by guid; RAW line height is a multiplier", () => {
+check("a missing font comes from the text style by guid; a RAW line height is drawn at the font's natural height (AUTO, left out)", () => {
   const p = rec(IDS.textFromStyle).props;
-  eq([val(p.fontName), p.fontSize, val(p.lineHeight), p.lines], [{ family: "Inter", style: "Medium" }, 16, { unit: "PERCENT", value: 100 }, 1]);
-  eq(stats.text.fontFromStyle, 1);
+  eq([val(p.fontName), p.fontSize, p.lineHeight, p.lines], [{ family: "Inter", style: "Medium" }, 16, undefined, 1]);
+  eq([stats.text.fontFromStyle, stats.text.rawLineHeight], [1, 1]);
+});
+check("PERCENT 1 is AUTO (the font's natural line height, review R3); PERCENT 1.5 stays 150 %", () => {
+  const one = pixToIR(mutated((v, at) => { at(IDS.text).lineHeight = { value: 1, units: 3 }; }));
+  const half = pixToIR(mutated((v, at) => { at(IDS.text).lineHeight = { value: 1.5, units: 3 }; }));
+  eq([rec(IDS.text, one.ir).props.lineHeight, one.stats.text.percentOneAuto], [undefined, 1]);
+  eq(val(rec(IDS.text, half.ir).props.lineHeight, half.ir), { unit: "PERCENT", value: 150 });
+});
+check("a text bound to a style takes the style's size (absent: 14), line height and letter spacing; its font by fontMetaData (review R2)", () => {
+  const NU = (value, units) => ({ value, units });
+  const read = (styleFont, listed) => pixToIR(mutated((v, at) => {
+    const s = at(IDS.textStyle), t = at(IDS.textFromStyle);
+    delete s.fontSize; s.lineHeight = NU(20, 2); s.letterSpacing = NU(1, 2);
+    if (styleFont) s.fontName = { family: "Inter", style: styleFont, postscript: "" };
+    t.fontName = { family: "Inter", style: "Regular", postscript: "" }; t.fontSize = 12; t.lineHeight = NU(16, 2);
+    t.textData.fontMetaData = listed.map((st) => ({ key: { family: "Inter", style: st, postscript: "" } }));
+  }));
+  const a = read("Medium", ["Medium"]), b = read("Medium", ["Regular"]), c = read("Medium", ["Regular", "Medium"]);
+  const pa = rec(IDS.textFromStyle, a.ir).props;
+  eq([pa.fontSize, val(pa.lineHeight, a.ir), val(pa.letterSpacing, a.ir), val(pa.fontName, a.ir).style, a.stats.text.styleValueOverridden], [14, { unit: "PIXELS", value: 20 }, { unit: "PIXELS", value: 1 }, "Medium", 1]);
+  eq([val(rec(IDS.textFromStyle, b.ir).props.fontName, b.ir).style, val(rec(IDS.textFromStyle, c.ir).props.fontName, c.ir).style], ["Regular", "Regular"]);
+});
+check("number forms and OpenType features are counted SOURCE_FEATURE_UNSUPPORTED, once per record, on the node or a style entry (review R8)", () => {
+  const r = pixToIR(mutated((v, at) => { at(IDS.text).fontVariantNumericSpacing = 3; at(IDS.text).textData.styleOverrideTable[0].fontVariantNumericSpacing = 3; at(IDS.text).textData.styleOverrideTable[1].toggledOnOTFeatures = [6]; }));
+  const s = pixToIR(mutated((v, at) => { at(IDS.textNoLines).fontVariantNumericSpacing = 1; }));
+  eq(notesOf(IDS.text, r.ir).map((n) => n.detail).filter((d) => d === "fontVariantNumeric" || d === "OpenType features"), ["fontVariantNumeric", "OpenType features"]);
+  eq([r.stats.unsupported.fontVariantNumeric, notesOf(IDS.textNoLines, s.ir).some((n) => n.detail === "fontVariantNumeric")], [1, false]);
 });
 check("every font used is listed once", () => {
   eq(ir.fonts.map((f) => f.style).sort(), ["Bold", "Medium", "Regular"]);
@@ -465,6 +516,17 @@ check("a STAR and a POLYGON with no stored geometry: no oracle, and a SOURCE_FEA
     eq(notesOf(g).map((n) => [n.code, n.detail]), [[CODE.SOURCE_FEATURE_UNSUPPORTED, "no stored geometry: a " + t + " built natively, its paths unchecked"]]);
   }
   eq(rec(IDS.starShape).props.innerRadius, 0.5);
+});
+check("per-region fills (vectorPaints, by region index) become the regions' fills (review R4)", () => {
+  const white = { type: 1, color: { r: 255, g: 255, b: 255, a: 255 }, opacity: 1, visible: true };
+  const r = pixToIR(mutated((v, at) => { at(IDS.vNet).vectorPaints = [{ regionId: 0, paints: [white] }, { regionId: 7, paints: [white] }]; }));
+  const net = val(rec(IDS.vNet, r.ir).props.vectorNetwork, r.ir);
+  eq([net.regions.length, net.regions[0].fills.length, net.regions[0].fills[0].type, net.regions[0].fills[0].color, r.stats.vectors.regionFills], [1, 1, "SOLID", { r: 1, g: 1, b: 1 }, 1]);
+  eq([validate(r.ir).ok, val(rec(IDS.vNet).props.vectorNetwork).regions[0].fills], [true, undefined]);
+});
+check("layout grids are counted SOURCE_FEATURE_UNSUPPORTED on the frame that has them (review R7)", () => {
+  const r = pixToIR(mutated((v, at) => { at(IDS.sides).layoutGrids = [{ pattern: 1, sectionSize: 8, visible: true }, { pattern: 2, sectionSize: 4, visible: false }]; }));
+  eq([notesOf(IDS.sides, r.ir).map((n) => n.detail).filter((d) => /^layoutGrids/.test(d)), r.stats.unsupported.layoutGrids], [["layoutGrids: 2 grids, not carried"], 1]);
 });
 check("values are interned once each, compared as canonical JSON", () => new Set(ir.values.map((v) => canonicalJSON(v))).size === ir.values.length);
 

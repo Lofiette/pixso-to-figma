@@ -10,9 +10,13 @@
 // Corners: any rectangle*CornerRadius field present means the four fields, a missing one 0 (M writes
 // no cornerRadius on 3 834 nodes); otherwise cornerRadius. Four equal values are written as one.
 //
-// An absent strokeAlign on a visible stroke (M 355) is decided by how far the stroke-area path
-// reaches past the box: none INSIDE, half the weight CENTER, the whole weight OUTSIDE; with no path,
-// or no visible stroke, it is Figma's own default for the type.
+// An absent strokeAlign on a visible stroke (M 355) is decided from the stroke-area path. A path that
+// reaches nothing past the box is INSIDE (about 100 % right on the nodes that store an align). A
+// reach of the whole weight is OUTSIDE only with a band profile only OUTSIDE gives (sampled mid top
+// side at -0.5w, +0.5w, +1.5w into the box: 100 or 111); the -w..+w band (110) is stored INSIDE on
+// most nodes that store an align, so it, a reach of half the weight, and any other profile are
+// guesses: the type's default, counted under "guess:" (part F, review R1). With no path, or no
+// visible stroke, it is the type's default.
 import { CODE } from "../../ir/schema.mjs";
 import * as E from "./enums.mjs";
 import { paintsOf } from "./paints.mjs";
@@ -78,7 +82,7 @@ export function sideRule(n) {
   return SIDE_FIELDS.some((k) => n[k] !== undefined) ? SIDE_FIELDS.map((k) => (isFin(n[k]) ? n[k] : 0)) : [sw, sw, sw, sw];
 }
 
-// strokeAlign: the stored one, or decided by the stroke-area path's reach past the box.
+// strokeAlign: the stored one, or decided from the stroke-area path (above).
 function alignOf(cx, n, type) {
   const stored = E.STROKE_ALIGN[cx.en("PixsoNode", "strokeAlign")(n.strokeAlign)];
   if (stored) return stored;
@@ -87,16 +91,25 @@ function alignOf(cx, n, type) {
   let box = null;
   for (const p of n.strokePaddingPath || []) { const b = cx.blob(p.blobIndex); if (b && b.length) box = unionBox(box, blobPointBounds(b)); }
   const W = n.size ? n.size.x : NaN, H = n.size ? n.size.y : NaN, w = weightOf(n);
-  // Counted by outcome; one decided with no path to measure is counted under "default:" + the type's.
+  // Counted by outcome: "default:" with no path to measure, "guess:" where the path does not decide.
   let decided = def, key = "default:" + def;
   if (box && isFin(W) && isFin(H) && w > 0) {
     const reach = Math.max(-box.x0, -box.y0, box.x1 - W, box.y1 - H);
     const cand = [["INSIDE", 0], ["CENTER", w / 2], ["OUTSIDE", w]];
     cand.sort((a, b) => Math.abs(reach - a[1]) - Math.abs(reach - b[1]));
-    decided = key = cand[0][0];
+    if (cand[0][0] === "INSIDE") decided = key = "INSIDE";
+    else if (cand[0][0] === "OUTSIDE" && ["100", "111"].indexOf(bandProfile(cx, n, W, w)) >= 0) decided = key = "OUTSIDE";
+    else key = "guess:" + def;
   }
   cx.stats.strokeAlignDecided[key] = (cx.stats.strokeAlignDecided[key] || 0) + 1;
   return decided;
+}
+
+// Whether the stroke-area path holds the points 0.5, -0.5 and -1.5 weights outside the top edge,
+// mid side ("1" inside, "0" not): -0.5w (outside the box), +0.5w and +1.5w (inside it).
+export function bandProfile(cx, n, W, w) {
+  const subs = paddingPolylines(cx, n);
+  return [-w / 2, w / 2, 1.5 * w].map((y) => (insideAny(subs, W / 2, y) ? "1" : "0")).join("");
 }
 
 // The paint and stroke props of a record. `put` writes a prop the type knows (props.mjs).
@@ -119,7 +132,8 @@ export function strokeProps(cx, n, type, put, opts) {
 
   // Sides: only rectangle-like records have them, and never an instance (its border is its master's).
   let weight = sw;
-  if (opts && opts.sides) {
+  // With no visible stroke there is no side to draw, and no oracle to note (part F, review R5).
+  if (opts && opts.sides && visiblePaint(n.strokePaints)) {
     const rule = sideRule(n);
     const storedAlign = cx.en("PixsoNode", "strokeAlign")(n.strokeAlign);
     const oracle = sideOracle(cx, n, rule, storedAlign === undefined ? "absent" : storedAlign);

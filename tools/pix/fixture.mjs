@@ -66,6 +66,10 @@ enum ComponentPropType { BOOL = 0; TEXT = 1; COLOR = 2; INSTANCE_SWAP = 3; }
 enum ComponentPropNodeField { VISIBLE = 0; TEXT_DATA = 1; OVERRIDDEN_SYMBOL_ID = 2; INHERIT_FILL_STYLE_ID = 3; }
 enum ImageType { PNG = 1; JPEG = 2; SVG = 3; PDF = 4; SKETCH = 5; EPS = 6; TIFF = 7; WEBP = 8; }
 enum ExportConstraintType { CONTENT_SCALE = 1; CONTENT_WIDTH = 2; CONTENT_HEIGHT = 3; }
+enum FontVariantNumericFigure { NORMAL = 1; LINING = 2; OLDSTYLE = 3; }
+enum FontVariantNumericSpacing { NORMAL = 1; PROPORTIONAL = 2; TABULAR = 3; }
+enum FontVariantNumericFraction { NORMAL = 1; DIAGONAL = 2; STACKED = 3; }
+enum OpenTypeFeature { PCAP = 0; CASE = 2; ZERO = 6; }
 
 struct GUID { uint sessionID; uint localID; }
 struct Vector { float x; float y; }
@@ -96,14 +100,18 @@ message Number { float value = 1; NumberUnits units = 2; }
 message Hyperlink { string url = 1; GUID guid = 2; }
 message TextStyleData { int styleID = 1; float fontSize = 2; float paragraphIndent = 3; float paragraphSpacing = 4;
   Number letterSpacing = 5; Number lineHeight = 6; TextCase textCase = 7; TextDecoration textDecoration = 8;
-  FontName fontName = 12; Hyperlink hyperlink = 13; Paint[] fillPaints = 14; }
+  FontName fontName = 12; Hyperlink hyperlink = 13; Paint[] fillPaints = 14; FontVariantNumericSpacing fontVariantNumericSpacing = 15;
+  OpenTypeFeature[] toggledOnOTFeatures = 16; }
+message FontMetaData { FontName key = 1; }
+message VectorPaints { int regionId = 1; Paint[] paints = 2; }
+message LayoutGrid { int pattern = 1; float sectionSize = 2; bool visible = 3; Color color = 4; }
 message Baseline { Vector position = 1; float width = 2; float lineY = 3; float lineHeight = 4; float lineAscent = 5;
   int firstCharacter = 6; int endCharacter = 7; }
 message Glyph { int blobIndex = 1; Vector position = 2; int styleID = 3; float fontSize = 4; int firstCharacter = 5;
   float advance = 6; }
 message ParagraphStyle { TextListStyle listType = 1; uint indentationLevel = 2; }
 message TextData { string characters = 1; int[] characterStyleIDs = 2; TextStyleData[] styleOverrideTable = 3;
-  Vector layoutSize = 4; Baseline[] baselines = 5; Glyph[] glyphs = 6; ParagraphStyle[] paragraphStyle = 12; }
+  Vector layoutSize = 4; Baseline[] baselines = 5; Glyph[] glyphs = 6; ParagraphStyle[] paragraphStyle = 12; FontMetaData[] fontMetaData = 13; }
 message PropValueData { string property = 1; string[] values = 2; }
 message ComponentPropValue { TextData textValue = 1; GUID guidValue = 2; bool boolValue = 3; }
 message ComponentPropDef { GUID id = 1; string name = 2; ComponentPropValue initialValue = 3; ComponentPropType type = 6; }
@@ -209,6 +217,11 @@ message PixsoNode {
   ComponentPropDef[] componentPropDef = 189;
   ComponentPropRef[] componentPropRef = 190;
   ComponentPropAssignment[] componentPropAssignment = 191;
+  VectorPaints[] vectorPaints = 200;
+  LayoutGrid[] layoutGrids = 201;
+  FontVariantNumericFigure fontVariantNumericFigure = 202;
+  FontVariantNumericSpacing fontVariantNumericSpacing = 203;
+  FontVariantNumericFraction fontVariantNumericFraction = 204;
 }
 
 message Blob { byte[] bytes = 1; }

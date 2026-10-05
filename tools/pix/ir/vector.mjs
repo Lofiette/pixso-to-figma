@@ -8,6 +8,9 @@
 //   fillGeometry and strokeGeometry, VECTOR_FROM_GEOMETRY. The stroke is drawn on the fill path, so
 //   the closing segment of an open loop is stroked too; the note's detail counts the open ends.
 // RIGHT_ANGLE handle mirroring has no Figma value: stripped, SOURCE_FEATURE_UNSUPPORTED.
+// Per-region fills (the node's vectorPaints, [{ regionId, paints }], regionId the region's index in
+// the stored network) become the regions' `fills`; without them every region would draw the node's
+// fill (a white check mark on a green icon drawn green; part F, review R4).
 //
 // Where the network and the stored geometry disagree in a known way, the record carries
 // VECTOR_ORACLE_DIFFERS with its class (schema ORACLE_CLASSES):
@@ -21,6 +24,7 @@ import * as E from "./enums.mjs";
 import { decodeVectorNetwork } from "../network.mjs";
 import { r2, isFin, blobToFigmaPath, unionBox } from "./util.mjs";
 import { visiblePaint, weightOf } from "./strokes.mjs";
+import { paintsOf } from "./paints.mjs";
 
 // [{windingRule, data}] from Pixso Paths, or null when none has a drawable blob. A path with a
 // non-finite coordinate is dropped and noted GEOMETRY_INVALID.
@@ -47,9 +51,11 @@ export function geometryBox(geom) {
 }
 
 // The IR network: vertices and tangents scaled to the node's size, per-vertex style from the style
-// override table, RIGHT_ANGLE stripped.
+// override table, RIGHT_ANGLE stripped, per-region fills from opts.regionPaints (vectorPaints).
 export function networkToIR(cx, net, sx, sy, table, opts) {
   const styles = new Map((table || []).map((e) => [e.styleID, e]));
+  const regionFills = new Map();
+  for (const vp of (opts && opts.regionPaints) || []) if (vp && Number.isInteger(vp.regionId) && !regionFills.has(vp.regionId)) regionFills.set(vp.regionId, paintsOf(cx, vp.paints));
   let rightAngle = 0, bad = false;
   const num = (v) => { if (!isFin(v)) bad = true; return r2(v); };
   const vertices = net.vertices.map((v) => {
@@ -81,7 +87,9 @@ export function networkToIR(cx, net, sx, sy, table, opts) {
   // dropped, so the stroke stays exact.
   let closedLoops = 0, droppedLoops = 0;
   const regions = [];
-  for (const r of net.regions) {
+  let filledRegions = 0;
+  for (let ri = 0; ri < net.regions.length; ri++) {
+    const r = net.regions[ri];
     const loops = [];
     for (const l of r.loops) {
       if (!l.length) continue;
@@ -90,9 +98,13 @@ export function networkToIR(cx, net, sx, sy, table, opts) {
       if (opts && opts.fillVisible) { loops.push(closed); closedLoops++; }
       else droppedLoops++;
     }
-    if (loops.length) regions.push({ windingRule: r.windingRule, loops });
+    if (!loops.length) continue;
+    const reg = { windingRule: r.windingRule, loops };
+    // The stored index, counted before any region is dropped for its loops.
+    if (regionFills.has(ri)) { reg.fills = regionFills.get(ri); filledRegions++; }
+    regions.push(reg);
   }
-  return { value: { vertices, segments, regions }, rightAngle, bad, closedLoops, droppedLoops };
+  return { value: { vertices, segments, regions }, rightAngle, bad, closedLoops, droppedLoops, filledRegions };
 }
 
 // A loop walked segment by segment; where one segment does not meet the next (or the last the
@@ -165,7 +177,8 @@ export function vectorProps(cx, n, put, size) {
     const ns = vd.normalizedSize;
     const sx = ns && isFin(ns.x) && ns.x > 0 && isFin(size.w) ? size.w / ns.x : 1;
     const sy = ns && isFin(ns.y) && ns.y > 0 && isFin(size.h) ? size.h / ns.y : 1;
-    const ir = networkToIR(cx, net, sx, sy, vd.styleOverrideTable, { fillVisible: visiblePaint(n.fillPaints) });
+    const ir = networkToIR(cx, net, sx, sy, vd.styleOverrideTable, { fillVisible: visiblePaint(n.fillPaints), regionPaints: n.vectorPaints });
+    if (ir.filledRegions) V.regionFills++;
     if (ir.rightAngle) cx.feature("RIGHT_ANGLE", ir.rightAngle + " vertices");
     if (ir.closedLoops) {
       V.loopsClosed++;
