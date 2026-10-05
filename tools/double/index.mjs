@@ -9,7 +9,8 @@
 //   D.writes           [{ phase, id, type, prop, value }]: every assignment, and every mutating call
 //                      as prop "name()" with its arguments as value, in order
 //   D.reads            { total, byPhase: { phase: n }, log: [{ phase, id, type, prop }] }: layout-forcing
-//                      reads only (surface.mjs LAYOUT_GETTERS); a read with no phase set is booked
+//                      reads only (surface.mjs LAYOUT_GETTERS, and relativeTransform of a child in an
+//                      auto-layout flow); a read with no phase set is booked
 //                      under "(none)"
 //   D.setPhase(name)   the phase writes and reads are booked under (ctx.phase tells it, through
 //                      host.phase)
@@ -701,7 +702,10 @@ export function makeDouble(opts = {}) {
         if (canCall(st.type, prop)) return method(st, prop);
         if (canRead(st.type, prop)) {
           if (GEOMETRY_READS.has(prop)) settle(st);
-          if (LAYOUT_GETTERS.indexOf(prop) >= 0) layoutRead(st, prop);
+          // A flow places its children, so reading a flow child's matrix reads layout as x or y does
+          // (part F, review figma F9).
+          const inFlow = prop === "relativeTransform" && st.parent && (st.parent.props.layoutMode === "HORIZONTAL" || st.parent.props.layoutMode === "VERTICAL");
+          if (LAYOUT_GETTERS.indexOf(prop) >= 0 || inFlow) layoutRead(st, prop);
           return read(st, prop);
         }
         throw outside("reading " + st.type + "." + prop);

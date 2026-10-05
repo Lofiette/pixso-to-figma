@@ -17,8 +17,11 @@
 //     Deepest first (D5). The operands were built into a holder frame that carries the boolean's
 //     box; figma.union / subtract / intersect / exclude makes the boolean inside the holder, from
 //     the operands as they stand there; the boolean then takes the holder's place in its parent with
-//     the holder's matrix composed onto its own (holder · boolean), so every operand keeps the
-//     absolute matrix the IR composes for it, and the holder is removed. Then the boolean's own
+//     the wanted matrix composed onto its own (want · boolean; never the holder's read back, which in
+//     a flow is the flow's place with the turn dropped, and a layout read in a write-only phase), so
+//     every operand keeps the absolute matrix the IR composes for it, and the holder is removed. In
+//     a flow, an ABSOLUTE boolean leaves the flow before its matrix is written; the composed matrix
+//     is kept (st.boolRt) for the place passes to write again where the boolean is ABSOLUTE or pinned. Then the boolean's own
 //     paints and props. Its box is Figma's, from its operands: the passes never resize or move it by
 //     matrix, and its operands are left as they are (st.native, st.fixed). A throw, or no operand,
 //     is BOOLEAN_FALLBACK: the holder stays, a frame with the operands in it.
@@ -93,10 +96,13 @@ function makeBoolean(st, k) {
   else { try { made = F[fname](operands, holder, 0); } catch (e) { why = msgOf(e); } }
   if (!made) { ctx.code(CODE.BOOLEAN_FALLBACK, i, String(op) + ": " + why); return; }
   var parent = holder.parent, at = indexIn(parent, holder);
+  if (!st.boolRt) st.boolRt = {};
   try {
-    var hrt = holder.relativeTransform, brt = made.relativeTransform;
+    var brt = made.relativeTransform;
+    st.boolRt[k] = U.mul(U.matrix(st.want[k].rt), brt);
     parent.insertChild(at, made);
-    made.relativeTransform = U.mul(hrt, brt);
+    if (B.isAL(B.parentMode(st, k)) && ctx.prop(rec, "layoutPositioning") === "ABSOLUTE") made.layoutPositioning = "ABSOLUTE";
+    made.relativeTransform = st.boolRt[k];
     holder.remove();
   } catch (e2) {
     // The boolean exists but sits in its holder: still drawn right, one frame deeper. Counted.

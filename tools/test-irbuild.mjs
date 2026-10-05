@@ -454,6 +454,27 @@ const mixedNodes = () => [
     "a truncated one-line label in a fixed box is not widened, and countLines counts the one line it draws", JSON.stringify([n.width, R.textWidened, m]));
 }
 {
+  // Review figma F7 and F9: native booleans in an auto-layout flow. One ABSOLUTE at (250, 40), one
+  // turned 90° (pinned out of the flow): each ends on its wanted matrix, and making them reads no
+  // layout in the write-only booleans phase (the holder's matrix in a flow is a layout read).
+  const nodes = [
+    frame(0, -1, [T6(0, 0), 400, 100], { layoutMode: "HORIZONTAL", primaryAxisSizingMode: "FIXED", counterAxisSizingMode: "FIXED", itemSpacing: 10 }),
+    rect(1, 0, [T6(0, 0), 50, 50]),
+    boolean(2, 0, [T6(250, 40), 30, 20], "UNION", { fills: [SOLID(1, 0, 0)], layoutPositioning: "ABSOLUTE" }),
+    rect(3, 2, [T6(0, 0), 20, 20]), rect(4, 2, [T6(10, 0), 20, 20]),
+    boolean(5, 0, [ROT90(120, 0), 30, 20], "UNION", { fills: [SOLID(0, 1, 0)] }),
+    rect(6, 5, [T6(0, 0), 20, 20]), rect(7, 5, [T6(10, 0), 20, 20]),
+  ];
+  const task = mkTask({ nodes });
+  valid("booleans in a flow", task);
+  const E = env();
+  const { R, ctx } = await build(E, task);
+  const a = flat(nodeOf(E, ctx, 2).relativeTransform), b = flat(nodeOf(E, ctx, 5).relativeTransform);
+  check(R.counters.booleansNative === 2 && sameM(a, [1, 0, 250, 0, 1, 40]) && sameM(b, [0, -1, 120, 1, 0, 0]) && nodeOf(E, ctx, 2).layoutPositioning === "ABSOLUTE" &&
+    !E.D.reads.byPhase.booleans,
+    "an ABSOLUTE and a turned native boolean in a flow end on their wanted matrices, and the booleans phase reads no layout", JSON.stringify([a, b, E.D.reads.byPhase]));
+}
+{
   // Review figma F6: the pin reads every text and then writes, so MEASURE costs a fixed number of
   // layout passes, not one per text (a read after the previous text's write lays the tree out again).
   const passesIn = async (N, textRead) => {

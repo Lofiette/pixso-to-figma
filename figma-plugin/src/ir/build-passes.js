@@ -171,7 +171,13 @@ B.placePass = async function (st) {
         st.counters.rotPinned++;
       }
     }
-    if (st.native[k]) continue;
+    // A native boolean's matrix is its own composed onto the wanted one (build-shapes.js): in a flow,
+    // where it is ABSOLUTE or pinned out for a turn, that matrix is written again (part F, review
+    // figma F7); elsewhere the one written at its creation stands.
+    if (st.native[k]) {
+      if (st.boolRt && st.boolRt[k] && B.isAL(B.parentMode(st, k)) && (st.rotPinned[k] || ctx.prop(rec, "layoutPositioning") === "ABSOLUTE")) B.set(st, n, i, "relativeTransform", st.boolRt[k]);
+      continue;
+    }
     B.set(st, n, i, "relativeTransform", U.matrix(want.rt));
   }
 };
