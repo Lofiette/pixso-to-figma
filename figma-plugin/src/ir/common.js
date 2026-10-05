@@ -24,7 +24,9 @@
 //     host.phase(name)                                      told every phase change (optional; the double)
 //     host.measure(ctx, node, rec) -> { lines, approx }     replaces IR.countLines (optional; tests)
 //   makeCtx(figma, task, job) -> ctx         a frozen context for one task (below)
-//   util                                    small helpers, below
+//   util                                    small helpers, below; util.notInThisBuild(what, part) makes
+//                                           a stub that throws (e.refused, e.code "NOT_IMPLEMENTED") and
+//                                           carries .notInThisBuild = part
 //   CODE                                    PXF_SCHEMA.CODE: write codes as IR.CODE.X, never quoted
 //
 // ctx, frozen (its S and report are the mutable parts):
@@ -73,14 +75,17 @@ var PXF_IR = (function () {
   function clone(v) { return v === undefined ? undefined : JSON.parse(JSON.stringify(v)); }
   function refuse(m) { var e = new Error(m); e.refused = true; throw e; }
 
-  // A stub's op or function: says which part fills it in, and refuses rather than doing nothing.
+  // A stub's op or function: says which part fills it in, and refuses rather than doing nothing. It
+  // carries notInThisBuild = the part, so a test can tell a stub from the real thing.
   function notInThisBuild(what, part) {
-    return function () {
+    var f = function () {
       var e = new Error(what + " is not in this build: part " + part + " implements it (docs/M1.md §6 " + part + ")");
       e.refused = true;
       e.code = "NOT_IMPLEMENTED";
       throw e;
     };
+    f.notInThisBuild = part;
+    return f;
   }
 
   // 2x3 matrices, as Figma writes them: [[a, b, tx], [c, d, ty]]; the IR writes [a, b, tx, c, d, ty].

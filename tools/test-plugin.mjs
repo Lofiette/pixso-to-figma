@@ -480,9 +480,17 @@ const FONTS_TASK = () => ({ format: "pix2fig.task", version: 1, op: "fonts", run
     const t = FONTS_TASK(); t.op = "paint";
     const r2 = (await H.job("ir", JSON.stringify(t))).report;
     check(r2.refused && /op: must be one of fonts, build, verify, clean/.test(r2.error), "an ir job naming an op outside the task format is refused", String(r2.error).slice(0, 160));
+    // A stand-in op, so this holds whatever part B's fonts op does with a stand-in Figma.
+    const was = IRG.ops.fonts;
+    IRG.ops.fonts = async (ctx, task) => Object.assign(ctx.report, { reached: task.fonts.length });
     const r3 = (await H.job("ir", JSON.stringify(FONTS_TASK()))).report;
-    check(r3.refused && /not in this build: part B/.test(r3.error) && r3.plugin === distKeyed.version,
-      "a valid task reaches its op, and a stub op refuses, naming the part that implements it", String(r3.error).slice(0, 160));
+    IRG.ops.fonts = was;
+    check(!r3.error && r3.reached === 1 && r3.op === "fonts" && r3.runId === "0123456789abcdef" && r3.plugin === distKeyed.version,
+      "a valid task reaches its op with a fresh context, and the report names the plugin build", JSON.stringify(r3).slice(0, 160));
+    if (was.notInThisBuild) {
+      const r4 = (await H.job("ir", JSON.stringify(FONTS_TASK()))).report;
+      check(r4.refused && /not in this build: part B/.test(r4.error), "a stub op refuses, naming the part that implements it", String(r4.error).slice(0, 160));
+    }
   }
   // The host given to the IR layer: images created, images refused, and the progress counter.
   {
@@ -519,8 +527,10 @@ const FONTS_TASK = () => ({ format: "pix2fig.task", version: 1, op: "fonts", run
     Object.assign(p8, was);
     check(ok8.probes && ok8.probes.P8.size === 7 && ok8.probes.P8.n === 3 && bad8.refused && /badArg is not allowed/.test(bad8.error),
       "an IR probe gets its own validated arguments merged with the common ones, and a bad one refuses the job", JSON.stringify([ok8.probes, bad8.error]).slice(0, 200));
-    const stub = (await H.job("probe", JSON.stringify({ probes: ["P19B"], n: 1 }))).report;
-    check(stub.probes && /not in this build: part E/.test(stub.probes.P19B.error || ""), "a stub probe runs as an error naming the part that implements it", JSON.stringify(stub.probes));
+    if (IRG.probes.P19B.run.notInThisBuild) {
+      const stub = (await H.job("probe", JSON.stringify({ probes: ["P19B"], n: 1 }))).report;
+      check(stub.probes && /not in this build: part E/.test(stub.probes.P19B.error || ""), "a stub probe runs as an error naming the part that implements it", JSON.stringify(stub.probes));
+    }
   }
   // Shared stamps: an IR-built root carries pxSrc in namespace pix2fig only, and RENDER, CLEAN and the
   // scratch sweep must find it as they find a private one.
@@ -835,8 +845,9 @@ function wire(uiHtml, port, code) {
   });
   figma.ui.postMessage = (m) => { const c = structuredClone(m); setImmediate(() => { if (!closed && win.onmessage) win.onmessage({ data: { pluginMessage: c } }); }); };
   runInContext(uiHtml.slice(a + 8, b), win);
-  runInContext(code || CODE, createContext({ figma, __html__: "", setTimeout, clearTimeout, performance }));
-  return { figma, el, fetches: () => fetches, close() { closed = true; } };
+  const plugin = createContext({ figma, __html__: "", setTimeout, clearTimeout, performance });
+  runInContext(code || CODE, plugin);
+  return { figma, el, plugin, fetches: () => fetches, close() { closed = true; } };
 }
 
 {
@@ -882,8 +893,12 @@ function wire(uiHtml, port, code) {
       JSON.stringify(p).slice(0, 240));
 
     // The IR path's kind through the real window: the task arrives whole and its (stub) op answers.
+    // A stand-in op in the window's plugin, so this holds whatever part B's fonts op does.
+    const ops = W.plugin.PXF_IR.ops, was = ops.fonts;
+    ops.fonts = async (ctx, task) => Object.assign(ctx.report, { reached: task.fonts.length });
     const irr = await srv.post({ kind: "ir" }, JSON.stringify(FONTS_TASK()), new Map(), 30000);
-    check(irr.refused && /fonts op is not in this build/.test(irr.error || ""), "an ir job travels the whole chain and its op answers", JSON.stringify(irr).slice(0, 200));
+    ops.fonts = was;
+    check(!irr.error && irr.reached === 1 && irr.op === "fonts", "an ir job travels the whole chain, runner -> window -> plugin op -> back", JSON.stringify(irr).slice(0, 200));
   } catch (e) { fail("the chain: " + e.message); }
   W.close();
   srv.close();
