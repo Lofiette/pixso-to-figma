@@ -20,6 +20,19 @@
 //
 //   unionBounds(boxes) -> { x0, y0, x1, y1 } | null     the box around all of them; null for none
 //
+// Added by part C: the one per-path summary VERIFY (in the plugin) and the judge (in Node) both take,
+// so the two sides of the vector check cannot differ by method (docs/M1.md §6 C, §8.3):
+//
+//   geometryBounds(geometry, matrix?) -> [[winding, x0, y0, x1, y1, subpaths]]
+//     geometry  [{ windingRule, data }]: a Figma fillGeometry list, or the IR's oracleFillGeometry
+//               or fillGeometry value; null or undefined gives []
+//     returns   one entry per path, in order: its winding rule, the union of its subpath boxes under
+//               the matrix, and its subpath count. A path with no subpath gives 0, 0, 0, 0 and 0
+//               subpaths, so the path count is kept.
+//     throws    "geometryBounds: …" on a list that is not of that shape, "pathBounds: …" on bad data
+//
+//   inBox(inner, outer, tol) -> boolean     inner { x0, y0, x1, y1 } lies inside outer grown by tol
+//
 // An affine map takes a Bézier curve to the Bézier curve of the mapped control points, so the
 // matrix is applied to the control points and the extrema are found on the mapped curve: a rotated
 // curve is bounded exactly, not by its rotated box.
@@ -123,4 +136,24 @@ export function unionBounds(boxes) {
     else { u.x0 = Math.min(u.x0, b.x0); u.y0 = Math.min(u.y0, b.y0); u.x1 = Math.max(u.x1, b.x1); u.y1 = Math.max(u.y1, b.y1); }
   }
   return u;
+}
+
+export function geometryBounds(geometry, matrix) {
+  if (geometry === null || geometry === undefined) return [];
+  if (!Array.isArray(geometry)) throw new Error("geometryBounds: a geometry is a list of { windingRule, data }");
+  const out = [];
+  for (let k = 0; k < geometry.length; k++) {
+    const g = geometry[k];
+    if (!g || typeof g !== "object" || typeof g.data !== "string") throw new Error("geometryBounds: path " + k + " is not { windingRule, data }");
+    const boxes = pathBounds(g.data, matrix);
+    const u = unionBounds(boxes);
+    const w = typeof g.windingRule === "string" ? g.windingRule : "NONZERO";
+    out.push(u === null ? [w, 0, 0, 0, 0, 0] : [w, u.x0, u.y0, u.x1, u.y1, boxes.length]);
+  }
+  return out;
+}
+
+export function inBox(inner, outer, tol) {
+  const t = typeof tol === "number" && isFinite(tol) ? tol : 0;
+  return inner.x0 >= outer.x0 - t && inner.y0 >= outer.y0 - t && inner.x1 <= outer.x1 + t && inner.y1 <= outer.y1 + t;
 }
