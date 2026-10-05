@@ -1,24 +1,32 @@
-// The IR, version 1: what a source (a saved .pix or live Pixso) tells the builder, as data only.
+// The IR, version 2: what a source (a saved .pix or live Pixso) tells the builder, as data only.
 // docs/IR.md describes it; this file is the part of that description a program can check.
 //
-//   import { validateIR } from "./ir/schema.mjs";
-//   const { ok, errors } = validateIR(ir);      // errors: [{ path: "nodes[3].parent", message }]
+//   import { validate } from "./ir/validate.mjs";   // every caller: it passes the prop tables in
+//   const { ok, errors } = validate(ir);             // errors: [{ path: "nodes[3].parent", message }]
+//
+//   validateIR(ir, { props, maxErrors })             // the same check with the tables given as data;
+//                                                    // props = tools/ir/props.mjs; throws without it
 //
 // Dependency-free, free of Node built-ins, and free of TextEncoder and BigInt, which the plugin's
 // main-thread sandbox may lack: the runner refuses an IR before anything is built, and the plugin
-// may want the same check later. tools/test-ir.mjs runs it in a context without them. Its syntax
-// is ES2015 (const, arrow functions, Map, Set, for-of); nothing in REWRITE.md §9 has checked that
-// syntax in Figma's sandbox yet, so bundling it into the plugin needs that check (or a transpile).
+// bundles this file (tools/build-plugin.mjs, as PXF_SCHEMA) for its codes and enums. tools/test-ir.mjs
+// runs it in a context without them. Its syntax is ES2015 (const, arrow functions, Map, Set,
+// for-of). It imports nothing, so the per-type prop tables (tools/ir/props.mjs) come in as data.
 //
 // What it checks is structure and reference integrity — the things that, wrong, make the builder
 // do something silently different from what the reader meant: an unknown format or version, the
 // header, parent-first order, every index into a table, every reason code, every master reference,
-// and that the content never claims more than the header's capabilities declare. It does not
-// re-derive what the reader decided (variant parsing, swap-aware path resolution, stale and echo
-// classification); those have their own tests where they are computed.
+// the props each node type may carry and their kinds, vector build sources, path and network
+// shapes, and that the content never claims more than the header's capabilities declare. It does
+// not re-derive what the reader decided (variant parsing, swap-aware path resolution, stale and echo
+// classification, the side rule, boolean classes); those have their own tests where they are
+// computed.
+//
+// New code never writes a reason code as a quoted string: it writes CODE.X (below), and
+// tools/test-ir.mjs fails on a quoted code in any M1 file and on a CODE.X that names no code.
 
 export const FORMAT = "pix2fig.ir";
-export const VERSION = 1;
+export const VERSION = 2;
 
 export const SOURCE_KINDS = ["pix", "mcp"];
 export const SCOPE_KINDS = ["file", "pages", "page", "selection"];
@@ -38,10 +46,17 @@ export const SETTINGS = {
   deleted: ["publish", "skip"],
   resync: ["pixso-unless-edited", "report-only"],
   textFit: ["widen", "source-box"],
+  // docs/M1.md D5 and D14: how a boolean is carried, and where a single flow child of SPACE_EVENLY goes.
+  booleans: ["auto", "native", "flatten"],
+  spaceEvenlySingle: ["between", "center"],
 };
 export const SETTING_KEYS = Object.keys(SETTINGS).concat(["kitmaps"]);
 export const SETTING_FLAGS = { mode: "--mode", overrides: "--overrides", drift: "--drift", deleted: "--deleted",
-  resync: "--resync", textFit: "--text-fit", kitmaps: "--kitmaps" };
+  resync: "--resync", textFit: "--text-fit", booleans: "--booleans", spaceEvenlySingle: "--space-evenly-single",
+  kitmaps: "--kitmaps" };
+// The owner's default for each (docs/M1.md §3, REWRITE.md §11). mode has none: it is chosen per run.
+export const SETTING_DEFAULTS = { overrides: "fidelity", drift: "link", deleted: "publish",
+  resync: "pixso-unless-edited", textFit: "widen", booleans: "auto", spaceEvenlySingle: "between", kitmaps: "default" };
 
 // Figma's node types, which the IR speaks. Pixso never produces SLOT, but the Figma Сова kit uses
 // it inside its components, and the matcher and verifier read Figma trees with this same list.
@@ -57,17 +72,51 @@ export const OVERRIDE_BASES = ["authored", "resolved"];
 
 // Properties whose value is an index into `values`, wherever they appear: node props, text range
 // fields and override fields. Today's payload interns the same kinds (pack4.mjs).
+// Version 2 adds the oracle geometry (docs/M1.md D3) and two text range objects, hyperlink and
+// listOptions, which travel as range fields and are interned like any other.
 export const INTERNED_PROPS = ["fills", "strokes", "effects", "layoutGrids", "exportSettings", "dashPattern",
   "constraints", "fontName", "letterSpacing", "lineHeight", "arcData", "vectorNetwork", "fillGeometry",
-  "strokeGeometry"];
+  "strokeGeometry", "oracleFillGeometry", "hyperlink", "listOptions"];
 // Of those, the ones whose value is a list; the rest point at an object.
 export const LIST_VALUES = ["fills", "strokes", "effects", "layoutGrids", "exportSettings", "dashPattern", "fillGeometry",
-  "strokeGeometry"];
+  "strokeGeometry", "oracleFillGeometry"];
 // Properties whose value is an index into `styles`, and the style type each must point at.
 export const STYLE_REFS = { fillStyle: "PAINT", strokeStyle: "PAINT", textStyle: "TEXT", effectStyle: "EFFECT",
   gridStyle: "GRID" };
 // Keys of props.componentPropertyReferences, and the property type each may be bound to.
 export const PROPERTY_REF_FIELDS = { characters: "TEXT", visible: "BOOLEAN", mainComponent: "INSTANCE_SWAP" };
+
+// ---------- version 2: props, vectors, oracles ----------
+// The node types drawn from paths. A VECTOR record is built from exactly one source, its
+// vectorNetwork or its fillGeometry (docs/M1.md D3). LINE, STAR, POLYGON and BOOLEAN_OPERATION are
+// built natively (a boolean from its operands) and carry no build-source geometry, only, optionally,
+// the oracle of what Pixso drew.
+export const VECTOR_TYPES = ["VECTOR", "LINE", "STAR", "POLYGON", "BOOLEAN_OPERATION"];
+export const NATIVE_VECTOR_TYPES = ["LINE", "STAR", "POLYGON", "BOOLEAN_OPERATION"];
+export const GEOMETRY_PROPS = ["vectorNetwork", "fillGeometry", "strokeGeometry", "oracleFillGeometry"];
+// The IR's own props (docs/IR.md §7): not Figma properties, or not written to Figma as they stand.
+export const IR_OWN_PROPS = ["relativeTransform", "width", "height", "strokeWeights", "cornerRadii", "textRanges",
+  "lines", "inkBounds", "fillStyle", "strokeStyle", "textStyle", "effectStyle", "gridStyle",
+  "componentPropertyReferences", "oracleFillGeometry", "oracleSides"];
+// What Pixso drew, kept for the judge and never sent to the plugin: the planner strips these from
+// every task (docs/M1.md §5.2), and tools/ir/task.mjs refuses a task that carries one.
+export const ORACLE_PROPS = ["oracleFillGeometry", "oracleSides"];
+// Figma properties the IR expresses another way. Version 1 let them through; version 2 refuses them,
+// so a record never says one thing twice in two ways that could disagree.
+export const SUPERSEDED_PROPS = ["x", "y", "rotation", "strokeTopWeight", "strokeRightWeight", "strokeBottomWeight",
+  "strokeLeftWeight", "topLeftRadius", "topRightRadius", "bottomRightRadius", "bottomLeftRadius"];
+export const SUPERSEDED_BY = { x: "relativeTransform", y: "relativeTransform", rotation: "relativeTransform",
+  strokeTopWeight: "strokeWeights", strokeRightWeight: "strokeWeights", strokeBottomWeight: "strokeWeights",
+  strokeLeftWeight: "strokeWeights", topLeftRadius: "cornerRadii", topRightRadius: "cornerRadii",
+  bottomRightRadius: "cornerRadii", bottomLeftRadius: "cornerRadii" };
+// The classes of VECTOR_ORACLE_DIFFERS, pre-registered (docs/M1.md §8.3). The note's detail is the
+// class, optionally followed by ": " and free text; the judge excuses only that class.
+export const ORACLE_CLASSES = ["region-no-fill", "network-bounds", "winding"];
+export const WINDING_RULES = ["NONZERO", "EVENODD"];
+export const HANDLE_MIRRORING = ["NONE", "ANGLE", "ANGLE_AND_LENGTH"];
+// The prop kinds of tools/ir/props.mjs, plus "enum:A|B|…". `own` is an IR-own prop whose rule is
+// written out in the validator below.
+export const PROP_KINDS = ["num", "int", "bool", "str", "value", "style", "own"];
 
 // ---------- reason codes ----------
 // One vocabulary for IR notes and for run reports. `plan` is where docs/REWRITE.md names the code;
@@ -93,6 +142,25 @@ export const REASON_CODES = {
   OVERRIDE_STALE: { stage: "read", plan: null, from: "§3: entries whose path is absent from derivedSymbolData are provably stale: dropped and counted", meaning: "an override entry whose path is absent from derivedSymbolData; dropped" },
   OVERRIDE_ECHO: { stage: "read", plan: null, from: "§3: many override fields only echo the master's value and must be dropped before applying", meaning: "an override field equal to the master's value; dropped" },
   NODE_TYPE_UNSUPPORTED: { stage: "read", plan: null, from: "§7: coverage, with every loss given a reason code; §8: the fixture covers an unsupported node type", meaning: "a source node of a type the IR has no type for; it and its subtree are not carried" },
+  // M1 (docs/M1.md §5.1).
+  TEXT_LINES_UNKNOWN: { stage: "read", plan: null, from: "§3: Pixso's own line breaks are stored, which gives a direct check for the one-pixel heading wrap (decision 9)", meaning: "a buildable text with no stored baselines; it carries no lines, so its line count is not checked" },
+  SOURCE_FEATURE_UNSUPPORTED: { stage: "read", plan: null, from: "§7: Source vs IR. Coverage, with every loss given a reason code", meaning: "a Pixso feature Figma lacks (the detail names it: CONNECTLINE, LINE with height, SECTION strokes, RIGHT_ANGLE, vibrance, dashCap, deformationTransform, fontVariations, GRID, operand strokes); dropped or converted, and counted" },
+  GEOMETRY_INVALID: { stage: "read", plan: null, from: "§7: Source vs IR. Coverage, with every loss given a reason code", meaning: "a NaN size, transform or path, or a boolean with no operand and no geometry; the box comes from the geometry or the children, or the node is not carried" },
+  IMAGE_HASH_MISMATCH: { stage: "read", plan: null, from: "§4: Pixso MCP bytes by hash (the SHA-1 is checked)", meaning: "an archive image entry whose SHA-1 is not its name; it is treated as missing" },
+  VECTOR_ORACLE_DIFFERS: { stage: "read", plan: null, from: "§3: Regions and fillGeometry disagree on 35 and 220 vectors", meaning: "the stored network and the stored fill geometry disagree in a pre-registered class (region-no-fill, network-bounds, winding); the judge excuses only that class" },
+  SIDE_RULE_UNPROVEN: { stage: "read", plan: null, from: "§3: The stored stroke-area path proves how per-side weights work", meaning: "the side rule and the stroke-area path disagree; the IR follows the path" },
+  BOOLEAN_FLATTENED: { stage: "read", plan: null, from: "§7: Source vs IR. Coverage, with every loss given a reason code", meaning: "a boolean carried as one VECTOR from its stored fill geometry; its operands are not carried" },
+  OUT_OF_SCOPE: { stage: "plan", plan: null, from: "§6: Every object ends in a recorded state: built, built-with-fallbacks, failed or skipped", meaning: "an IR record the chosen M1 scope does not build; the detail names its population" },
+  FONT_MISSING: { stage: "plan", plan: null, from: "§4: missing fonts are listed in the preflight table with install, restart Figma, run again", meaning: "an IR font Figma does not have, listed in the preflight; the run stops unless the designer continues" },
+  SOURCE_IDENTITY_MISMATCH: { stage: "plan", plan: null, from: "§4: Before it uses Pixso for renders, the runner checks that the open file matches the .pix (root name, page ids, a sample of node ids)", meaning: "the file open in Pixso is not the .pix; the MCP image links are skipped" },
+  VECTOR_NETWORK_REFUSED: { stage: "build", plan: null, from: "§10 M1: for every vector, VERIFY's fill path count and per-path bounds equal the .pix fillGeometry within 1 px, or the vector carries a reason code", meaning: "setVectorNetworkAsync threw; the vector keeps no paths" },
+  BOOLEAN_FALLBACK: { stage: "build", plan: null, from: "§6: Every object ends in a recorded state: built, built-with-fallbacks, failed or skipped", meaning: "Figma threw on the boolean operation; the operands stay in a frame" },
+  MASK_UNSUPPORTED: { stage: "build", plan: null, from: "§7: Source vs IR. Coverage, with every loss given a reason code", meaning: "Figma refused or ignored a mask on a group built as a frame; built unmasked" },
+  VECTOR_GEOMETRY_DIFFERS: { stage: "build", plan: null, from: "§10 M1: for every vector, VERIFY's fill path count and per-path bounds equal the .pix fillGeometry within 1 px, or the vector carries a reason code", meaning: "the judge found a vector whose built paths differ from the oracle outside every excuse; a defect" },
+  TEXT_LINES_DIFFER: { stage: "build", plan: null, from: "§10 M1: every text whose Figma line count differs from Pixso's stored baselines is counted and named", meaning: "the built text's line count differs from the stored baselines" },
+  PLUGIN_STALLED: { stage: "run", plan: null, from: "§6: The runner warns after 60 s without an advance, and stops the run (FAIL, resumable) after 5 min without one, or when a per-task ceiling scaled by node count is reached", meaning: "the progress counter did not advance for the fail time, or the task passed its ceiling; the task failed and is resumable" },
+  BUILD_FAILED: { stage: "run", plan: null, from: "§6: Full error text is kept, in the local run log", meaning: "the plugin refused the task or threw outside a counted fallback; the full error is kept" },
+  ROOT_NOT_FOUND: { stage: "run", plan: null, from: "§4: Resume, clean and verify find nodes by stamp, as today", meaning: "VERIFY found no root for the task, by registry or by stamp" },
 
   KIT_MAP_MISSING: { stage: "plan", plan: "§5", meaning: "no kit map is loaded for the copy's library; a local copy is built" },
   MASTER_NOT_IN_MAP: { stage: "plan", plan: "§5", meaning: "the kit map has no entry publishFile@publishID; a local copy is built" },
@@ -117,6 +185,12 @@ export const REASON_CODES = {
   STYLE_TARGET_NOT_BUILT: { stage: "build", plan: null, from: "§3: a soft-deleted target is bound if it was built; otherwise raw values are kept and counted", meaning: "the referenced style is soft-deleted and was not built; raw values are kept" },
 };
 export const REASON_CODE_LIST = Object.keys(REASON_CODES);
+// Every code by name: CODE.PIX_CORRUPT === "PIX_CORRUPT". New code writes codes only this way, so a
+// misspelt one is an undefined property and tools/test-ir.mjs's scan names it.
+export const CODE = Object.freeze(REASON_CODE_LIST.reduce((o, c) => { o[c] = c; return o; }, {}));
+// The read-stage codes that may explain a VECTOR built from its stored fillGeometry (docs/M1.md D3,
+// D5, D13). A geometry-built VECTOR record without one of them is refused here and in a task.
+export const GEOMETRY_SOURCE_CODES = [CODE.VECTOR_FROM_GEOMETRY, CODE.BOOLEAN_FLATTENED, CODE.SOURCE_FEATURE_UNSUPPORTED];
 
 // ---------- helpers ----------
 const GUID = /^\d+:\d+$/;
@@ -188,8 +262,40 @@ export function snapshotId(header) {
   return null;
 }
 
+// A Figma path string, as `vectorPaths` and `fillGeometry` hold it: commands M, L, Q, C and Z, each
+// letter and number separated by white space ("M 0 0 L 10 0 Z"). Returns null when it is one, or
+// what is wrong with it.
+const PATH_ARGS = { M: 2, L: 2, Q: 4, C: 6, Z: 0 };
+const NUMBER = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/;
+export function figmaPathError(data) {
+  if (typeof data !== "string") return "a path is a string";
+  const t = data.trim();
+  if (!t) return "an empty path";
+  const tok = t.split(/\s+/);
+  let i = 0, cmds = 0;
+  while (i < tok.length) {
+    const c = tok[i];
+    if (!Object.prototype.hasOwnProperty.call(PATH_ARGS, c)) return "token " + (i + 1) + " is " + show(c) + ", not one of M L Q C Z";
+    if (cmds === 0 && c !== "M") return "a path starts with M";
+    const n = PATH_ARGS[c];
+    for (let k = 1; k <= n; k++) {
+      const v = tok[i + k];
+      if (v === undefined) return c + " at token " + (i + 1) + " needs " + n + " numbers";
+      if (!NUMBER.test(v) || !isFinite(Number(v))) return "token " + (i + k + 1) + " is " + show(v) + ", not a number";
+    }
+    i += n + 1; cmds++;
+  }
+  return null;
+}
+
 // ---------- the validator ----------
 export function validateIR(ir, options) {
+  // The tables are data (this file imports nothing). Without them every node would pass unchecked,
+  // so a caller that forgets them is told at once rather than given a meaningless ok.
+  const PT = options && options.props;
+  if (!isObj(PT) || !isObj(PT.KNOWN_PROPS) || !isObj(PT.RANGE_FIELDS) || !Array.isArray(PT.NEVER_OMIT)) {
+    throw new TypeError("validateIR(ir, { props }) needs the prop tables of tools/ir/props.mjs; call validate() from tools/ir/validate.mjs");
+  }
   const maxErrors = (options && options.maxErrors) || 200;
   const errors = [];
   let dropped = 0;
@@ -271,7 +377,7 @@ export function validateIR(ir, options) {
   pages.forEach((p, i) => {
     const P = "pages[" + i + "]";
     if (!isObj(p)) { err(P, "must be an object"); return; }
-    closed(p, ["guid", "name", "internal"], P);
+    closed(p, ["guid", "name", "internal", "background"], P);
     if (!isGuid(p.guid)) err(P + ".guid", "not a guid: " + show(p.guid));
     else if (pageGuids.has(p.guid)) err(P + ".guid", "duplicate page guid " + p.guid);
     else pageGuids.add(p.guid);
@@ -281,6 +387,12 @@ export function validateIR(ir, options) {
 
   // ---------- values ----------
   const values = table(ir.values, "values");
+  // The page background is a fills list in values (the page's own paints, docs/M1.md §5.1).
+  pages.forEach((p, i) => {
+    if (!isObj(p) || p.background === undefined) return;
+    if (!isInt(p.background) || p.background < 0 || p.background >= values.length) err("pages[" + i + "].background", "index " + show(p.background) + " is not in values (" + values.length + ")");
+    else if (!Array.isArray(values[p.background])) err("pages[" + i + "].background", "values[" + p.background + "] is not a fills list");
+  });
   {
     const seen = new Map();
     values.forEach((v, i) => {
@@ -312,7 +424,7 @@ export function validateIR(ir, options) {
     else guidIndex.set(n.guid, i);
     if (NODE_TYPES.indexOf(n.type) < 0) err(P + ".type", "unknown node type " + show(n.type));
     if (!isStr(n.name)) err(P + ".name", "must be a string");
-    if (n.props !== undefined && !isObj(n.props)) err(P + ".props", "must be an object");
+    if (!isObj(n.props)) err(P + ".props", n.props === undefined ? "missing; every record carries at least relativeTransform, width and height" : "must be an object");
     if (n.overrideKey !== undefined) {
       if (!caps.overrideKeys) err(P + ".overrideKey", "present, but the header does not declare capabilities.overrideKeys");
       else if (!isGuid(n.overrideKey)) err(P + ".overrideKey", "not a guid: " + show(n.overrideKey));
@@ -348,23 +460,161 @@ export function validateIR(ir, options) {
   };
 
   // ---------- nodes, pass 2: props ----------
+  const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  const kindOf = (type, k) => (own(PT.KNOWN_PROPS, type) && isObj(PT.KNOWN_PROPS[type]) && own(PT.KNOWN_PROPS[type], k) ? PT.KNOWN_PROPS[type][k] : undefined);
+  // The scalar kinds; value and style are index checks (checkFields), own props have rules below.
+  const checkKind = (kind, v, at, k) => {
+    if (kind === "num") { if (!isNum(v)) err(at, k + " is a finite number; got " + show(v)); }
+    else if (kind === "int") { if (!isInt(v)) err(at, k + " is an integer; got " + show(v)); }
+    else if (kind === "bool") { if (typeof v !== "boolean") err(at, k + " is true or false; got " + show(v)); }
+    else if (kind === "str") { if (!isStr(v)) err(at, k + " is a string; got " + show(v)); }
+    else if (isStr(kind) && kind.indexOf("enum:") === 0) {
+      const vals = kind.slice(5).split("|");
+      if (vals.indexOf(v) < 0) err(at, k + " must be one of " + vals.join(", ") + "; got " + show(v));
+    }
+  };
+  const quad = (v, test) => Array.isArray(v) && v.length === 4 && v.every(test);
+  const nonNeg = (x) => isNum(x) && x >= 0;
+  // Codes the reader noted per record, for the vector build-source rule. Read defensively: the
+  // notes themselves are checked at the end.
+  const notedCodes = new Map();
+  if (Array.isArray(ir.notes)) ir.notes.forEach((nt) => {
+    if (isObj(nt) && isInt(nt.node)) { if (!notedCodes.has(nt.node)) notedCodes.set(nt.node, []); notedCodes.get(nt.node).push(nt.code); }
+  });
+
+  // Value shapes for geometry and networks, checked once per values index.
+  const shapeCache = new Map();
+  const geometryError = (v) => {
+    if (!Array.isArray(v)) return "a geometry value is a list of {windingRule, data}";
+    for (let j = 0; j < v.length; j++) {
+      const g = v[j];
+      if (!isObj(g)) return "[" + j + "] is not {windingRule, data}";
+      for (const k of Object.keys(g)) if (k !== "windingRule" && k !== "data") return "[" + j + "] has unknown key " + show(k);
+      if (WINDING_RULES.indexOf(g.windingRule) < 0) return "[" + j + "].windingRule must be one of " + WINDING_RULES.join(", ") + "; got " + show(g.windingRule);
+      const pe = figmaPathError(g.data);
+      if (pe) return "[" + j + "].data is not a Figma path string: " + pe;
+    }
+    return null;
+  };
+  const networkError = (v) => {
+    if (!isObj(v)) return "a vector network is {vertices, segments, regions}";
+    for (const k of Object.keys(v)) if (["vertices", "segments", "regions"].indexOf(k) < 0) return "unknown key " + show(k);
+    if (!Array.isArray(v.vertices) || !Array.isArray(v.segments) || !Array.isArray(v.regions)) return "a vector network is {vertices[], segments[], regions[]}";
+    const nv = v.vertices.length, ns = v.segments.length;
+    for (let j = 0; j < nv; j++) {
+      const x = v.vertices[j];
+      if (!isObj(x)) return "vertices[" + j + "] is not an object";
+      for (const k of Object.keys(x)) if (["x", "y", "strokeCap", "strokeJoin", "cornerRadius", "handleMirroring"].indexOf(k) < 0) return "vertices[" + j + "] has unknown key " + show(k);
+      if (!isNum(x.x) || !isNum(x.y)) return "vertices[" + j + "] needs finite x and y";
+      if (x.cornerRadius !== undefined && !nonNeg(x.cornerRadius)) return "vertices[" + j + "].cornerRadius must be a number >= 0";
+      // RIGHT_ANGLE is Pixso's, and Figma throws on it: the reader strips it (docs/M1.md D3).
+      if (x.handleMirroring !== undefined && HANDLE_MIRRORING.indexOf(x.handleMirroring) < 0) return "vertices[" + j + "].handleMirroring must be one of " + HANDLE_MIRRORING.join(", ") + "; got " + show(x.handleMirroring);
+      if (x.strokeCap !== undefined && !isStr(x.strokeCap)) return "vertices[" + j + "].strokeCap must be a string";
+      if (x.strokeJoin !== undefined && !isStr(x.strokeJoin)) return "vertices[" + j + "].strokeJoin must be a string";
+    }
+    const tangent = (t) => t === undefined || (isObj(t) && isNum(t.x) && isNum(t.y) && Object.keys(t).length === 2);
+    for (let j = 0; j < ns; j++) {
+      const s = v.segments[j];
+      if (!isObj(s)) return "segments[" + j + "] is not an object";
+      for (const k of Object.keys(s)) if (["start", "end", "tangentStart", "tangentEnd"].indexOf(k) < 0) return "segments[" + j + "] has unknown key " + show(k);
+      if (!isInt(s.start) || !isInt(s.end) || s.start < 0 || s.end < 0 || s.start >= nv || s.end >= nv) return "segments[" + j + "] joins vertices " + show(s.start) + " and " + show(s.end) + "; there are " + nv;
+      if (!tangent(s.tangentStart) || !tangent(s.tangentEnd)) return "segments[" + j + "] tangents are {x, y}";
+    }
+    for (let j = 0; j < v.regions.length; j++) {
+      const r = v.regions[j];
+      if (!isObj(r)) return "regions[" + j + "] is not an object";
+      for (const k of Object.keys(r)) if (["windingRule", "loops", "fills"].indexOf(k) < 0) return "regions[" + j + "] has unknown key " + show(k);
+      if (WINDING_RULES.indexOf(r.windingRule) < 0) return "regions[" + j + "].windingRule must be one of " + WINDING_RULES.join(", ");
+      if (r.fills !== undefined && !Array.isArray(r.fills)) return "regions[" + j + "].fills must be a list";
+      if (!Array.isArray(r.loops) || r.loops.length === 0) return "regions[" + j + "] has no loops";
+      for (let q = 0; q < r.loops.length; q++) {
+        const L = r.loops[q], at = "regions[" + j + "].loops[" + q + "]";
+        if (!Array.isArray(L) || L.length === 0) return at + " is not a non-empty list of segment indices";
+        const deg = new Map();
+        for (const si of L) {
+          if (!isInt(si) || si < 0 || si >= ns) return at + " names segment " + show(si) + "; there are " + ns;
+          const s = v.segments[si];
+          deg.set(s.start, (deg.get(s.start) || 0) + 1);
+          deg.set(s.end, (deg.get(s.end) || 0) + 1);
+        }
+        // Closed: each segment meets the next (the last meets the first), and every vertex is entered
+        // as often as it is left.
+        for (let a = 0; a < L.length && L.length > 1; a++) {
+          const s = v.segments[L[a]], t = v.segments[L[(a + 1) % L.length]];
+          if (s.start !== t.start && s.start !== t.end && s.end !== t.start && s.end !== t.end) return at + " is not closed: segments " + L[a] + " and " + L[(a + 1) % L.length] + " do not meet";
+        }
+        for (const [vx, d] of deg) if (d % 2) return at + " is not closed: vertex " + vx + " is an open end";
+      }
+    }
+    return null;
+  };
+  const checkShape = (k, idx, at) => {
+    // An index out of range, or at a value of the wrong container, is checkFields' to report.
+    if (!isInt(idx) || idx < 0 || idx >= values.length) return;
+    if (k === "vectorNetwork" ? !isObj(values[idx]) : !Array.isArray(values[idx])) return;
+    const key = (k === "vectorNetwork" ? "n" : "g") + idx;
+    if (!shapeCache.has(key)) shapeCache.set(key, k === "vectorNetwork" ? networkError(values[idx]) : geometryError(values[idx]));
+    const e = shapeCache.get(key);
+    if (e) err(at, "values[" + idx + "]: " + e);
+  };
+
   nodes.forEach((n, i) => {
     if (!nodeOk[i] || !isObj(n.props)) return;
     const P = "nodes[" + i + "].props";
     const pr = n.props;
+    const typed = NODE_TYPES.indexOf(n.type) >= 0;
+    if (typed && !isObj(PT.KNOWN_PROPS[n.type])) { err(P, "tools/ir/props.mjs has no KNOWN_PROPS entry for " + n.type); return; }
+    // Every key: superseded, misplaced geometry, unknown for the type, or of the wrong kind.
+    if (typed) for (const k of Object.keys(pr)) {
+      const at = P + "." + k;
+      if (SUPERSEDED_PROPS.indexOf(k) >= 0) { err(at, "superseded in version 2: write " + SUPERSEDED_BY[k]); continue; }
+      if (GEOMETRY_PROPS.indexOf(k) >= 0 && VECTOR_TYPES.indexOf(n.type) < 0) { err(at, "vector geometry is carried only on " + VECTOR_TYPES.join(", ") + " records (and in an instance's derived boxes)"); continue; }
+      const kind = kindOf(n.type, k);
+      if (kind === undefined && GEOMETRY_PROPS.indexOf(k) >= 0) { err(at, "a " + n.type + " is built natively and carries no build-source geometry (only oracleFillGeometry); a shape built from geometry is a VECTOR record"); continue; }
+      if (kind === undefined) { err(at, "unknown prop " + show(k) + " for a " + n.type + " record (tools/ir/props.mjs KNOWN_PROPS)"); continue; }
+      checkKind(kind, pr[k], at, k);
+    }
     checkFields(pr, P);
+    for (const k of GEOMETRY_PROPS) if (pr[k] !== undefined && VECTOR_TYPES.indexOf(n.type) >= 0) checkShape(k, pr[k], P + "." + k);
+
+    // Geometry every record has.
+    if (!(Array.isArray(pr.relativeTransform) && pr.relativeTransform.length === 6 && pr.relativeTransform.every(isNum))) err(P + ".relativeTransform", (pr.relativeTransform === undefined ? "missing; " : "") + "every record has six finite numbers [a, b, tx, c, d, ty]");
+    for (const k of ["width", "height"]) if (!nonNeg(pr[k])) err(P + "." + k, (pr[k] === undefined ? "missing; " : "") + "every record has a finite " + k + " >= 0; got " + show(pr[k]));
+    // Written even at their default, because Figma's defaults differ by node type.
+    if (typed) for (const k of PT.NEVER_OMIT) if (kindOf(n.type, k) !== undefined && pr[k] === undefined) err(P + "." + k, "missing; " + k + " is never left out of a " + n.type + " record (props.mjs NEVER_OMIT)");
+
+    // Sides and corners.
+    if (pr.strokeWeights !== undefined && !quad(pr.strokeWeights, nonNeg)) err(P + ".strokeWeights", "must be four finite numbers >= 0 [top, right, bottom, left]");
+    if (pr.cornerRadii !== undefined && !quad(pr.cornerRadii, nonNeg)) err(P + ".cornerRadii", "must be four finite numbers >= 0 [topLeft, topRight, bottomRight, bottomLeft]");
+    if (pr.cornerRadii !== undefined && pr.cornerRadius !== undefined) err(P + ".cornerRadius", "a record with cornerRadii carries no cornerRadius");
+    if (pr.oracleSides !== undefined && !quad(pr.oracleSides, (x) => typeof x === "boolean")) err(P + ".oracleSides", "must be four booleans [top, right, bottom, left]: does the stroke-area path draw that side");
+
+    // Vectors: one build source per VECTOR record (docs/M1.md D3). The natively built types list no
+    // build-source geometry in KNOWN_PROPS, so the key loop above has refused any.
+    if (n.type === "VECTOR") {
+      const has = ["vectorNetwork", "fillGeometry"].filter((k) => pr[k] !== undefined);
+      if (has.length !== 1) err(P, "a VECTOR record has exactly one build source, vectorNetwork or fillGeometry; it has " + (has.length ? has.join(" and ") : "neither"));
+      if (pr.strokeGeometry !== undefined && pr.fillGeometry === undefined) err(P + ".strokeGeometry", "strokeGeometry is never a build source alone; it travels only next to fillGeometry");
+      if (pr.oracleFillGeometry !== undefined && pr.vectorNetwork === undefined) err(P + ".oracleFillGeometry", "the oracle sits only next to a vectorNetwork; a geometry-built record is its own oracle");
+      if (pr.fillGeometry !== undefined) {
+        const why = (notedCodes.get(i) || []).filter((c) => GEOMETRY_SOURCE_CODES.indexOf(c) >= 0);
+        if (!why.length) err(P + ".fillGeometry", "a VECTOR built from its stored geometry carries a note saying why: " + GEOMETRY_SOURCE_CODES.join(", "));
+      }
+    }
+
     if (pr.inkBounds !== undefined) {
       if (!caps.inkBounds) err(P + ".inkBounds", "present, but the header does not declare capabilities.inkBounds");
       else if (!(Array.isArray(pr.inkBounds) && pr.inkBounds.length === 4 && pr.inkBounds.every(isNum))) err(P + ".inkBounds", "must be [x, y, width, height]");
     }
-    if (pr.relativeTransform !== undefined && !(Array.isArray(pr.relativeTransform) && pr.relativeTransform.length === 6 && pr.relativeTransform.every(isNum))) err(P + ".relativeTransform", "must be six numbers [a, b, tx, c, d, ty]");
-    if (n.type === "TEXT" && pr.characters !== undefined && !isStr(pr.characters)) err(P + ".characters", "must be a string");
     if (pr.lines !== undefined && (n.type !== "TEXT" || !isInt(pr.lines) || pr.lines < 0)) err(P + ".lines", "the number of lines Pixso drew: a TEXT record's non-negative integer; got " + show(pr.lines));
-    if (pr.textRanges !== undefined) {
-      if (n.type !== "TEXT") err(P + ".textRanges", "only a TEXT record has text ranges");
-      else if (!Array.isArray(pr.textRanges)) err(P + ".textRanges", "must be an array");
+    if (pr.textRanges !== undefined && n.type === "TEXT") {
+      if (!Array.isArray(pr.textRanges)) err(P + ".textRanges", "must be an array");
       else {
-        const len = isStr(pr.characters) ? pr.characters.length : 0;
+        const chars = isStr(pr.characters) ? pr.characters : "";
+        const len = chars.length;
+        // A bound between the two halves of a surrogate pair would style half a character.
+        const splits = (at) => at > 0 && at < len && chars.charCodeAt(at - 1) >= 0xd800 && chars.charCodeAt(at - 1) <= 0xdbff &&
+          chars.charCodeAt(at) >= 0xdc00 && chars.charCodeAt(at) <= 0xdfff;
         let prevEnd = 0;
         pr.textRanges.forEach((r, j) => {
           const R = P + ".textRanges[" + j + "]";
@@ -373,8 +623,14 @@ export function validateIR(ir, options) {
           if (!isInt(r.start) || !isInt(r.end) || r.start < 0 || r.end <= r.start || r.end > len) { err(R, "range [" + show(r.start) + ", " + show(r.end) + ") is not inside the " + len + " UTF-16 units of characters"); return; }
           if (r.start < prevEnd) err(R + ".start", "ranges are ascending and do not overlap; this one starts at " + r.start + " before the previous end " + prevEnd);
           prevEnd = r.end;
-          if (!isObj(r.fields)) err(R + ".fields", "must be an object");
-          else checkFields(r.fields, R + ".fields");
+          if (splits(r.start)) err(R + ".start", r.start + " splits a surrogate pair");
+          if (splits(r.end)) err(R + ".end", r.end + " splits a surrogate pair");
+          if (!isObj(r.fields)) { err(R + ".fields", "must be an object"); return; }
+          for (const k of Object.keys(r.fields)) {
+            if (!own(PT.RANGE_FIELDS, k)) err(R + ".fields." + k, "not a text range field (props.mjs RANGE_FIELDS)");
+            else checkKind(PT.RANGE_FIELDS[k], r.fields[k], R + ".fields." + k, k);
+          }
+          checkFields(r.fields, R + ".fields");
         });
       }
     }
@@ -678,6 +934,7 @@ export function validateIR(ir, options) {
         if (!(Array.isArray(d.size) && d.size.length === 2 && d.size.every(isNum))) err(D + ".size", "must be [width, height]");
         if (!(Array.isArray(d.transform) && d.transform.length === 6 && d.transform.every(isNum))) err(D + ".transform", "must be six numbers [a, b, tx, c, d, ty]");
         checkFields(d, D);
+        for (const k of ["fillGeometry", "strokeGeometry"]) if (d[k] !== undefined) checkShape(k, d[k], D + "." + k);
       });
     }
   });
@@ -769,6 +1026,14 @@ export function validateIR(ir, options) {
     if (!isObj(nt)) { err(P, "must be an object"); return; }
     closed(nt, ["code", "node", "guid", "path", "detail"], P);
     if (!Object.prototype.hasOwnProperty.call(REASON_CODES, nt.code)) err(P + ".code", "unknown reason code " + show(nt.code) + "; codes come from the vocabulary in docs/IR.md");
+    // The IR records what the reader decided; plan, build and run codes belong to the run's reports.
+    else if (REASON_CODES[nt.code].stage !== "read") err(P + ".code", "IR notes carry read-stage codes only; " + nt.code + " is a " + REASON_CODES[nt.code].stage + "-stage code");
+    else if (nt.code === CODE.VECTOR_ORACLE_DIFFERS) {
+      const cls = isStr(nt.detail) ? nt.detail.split(": ")[0] : null;
+      const vn = nodeAt(nt.node);
+      if (ORACLE_CLASSES.indexOf(cls) < 0) err(P + ".detail", "a " + nt.code + " detail starts with its class, one of " + ORACLE_CLASSES.join(", ") + "; got " + show(nt.detail));
+      if (!vn || vn.type !== "VECTOR" || !isObj(vn.props) || vn.props.vectorNetwork === undefined) err(P + ".node", "a " + nt.code + " note names a VECTOR record built from its network");
+    }
     if (nt.node !== undefined && !nodeAt(nt.node)) err(P + ".node", "index " + show(nt.node) + " is not a node record");
     if (nt.guid !== undefined && !isGuid(nt.guid)) err(P + ".guid", "not a guid: " + show(nt.guid));
     if (nt.path !== undefined && !(Array.isArray(nt.path) && nt.path.length > 0 && nt.path.every(isGuid))) err(P + ".path", "a guidPath is a non-empty array of guids");
