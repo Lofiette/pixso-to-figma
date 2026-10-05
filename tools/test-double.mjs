@@ -174,7 +174,8 @@ function rect(f, parent, w, h, opts) {
   V.primaryAxisAlignItems = "CENTER";
   check(k[0].y === 55, "primary CENTER", k[0].y);
   k[1].layoutAlign = "MAX"; k[2].layoutAlign = "MIN";
-  check(k[1].x === 40 && k[2].x === 10 && k[0].x === 25, "a child's own layoutAlign MIN / MAX overrides the counter alignment (builder4's flow pass relies on it)");
+  check(k[1].x === 25 && k[2].x === 25 && k[0].x === 25, "a child's own layoutAlign MIN / MAX is ignored: the counter alignment places it (docs/FINDINGS.md: 0 aligned; review figma F4)",
+    JSON.stringify(k.map((c) => c.x)));
   k[1].visible = false;
   check(k[2].y === 10 + (180 - 60) / 2 + 20, "a hidden child is out of the flow", k[2].y);
   k[1].visible = true;

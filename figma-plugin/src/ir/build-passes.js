@@ -291,7 +291,8 @@ B.flowFixPass = async function (st, last) {
         var err = Math.abs(horiz ? (ng.y - baseY) : (ng.x - baseX));
         if (err < bestErr - 0.01) { bestErr = err; best = opts[oi]; }
       }
-      if (best !== null && bestErr <= 0.5) { try { ng.layoutAlign = best; C.flowAligned++; continue; } catch (e2) {} }
+      // Pinned, so place3 does not write the IR's layoutAlign back over it (part F, review figma F4).
+      if (best !== null && bestErr <= 0.5) { try { ng.layoutAlign = best; st.pinned[g] = 1; C.flowAligned++; continue; } catch (e2) {} }
       try { ng.layoutAlign = before; } catch (e3) {}
     }
     // Last resort: out of the flow, on the wanted matrix. The parent is frozen first, and every

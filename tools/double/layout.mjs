@@ -9,7 +9,9 @@
 // builder4 measured it, I otherwise):
 //   - layoutMode HORIZONTAL / VERTICAL; padding; itemSpacing (negative too); primaryAxisAlignItems MIN,
 //     CENTER, MAX, SPACE_BETWEEN (one child: at the start, I); counterAxisAlignItems MIN, CENTER, MAX
-//     (BASELINE as MIN, I); a child's layoutAlign MIN / CENTER / MAX overriding it (builder4:381-389, C);
+//     (BASELINE as MIN, I); a child's layoutAlign MIN / CENTER / MAX ignored, the parent's alignment
+//     placing it (deprecated values; docs/FINDINGS.md: 23 children taken out of flow, 0 aligned by
+//     them, C; part F, review figma F4);
 //   - primaryAxisSizingMode / counterAxisSizingMode AUTO hug their flow children, FIXED keep the size;
 //   - layoutGrow > 0 shares the free primary space (only in a FIXED primary axis), layoutAlign STRETCH
 //     takes the inner counter size (only in a FIXED counter axis; in a hugging one the child keeps its
@@ -155,8 +157,7 @@ function arrange(H, st, changed) {
     const lineC = wrap ? rowHeights[ri] : innerC;
     let p = start;
     row.forEach((c, k) => {
-      const own = c.props.layoutAlign;
-      let ca = own === "MIN" || own === "CENTER" || own === "MAX" ? own : (P.counterAxisAlignItems || "MIN");
+      let ca = P.counterAxisAlignItems || "MIN";
       if (ca === "BASELINE") ca = "MIN";
       const cs = cntSize(c);
       let q = cPos;

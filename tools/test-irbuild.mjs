@@ -454,6 +454,18 @@ const mixedNodes = () => [
     "a truncated one-line label in a fixed box is not widened, and countLines counts the one line it draws", JSON.stringify([n.width, R.textWidened, m]));
 }
 {
+  // Review figma F4: a 32 px child saying STRETCH in a 36 px row hugging its counter axis, which
+  // Pixso centres (y = 2). Figma ignores a child's MIN / CENTER / MAX (docs/FINDINGS.md: 0 aligned),
+  // so the flow pass takes it out of the flow onto its place, and it stays there.
+  const nodes = [frame(0, -1, [T6(0, 0), 200, 36], { layoutMode: "HORIZONTAL", primaryAxisSizingMode: "FIXED", counterAxisSizingMode: "AUTO", itemSpacing: 8 }),
+    rect(1, 0, [T6(0, 0), 40, 36]), rect(2, 0, [T6(48, 2), 32, 32], { layoutAlign: "STRETCH" })];
+  const E = env();
+  const { R, ctx } = await build(E, mkTask({ nodes }));
+  const n = nodeOf(E, ctx, 2);
+  check(near(n.relativeTransform[1][2], 2, 0.5) && near(n.relativeTransform[0][2], 48, 0.5) && R.counters.flowAligned === 0 && R.counters.flowAbsolute === 1,
+    "a child Pixso centres in a hugging row ends at its place out of the flow; no per-child alignment is counted as done", JSON.stringify([n.relativeTransform, R.counters.flowAligned, R.counters.flowAbsolute]));
+}
+{
   // Review figma F7 and F9: native booleans in an auto-layout flow. One ABSOLUTE at (250, 40), one
   // turned 90° (pinned out of the flow): each ends on its wanted matrix, and making them reads no
   // layout in the write-only booleans phase (the holder's matrix in a flow is a layout read).
