@@ -67,7 +67,18 @@ export function pathBounds(data, matrix) {
     throw new Error("pathBounds: the matrix is [[a, b, tx], [c, d, ty]] of finite numbers");
   }
   const map = (x, y) => (m === null ? [x, y] : [m[0][0] * x + m[0][1] * y + m[0][2], m[1][0] * x + m[1][1] * y + m[1][2]]);
-  const tok = text.split(/\s+/);
+  // Figma writes its paths with each command glued to its first number ("M0 0L10 0Z", P19B on
+  // 2026-10-05); Pixso and the double write them spaced. Anything else (commas included) is refused.
+  const tok = [];
+  const TOKEN = /\s*,?\s*([MLQCZ]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)/y;
+  let at = 0;
+  while (at < text.length) {
+    TOKEN.lastIndex = at;
+    const hit = TOKEN.exec(text);
+    if (!hit) throw new Error("pathBounds: cannot read " + JSON.stringify(text.slice(at, at + 20)) + " at character " + at);
+    tok.push(hit[1]);
+    at = TOKEN.lastIndex;
+  }
   const boxes = [];
   let box = null, cur = null, start = null;
   const grow = (p) => {

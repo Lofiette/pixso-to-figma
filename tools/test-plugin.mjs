@@ -1014,9 +1014,10 @@ function wire(uiHtml, port, code, tap) {
     const bigHash = createHash("sha1").update(big).digest("hex");
     const opsB = W.plugin.PXF_IR.ops, wasB = opsB.fonts;
     opsB.fonts = async (ctx) => Object.assign(ctx.report, { figmaHash: ctx.S.images()[bigHash] || null });
+    const mark = toPlugin.length;   // only this job: with P4 recorded as binary, earlier images travel as slices too
     const rb = await srv.post({ kind: "ir", imageTransport: "binary" }, JSON.stringify(FONTS_TASK()), new Map([[bigHash, big]]), 30000);
     opsB.fonts = wasB;
-    const slices = toPlugin.filter((m) => m.t === "image-chunk" && typeof m.d === "object");
+    const slices = toPlugin.slice(mark).filter((m) => m.t === "image-chunk" && typeof m.d === "object");
     check(rb.figmaHash === bigHash && slices.length === 2 && slices.every((m) => m.d.length <= 4 * 1048576) && toPlugin.some((m) => m.t === "image-begin" && m.hash === bigHash && m.binary === true),
       "the binary image transport sends a 5 MB image as two Uint8Array slices of at most 4 MB, and Figma's hash is its SHA-1", JSON.stringify([rb.figmaHash === bigHash, slices.map((m) => m.d.length)]));
 

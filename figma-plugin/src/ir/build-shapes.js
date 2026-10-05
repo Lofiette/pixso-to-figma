@@ -31,7 +31,8 @@ var OPS = { UNION: "union", SUBTRACT: "subtract", INTERSECT: "intersect", EXCLUD
 
 function msgOf(e) { return String((e && e.message) || e).slice(0, 300); }
 function firstPoint(data) {
-  var m = /^\s*M\s+(-?[0-9.]+(?:[eE][-+]?[0-9]+)?)\s+(-?[0-9.]+(?:[eE][-+]?[0-9]+)?)/.exec(String(data));
+  // Figma reads paths back with the command glued to its first number ("M0 0L…", P19B 2026-10-05).
+  var m = /^\s*M\s*([-+]?[0-9.]+(?:[eE][-+]?[0-9]+)?)[\s,]+([-+]?[0-9.]+(?:[eE][-+]?[0-9]+)?)/.exec(String(data));
   return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
 }
 function indexIn(parent, node) {

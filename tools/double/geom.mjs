@@ -33,7 +33,8 @@ const ap = (m, x, y) => [m[0][0] * x + m[0][1] * y + m[0][2], m[1][0] * x + m[1]
 const ARGS = { M: 2, L: 2, Q: 4, C: 6, Z: 0 };
 
 export function parsePath(data) {
-  const tok = String(data || "").trim().split(/[\s,]+/).filter(Boolean);
+  // Spaced (Pixso, the IR) or glued (Figma's read-back, "M0 0L10 0Z") alike.
+  const tok = String(data || "").match(/[MLQCZ]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g) || [];
   const out = [];
   let cur = null, at = null, i = 0;
   const num = () => { const v = Number(tok[i++]); if (!isFinite(v)) throw new Error("double: a path number is not finite"); return v; };

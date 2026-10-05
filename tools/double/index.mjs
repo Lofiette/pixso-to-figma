@@ -303,6 +303,7 @@ export function makeDouble(opts = {}) {
   }
 
   // ---------- geometry ----------
+  const figmaPaths = (list) => list.map((p) => Object.assign({}, p, { data: String(p.data).replace(/([MLQCZ])\s+/g, "$1").replace(/\s+([MLQCZ])/g, "$1") }));
   function vectorFill(st) {
     if (st.paths) {
       return st.paths.filter((p) => p.windingRule !== "NONE").filter((p) => {
@@ -504,10 +505,12 @@ export function makeDouble(opts = {}) {
       case "absoluteTransform": return absOf(st);
       case "absoluteBoundingBox": return bbox(st);
       case "absoluteRenderBounds": return bbox(st);
-      case "fillGeometry": return fillGeometry(st);
-      case "strokeGeometry": return strokeGeometry(st);
+      // Read back the way Figma writes paths: each command glued to its first number ("M0 0L10 0Z",
+      // P19B 2026-10-05), so a reader that only splits on spaces fails here as it would in Figma.
+      case "fillGeometry": return figmaPaths(fillGeometry(st));
+      case "strokeGeometry": return figmaPaths(strokeGeometry(st));
       case "vectorNetwork": return clone(st.network || { vertices: [], segments: [], regions: [] });
-      case "vectorPaths": return clone(st.paths || fillGeometry(st));
+      case "vectorPaths": return figmaPaths(clone(st.paths || fillGeometry(st)));
       case "strokeWeight": { const s = SIDES.map((k) => P[k]); return s.every((v) => v === s[0]) ? s[0] : mixed; }
       case "cornerRadius": { const c = CORNERS.map((k) => P[k]); return c.every((v) => v === c[0]) ? c[0] : mixed; }
       case "key": return createHash("sha1").update("double component " + st.id).digest("hex");

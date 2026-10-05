@@ -331,14 +331,15 @@ check(/props is tools\/ir\/props\.mjs/.test(threw(() => taskMod.validateTask(bui
     regions: [{ windingRule: "EVENODD", loops: [[0, 1, 2]] }] };
   await v.setVectorNetworkAsync(net);
   const g = v.fillGeometry;
-  check(g.length === 1 && g[0].windingRule === "EVENODD" && g[0].data === "M 0 0 L 10 0 C 10 4 7 8 5 8 L 0 0 Z" && schema.figmaPathError(g[0].data) === null,
+  // Figma reads paths back glued ("M0 0L10 0Z", P19B 2026-10-05); pathBounds reads them as Figma writes them.
+  check(g.length === 1 && g[0].windingRule === "EVENODD" && g[0].data === "M0 0L10 0C10 4 7 8 5 8L0 0Z" && pathgeom.pathBounds(g[0].data).length === 1,
     "a network's region gives its fillGeometry, lines and cubics, as a Figma path string", JSON.stringify(g));
   await v.setVectorNetworkAsync({ vertices: net.vertices, segments: net.segments, regions: [] });
   check(v.fillGeometry.length === 0, "an open region-less network has no fill geometry");
   const ra = await rejects(v.setVectorNetworkAsync({ vertices: [{ x: 0, y: 0, handleMirroring: "RIGHT_ANGLE" }, { x: 1, y: 1 }], segments: [{ start: 0, end: 1 }], regions: [] }));
   check(/RIGHT_ANGLE/.test(ra), "setVectorNetworkAsync rejects RIGHT_ANGLE mirroring");
   v.vectorPaths = [{ windingRule: "NONZERO", data: "M 0 0 L 4 0 L 4 4 Z" }, { windingRule: "NONE", data: "M 0 0 L 1 1" }];
-  check(v.fillGeometry.length === 1 && v.fillGeometry[0].data === "M 0 0 L 4 0 L 4 4 Z", "vectorPaths give the fill geometry directly, without the unfilled ones");
+  check(v.fillGeometry.length === 1 && v.fillGeometry[0].data === "M0 0L4 0L4 4Z", "vectorPaths give the fill geometry directly, without the unfilled ones");
   check(networkRegionPath(net, { windingRule: "NONZERO", loops: [[2, 1, 0]] }).indexOf("Z") > 0, "a loop listed in the other direction still gives a closed path");
   // Text and fonts.
   const t = f.createText();
@@ -437,6 +438,9 @@ check(/props is tools\/ir\/props\.mjs/.test(threw(() => taskMod.validateTask(bui
   const near = (a, b) => Math.abs(a - b) < 1e-9;
   const box = (b, x0, y0, x1, y1) => b && near(b.x0, x0) && near(b.y0, y0) && near(b.x1, x1) && near(b.y1, y1);
   check(pathgeom.PATHGEOM_IMPLEMENTED === true && box(pathgeom.pathBounds("M 0 0 L 10 0 L 10 5 Z")[0], 0, 0, 10, 5), "pathBounds bounds a polygon by its points");
+  check(box(pathgeom.pathBounds("M0 0L10 0L10 5Z")[0], 0, 0, 10, 5) && box(pathgeom.pathBounds("M0 0L-1e1 5Z")[0], -10, 0, 0, 5),
+    "pathBounds reads Figma's glued form (\"M0 0L10 0Z\", P19B 2026-10-05) and exponents");
+  check((() => { try { pathgeom.pathBounds("M0 0X1 1"); return false; } catch (e) { return /cannot read/.test(e.message); } })(), "pathBounds refuses a character outside a path");
   // A quadratic from (0,0) to (10,0) through control (5,10) peaks at t = 1/2, y = 5 (the hull reaches 10).
   check(box(pathgeom.pathBounds("M 0 0 Q 5 10 10 0 Z")[0], 0, 0, 10, 5), "a quadratic's extremum, not its control point", JSON.stringify(pathgeom.pathBounds("M 0 0 Q 5 10 10 0 Z")));
   // The cubic (0,0) (0,10) (10,10) (10,0) peaks at t = 1/2, y = 7.5; the hull reaches 10.
