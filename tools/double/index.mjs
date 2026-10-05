@@ -539,7 +539,9 @@ export function makeDouble(opts = {}) {
   }
   function write(st, prop, value) {
     const P = st.props;
-    if (st.type === "TEXT" && TEXT_LAYOUT.indexOf(prop) >= 0) needFonts(prop === "fontName" ? fontsOf(st).concat([value]) : fontsOf(st));
+    // A new font needs itself loaded (not the font it replaces); any other write that lays text out
+    // needs every font the text uses.
+    if (st.type === "TEXT" && TEXT_LAYOUT.indexOf(prop) >= 0) needFonts(prop === "fontName" ? [value] : fontsOf(st));
     // A node-level write of a field sets it for every character: its ranges go.
     if (st.type === "TEXT" && Object.prototype.hasOwnProperty.call(RANGE_FIELD, prop)) st.ranges = st.ranges.filter((r) => r.name !== RANGE_FIELD[prop]);
     switch (prop) {
@@ -662,7 +664,7 @@ export function makeDouble(opts = {}) {
     }
     if (/^setRange/.test(name)) return call((start, end, value) => {
       if (!(Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end > start && end <= String(st.props.characters || "").length)) throw new Error("double: " + name + " range [" + start + ", " + end + ") is outside the characters");
-      needFonts(name === "setRangeFontName" ? fontsOf(st).concat([value]) : fontsOf(st));
+      needFonts(name === "setRangeFontName" ? [value] : fontsOf(st));
       st.ranges.push({ name, start, end, value: clone(name === "setRangeFills" ? checkPaint(value, "setRangeFills") : value) });
       logWrite(st, name + "()", [start, end, value]);
       touch(st);

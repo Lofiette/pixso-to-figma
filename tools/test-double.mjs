@@ -256,6 +256,9 @@ function rect(f, parent, w, h, opts) {
   const t = f.createText();
   check(/unloaded font/.test(threw(() => { t.characters = "x"; })) && /not available/.test(await rejects(f.loadFontAsync({ family: "Nope", style: "Regular" }))),
     "a text write before its font is loaded throws, and a font Figma lacks will not load");
+  await f.loadFontAsync({ family: "Roboto", style: "Regular" });
+  const ro = f.createText(); ro.fontName = { family: "Roboto", style: "Regular" }; ro.characters = "Roboto only";
+  check(ro.width > 0 && D.loadedFonts().join() === "Roboto|Regular", "a text given a new font needs only that font loaded, not the default it replaces");
   await f.loadFontAsync({ family: "Inter", style: "Regular" });
   t.fontSize = 16; t.characters = "Hello world";
   const st = { fontName: { family: "Inter", style: "Regular" }, fontSize: 16, letterSpacing: { unit: "PERCENT", value: 0 }, lineHeight: { unit: "AUTO" }, textCase: "ORIGINAL" };
