@@ -550,6 +550,18 @@ export function judgeTask(args) {
       const geo = p.oracleFillGeometry !== undefined ? value(p.oracleFillGeometry) : p.fillGeometry !== undefined ? value(p.fillGeometry) : [];
       const o = geometryBounds(geo, exp.get(t.i));
       fig = Array.isArray(w[ROW.vec]) ? w[ROW.vec] : [];
+      // A hidden record's placement is judged by geometry, as hidden (hiddenOver05), not here: Figma
+      // places a hidden child of an auto-layout flow where Pixso does not (the first live build,
+      // 2026-10-05: five vectors drawn right inside a hidden frame 10 px away). For a record that is
+      // not shown, its paths are compared as a shape: Figma's are moved so the two unions start at
+      // the same point. Count, size and winding still count.
+      if (!shown(t.i) && o.length && fig.length) {
+        const uo = unionOf(o), uf = unionOf(fig);
+        if (uo && uf) {
+          const sx = uo.x0 - uf.x0, sy = uo.y0 - uf.y0;
+          fig = fig.map((e) => [e[0], e[1] + sx, e[2] + sy, e[3] + sx, e[4] + sy].concat(e.slice(5)));
+        }
+      }
       if (o.length !== fig.length) {
         const so = o.reduce((s, e) => s + subpaths(e), 0), sf = fig.reduce((s, e) => s + subpaths(e), 0);
         const uo = unionOf(o), uf = unionOf(fig);
