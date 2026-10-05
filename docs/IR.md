@@ -224,7 +224,10 @@ Version 2's decisions about what a record is (`docs/M1.md` §2):
   becomes a `VECTOR` from its network and a LINE with a height a `VECTOR` from its geometry, each with a
   `SOURCE_FEATURE_UNSUPPORTED` note. Where the network and the stored geometry disagree in a known way the record has
   a `VECTOR_ORACLE_DIFFERS` note whose detail starts with the class (`region-no-fill`, `network-bounds`,
-  `winding`).
+  `winding`). A network record with no region whose segments close a loop and no stored fill path keeps its
+  network; Figma fills such a loop (P19B, 2026-10-05) where Pixso drew none, so under a visible fill paint the
+  record is written with `fills` [] and a `SOURCE_FEATURE_UNSUPPORTED` "unfilled loop" note, and Figma draws no
+  fill either. An open region loop the reader drops (no visible fill) adds no segment to the network.
 - **Groups (D4)** keep the type `GROUP`; the builder makes them frames with no paints and no clipping.
 - **Booleans (D5).** Under `booleans: auto` a boolean whose operands are all filled shapes stays a
   `BOOLEAN_OPERATION` over its operands; one with an operand that only strokes (or has no geometry) is written as one

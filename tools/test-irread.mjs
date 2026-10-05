@@ -391,6 +391,46 @@ check("an open region loop under no visible fill is dropped: a stroke-only netwo
   eq([net.regions, p.oracleFillGeometry, p.fillGeometry], [[], undefined, undefined]);
   return codesOf(IDS.vOpen).length === 0 && stats.vectors.loopsDropped === 1;
 });
+check("a dropped open loop adds no closing segment: the stored chain stays open, so Figma strokes and fills only what Pixso drew", () => {
+  // A closing segment left behind would be stroked, and with no region Figma fills the loop it closes
+  // (P19B regionlessFill ok, 2026-10-05).
+  eq(val(rec(IDS.vOpen).props.vectorNetwork).segments, [{ start: 0, end: 1 }, { start: 1, end: 2 }]);
+});
+// A network with no region whose segments close a loop, and no stored fill path: Figma fills the loop
+// (P19B regionlessFill ok), Pixso drew no fill. The fixture's vNoFill (a square with a region, no
+// fill paint, no stored fill) with its region removed.
+const SQUARE_NO_REGION = encodeVectorNetwork({ vertices: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
+  segments: [{ start: 0, end: 1 }, { start: 1, end: 2 }, { start: 2, end: 3 }, { start: 3, end: 0 }], regions: [] });
+// visible: undefined (no fill paint), or the visibility of a fill paint (a copy of vNet's solid fill).
+const regionless = (visible) => pixToIR(mutated((v, at) => {
+  v.blobs[at(IDS.vNoFill).vectorData.vectorNetworkBlob].bytes = SQUARE_NO_REGION;
+  if (visible !== undefined) at(IDS.vNoFill).fillPaints = [{ ...at(IDS.vNet).fillPaints[0], visible }];
+}));
+check("a closed loop with no region and no stored fill path under no visible fill: network-built, fills as stored, no note (neither tool draws a fill; the judge counts it unfilled)", () => {
+  for (const fill of [undefined, false]) {
+    const r = regionless(fill), p = rec(IDS.vNoFill, r.ir).props;
+    eq([val(p.vectorNetwork, r.ir).regions, val(p.vectorNetwork, r.ir).segments.length, p.oracleFillGeometry, p.fillGeometry], [[], 4, undefined, undefined]);
+    eq(val(p.fills, r.ir).length, fill === undefined ? 0 : 1);
+    eq(notesOf(IDS.vNoFill, r.ir), []);
+    const v = validate(r.ir); if (!v.ok) throw new Error(JSON.stringify(v.errors.slice(0, 2)));
+  }
+});
+check("the same under a visible fill paint: fills [] and SOURCE_FEATURE_UNSUPPORTED unfilled loop, so Figma draws no fill where Pixso drew none; the network, so the stroke, stays", () => {
+  const r = regionless(true);
+  const p = rec(IDS.vNoFill, r.ir).props;
+  eq([val(p.fills, r.ir), val(p.vectorNetwork, r.ir).segments.length, val(p.vectorNetwork, r.ir).regions], [[], 4, []]);
+  eq(notesOf(IDS.vNoFill, r.ir).map((n) => [n.code, n.detail]),
+    [[CODE.SOURCE_FEATURE_UNSUPPORTED, "unfilled loop: 1 closed loop with no region and no stored fill path; fills [] so Figma draws none, as Pixso"]]);
+  eq(r.stats.unsupported["unfilled loop"], 1);
+  const v = validate(r.ir); if (!v.ok) throw new Error(JSON.stringify(v.errors.slice(0, 2)));
+});
+check("an open chain with no region under a visible fill keeps its fills and gets no such note (Figma does not fill it, P19)", () => {
+  const r = pixToIR(mutated((v, at) => { at(IDS.vRight).fillPaints = [{ ...at(IDS.vNet).fillPaints[0] }]; }));
+  const p = rec(IDS.vRight, r.ir).props;
+  eq(val(p.fills, r.ir).length, 1);
+  eq(codesOf(IDS.vRight, r.ir), [CODE.SOURCE_FEATURE_UNSUPPORTED]);
+  eq(r.stats.unsupported["unfilled loop"], undefined);
+});
 check("an open region loop under a visible fill is closed with a straight segment", () => {
   const r = pixToIR(mutated((v, at) => { at(IDS.vOpen).fillPaints[0].visible = true; }));
   const p = rec(IDS.vOpen, r.ir).props, net = val(p.vectorNetwork, r.ir);
