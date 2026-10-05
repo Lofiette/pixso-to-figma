@@ -15,12 +15,10 @@
 // JSON, and refuses a path inside this repository, because probe results are machine- and file-specific
 // and belong with the rest of the private artefacts (docs/REWRITE.md §8).
 import { writeFileSync } from "node:fs";
-import { dirname, resolve, relative, isAbsolute } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { openSession, waitForPlugin } from "./session.mjs";
+import { assertOutsideRepo } from "./ir/outside-repo.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO = resolve(HERE, "..");
 const argv = process.argv.slice(2);
 const flag = (n) => { const i = argv.indexOf(n); if (i < 0) return null; const v = argv[i + 1]; argv.splice(i, 2); return v; };
 const n = flag("--n");
@@ -28,12 +26,11 @@ const label = flag("--label");
 const out = flag("--out");
 const probes = (argv[0] || "P1,P2,P3").split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
 
+// On real paths, case-folded where the file system is (docs/M1.md D17): a junction or a drive letter
+// in another case no longer gets a write into the repository.
 if (out) {
-  const rel = relative(REPO, resolve(out));
-  if (!rel.startsWith("..") && !isAbsolute(rel)) {
-    console.error("refusing to write probe results inside the repository (" + rel + "); give a path outside it");
-    process.exit(1);
-  }
+  try { assertOutsideRepo(out); }
+  catch (e) { console.error("refusing to write probe results: " + e.message); process.exit(1); }
 }
 
 const srv = await openSession();
