@@ -360,7 +360,8 @@ styleKey with different values are two styles; two with the same key and value a
 `{ hash, present, format? }`.
 - `hash` is the SHA-1 of the bytes, 40 lowercase hex. It is the same hash in Pixso and Figma.
 - `present` says whether the bytes are in the source archive: an archive entry named by the hash whose SHA-1 is the
-  hash. An entry whose SHA-1 differs from its name counts as missing and is noted `IMAGE_HASH_MISMATCH`. Often the
+  hash. An entry whose SHA-1 differs from its name counts as missing and is noted `IMAGE_HASH_MISMATCH`, a file-level
+  note with no `node` (the entry's name, which is the hash it claims, is in the detail). Often the
   bytes are not there: then the planner's chain is MCP bytes by hash (SHA-1 checked), then a Pixso render, then a
   counted placeholder (`IMAGE_PLACEHOLDER`), never an empty fill.
 - `format` is the sniffed format, because some `.png` entries are JPEG or WebP: `png`, `jpeg`, `webp`, `gif` or
@@ -412,7 +413,7 @@ from the preflight and the kit-map resolution, and *build* codes come from Figma
 | `OVERRIDE_ECHO` | read | an override field equal to the master's value; dropped | named here (§3, P9b) |
 | `NODE_TYPE_UNSUPPORTED` | read | a source node type the IR has no type for; it and its subtree are not carried | named here (§7, §8) |
 | `TEXT_LINES_UNKNOWN` | read | a buildable text with no stored baselines; it has no `lines` | named here (§3) |
-| `SOURCE_FEATURE_UNSUPPORTED` | read | a Pixso feature Figma lacks, named in the detail (CONNECTLINE, LINE with height, SECTION strokes, RIGHT_ANGLE, vibrance, dashCap, deformationTransform, fontVariations, GRID, operand strokes under `--booleans native`); dropped or converted | named here (§7) |
+| `SOURCE_FEATURE_UNSUPPORTED` | read | a Pixso feature Figma lacks, named in the detail, which starts with the feature from an open list (CONNECTLINE, LINE with height, SECTION strokes, RIGHT_ANGLE, vibrance, hue filter, dashCap, deformationTransform, fontVariations, GRID, counter alignment <X>, strokeCap <X>, effect <TYPE>, export format <X>, paint type <X>, image paint without an image, text without a font name, inverse winding, open region loop, operand strokes under `--booleans native`, an operand without fill geometry, boolean without stored geometry, built natively), optionally followed by `: ` and text; dropped or converted, and counted per feature in `stats.unsupported` | named here (§7) |
 | `GEOMETRY_INVALID` | read | a NaN size, transform or path, or a boolean with no operand and no geometry; the box comes from the geometry or the children, or the node is not carried | named here (§7) |
 | `IMAGE_HASH_MISMATCH` | read | an archive image entry whose SHA-1 is not its name; treated as missing | named here (§4) |
 | `VECTOR_ORACLE_DIFFERS` | read | the stored network and the stored fill geometry disagree in a pre-registered class (`region-no-fill`, `network-bounds`, `winding`) | named here (§3) |
