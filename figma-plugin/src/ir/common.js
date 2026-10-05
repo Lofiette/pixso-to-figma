@@ -9,7 +9,9 @@
 //   every other figma-plugin/src/ir/*.js, sorted by name, each wrapped as (function (IR) { … })(PXF_IR);
 // tools/ir/plugin-vm.mjs runs exactly that text in a vm for the tests (loadPluginIR).
 //
-// PXF_IR = { ops, probes, makeCtx, setHost, util, CODE, NS, STAMP_KEYS }
+// PXF_IR = { ops, probes, makeCtx, setHost, util, CODE, NS, STAMP_KEYS, BUILD_PHASES, WRITE_ONLY_PHASES }
+//   BUILD_PHASES, WRITE_ONLY_PHASES        the build op's phase table (tools/ir/task.mjs): the names
+//                                           the builder gives ctx.phase, and those that read no layout
 //   ops[op](ctx, task) -> Promise<report>   one per task op (fonts, build, verify, clean); the host's
 //                                           `ir` command validates the task, then calls the op
 //   probes[NAME] = { args(raw) -> args, run(args) -> Promise<result> }   upper-case names (P19B);
@@ -233,6 +235,6 @@ var PXF_IR = (function () {
   }
 
   var IR = { ops: {}, probes: {}, makeCtx: makeCtx, setHost: setHost, util: util, CODE: PXF_SCHEMA.CODE, NS: NS,
-    STAMP_KEYS: STAMP_KEYS };
+    STAMP_KEYS: STAMP_KEYS, BUILD_PHASES: PXF_TASK.BUILD_PHASES, WRITE_ONLY_PHASES: PXF_TASK.WRITE_ONLY_PHASES };
   return IR;
 })();

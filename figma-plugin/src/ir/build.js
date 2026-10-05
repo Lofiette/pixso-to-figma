@@ -19,6 +19,8 @@
 //                   flowStillOff, flowRejected, flowReverted, flowGroups, textTrimmed, textTrimReverted,
 //                   constraintsSet, sideStrokes, vectorsNetwork, vectorsGeometry, booleansNative, imagesPlaced },
 //       settings }
+//     ms has one entry per phase of IR.BUILD_PHASES that ran (ctx.phase(name) with those names; the
+//     phases of IR.WRITE_ONLY_PHASES read no layout).
 //     Order (docs/M1.md §6 B): fonts, images, pages, create (write-only, parent-first, DEFAULTS and
 //     NEVER_OMIT explicit, strokeWeight before the side weights, text through IR.writeTextProps,
 //     INSTANCE as an unstamped placeholder frame), vectors, booleans, layout, one settle, MEASURE

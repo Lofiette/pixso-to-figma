@@ -84,6 +84,9 @@ check(taskMod.MAX_TASK_CHARS === 4194304 && taskMod.maxTaskChars(4) === 4194304 
   /1 to 16/.test(threw(() => taskMod.maxTaskChars(17))) && /1 to 16/.test(threw(() => taskMod.maxTaskChars(0.5))),
   "the size cap is 4 MB, --max-task-mb takes 1 to 16");
 check(/needs tools\/ir\/schema\.mjs/.test(threw(() => taskMod.validateTask(buildTask()))), "validateTask without the schema throws rather than answering ok");
+check(taskMod.BUILD_PHASES.join() === "fonts,images,pages,create,vectors,booleans,layout,settle,measure,repair1,place1,repair2,place2,flowGroup,flow1,flow2,repair3,place3,textLine,constraints,stamp" &&
+  taskMod.WRITE_ONLY_PHASES.every((p) => taskMod.BUILD_PHASES.indexOf(p) >= 0) && taskMod.WRITE_ONLY_PHASES.join() === taskMod.BUILD_PHASES.slice(0, 6).join(),
+  "the build op's phase table is docs/M1.md §6 B's, and its write-only phases come first");
 taskOk("a build task with a frame, a placeholder, a geometry vector, a text and an image passes", buildTask());
 taskOk("a verify task of the same records passes", tmut(buildTask, (t) => { t.op = "verify"; }));
 taskOk("a fonts task (settings and fonts only) passes", fontsTask());

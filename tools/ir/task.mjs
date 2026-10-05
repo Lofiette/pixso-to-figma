@@ -71,6 +71,13 @@ export const TASK_SETTINGS = { layoutOrder: ["creation", "deepestFirst"], textRe
 export const TASK_SETTING_DEFAULTS = { textFit: "widen", layoutOrder: "creation", textRead: "measure",
   fallbackFont: { family: "Inter", style: "Regular" } };
 export const IMAGE_SOURCES = ["archive", "mcp", "render", "none"];
+// The build op's phase table (docs/M1.md §6 B), in order. ctx.phase is called with these names, the
+// build report's ms has one entry per phase that ran, and gate G12 reads them. The write-only phases
+// read no layout (and "layout" joins them under layoutOrder deepestFirst); the double counts layout
+// reads per phase to prove it.
+export const BUILD_PHASES = ["fonts", "images", "pages", "create", "vectors", "booleans", "layout", "settle", "measure",
+  "repair1", "place1", "repair2", "place2", "flowGroup", "flow1", "flow2", "repair3", "place3", "textLine", "constraints", "stamp"];
+export const WRITE_ONLY_PHASES = ["fonts", "images", "pages", "create", "vectors", "booleans"];
 
 // --max-task-mb n -> the cap in characters. n is 1..16; anything else throws.
 export function maxTaskChars(mb) {
