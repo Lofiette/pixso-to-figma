@@ -14,10 +14,15 @@
 //                                           the builder gives ctx.phase, and those that read no layout
 //   ops[op](ctx, task) -> Promise<report>   one per task op (fonts, build, verify, clean); the host's
 //                                           `ir` command validates the task, then calls the op
-//   probes[NAME] = { args(raw) -> args, run(args) -> Promise<result> }   upper-case names (P19B);
+//   probes[NAME] = { args(raw) -> args, run(args, io) -> Promise<result> }   upper-case names (P19B);
 //                                           args validates the probe's own arguments from the probe
 //                                           job's payload and throws on a bad one; run gets them merged
 //                                           with the common ones (n, maxMsPerSeries, deadlineMs, sizesMB)
+//                                           and the host's io: io.ask(message, deadlineMs) -> Promise of
+//                                           the window's answer, the host's round trip to the plugin
+//                                           window (this layer owns no timer, and figma.ui.onmessage is
+//                                           the host's); P4 moves image bytes through it (part E; part F
+//                                           wrote it into this contract, docs/M1.md §15)
 //   setHost(host)                           the host's side, given once before any op runs:
 //     host.images()         -> { sourceHash: figmaHash }   images created this session
 //     host.imageErrors()    -> { sourceHash: message }      images Figma refused this session
@@ -49,7 +54,11 @@
 //   ctx.settle(root)            -> Promise. Reads root.absoluteBoundingBox (forcing the pending layout),
 //                               then awaits getNodeByIdAsync. The only layout-forcing helper: call it at
 //                               phase boundaries, never inside a creation loop
-//   ctx.measure(node, rec)      -> { lines, approx }: host.measure if given, else IR.countLines (part C)
+//   ctx.measure(node, rec)      -> { lines, approx }: host.measure if given, else IR.countLines (part C).
+//                               An op that measures awaits IR.prepareMeasure(ctx) first (it finds or makes
+//                               the service page and the scratch text node) and calls IR.dropScratch(ctx)
+//                               in a finally (it removes the scratch, and the service page if it made it):
+//                               the build's MEASURE phase and the verify op both do (part F, M1.md §15)
 //   ctx.code(code, i, detail)   the only way to record a code: report.codes[code] += 1 and
 //                               report.coded.push({ code, i, detail }); throws on an unknown code
 //   ctx.failure(i, prop, msg)   report.failures.push({ i, prop, msg })
@@ -69,6 +78,10 @@
 // Stamps (docs/M1.md §5.3): roots and task-boundary parents carry pxSrc (guid), pxIdx (IR index),
 // pxRun, pxSnap, pxIr = "2" and pxState ("built" or "partial"); components pxDef; pages pxPage (page
 // guid, or "m1-service"); the scratch text node pxScratch, shared and private. Nothing else is stamped.
+// A root is stamped pxState "partial" when it is created and "built" in the stamp phase; a task-boundary
+// parent is stamped by the later task that attaches a split root to it (the earlier task cannot know
+// which of its records are boundaries), so a split root's task is refused when its parent is not found
+// (part B; the runner re-runs a split chain only whole, part F, M1.md §15).
 var PXF_IR = (function () {
   var NS = "pix2fig";
   var STAMP_KEYS = ["pxSrc", "pxIdx", "pxRun", "pxSnap", "pxIr", "pxState", "pxDef", "pxPage", "pxScratch"];
