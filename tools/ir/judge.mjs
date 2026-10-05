@@ -83,6 +83,9 @@
 //   sides are reduced by pathgeom's geometryBounds in root-relative coordinates. Outcome:
 //     match       equal path counts, every path's bounds within 1 px, every winding equal
 //     regrouped   path counts differ, the subpath counts and the union bounds (1 px) agree
+//     unfilled    the record has no visible fill, the oracle has no path and Figma has some: Figma
+//                 reports fill geometry for a closed loop with no region (P19B regionlessFill, 2026-10-05)
+//                 but draws nothing there, so nothing differs on the canvas
 //     otherwise a mismatch of kinds (VECTOR_DIFF_KINDS): missing (no row), count, bounds, winding.
 //   A mismatch is EXCUSED only by a code set before VERIFY, counted once under the first that
 //   applies: build-stage VECTOR_NETWORK_REFUSED, BOOLEAN_FALLBACK (build.coded), then read-stage
@@ -95,7 +98,7 @@
 //   ones under VECTOR_FROM_GEOMETRY and BOOLEAN_FLATTENED, which should match and which part F
 //   reviews (a subset of excused, not added to it). Every other mismatch is a differs entry
 //   { i, kind } (the first of missing, count, bounds, winding that no class covers) and a
-//   VECTOR_GEOMETRY_DIFFERS code (gate G9). checked = match + regrouped + all excused + differs.
+//   VECTOR_GEOMETRY_DIFFERS code (gate G9). checked = match + regrouped + unfilled + all excused + differs.
 // text       every TEXT record. One without `lines` is unknown (TEXT_LINES_UNKNOWN). One with `lines`
 //   and a measurement in its row is checked; a different count is a differ entry (its guid, both
 //   counts, whether the build widened it, whether its font was substituted (FONT_SUBSTITUTED in
@@ -128,7 +131,7 @@ export const J_SHAPE = Object.freeze({
     sizeVisibleOver1: "n", maxSizeVisible: "n", sizeHiddenOver05: "n", classified: "{n}", worst: "[]" },
   sides: { checked: "n", checkedAgainstOracle: "n", mismatchIR: "[]", mismatchOracle: "[]", unproven: "n",
     lostBorder: { population: "n", ok: "n" } },
-  vectors: { checked: "n", match: "n", regrouped: "n", excused: "{n}", excusedBuiltFromOracle: "{n}", differs: "[]" },
+  vectors: { checked: "n", match: "n", regrouped: "n", unfilled: "n", excused: "{n}", excusedBuiltFromOracle: "{n}", differs: "[]" },
   text: { checked: "n", differ: "[]", unmeasured: "n", unknown: "n" },
   placeholders: { expected: "n", aligned: "n", misaligned: "[]" },
   codes: "{n}",
@@ -282,6 +285,8 @@ export function judgeTask(args) {
     if (!(Number.isInteger(idx) && idx >= 0 && idx < ir.values.length)) throw argError("values[" + idx + "] is not in the IR");
     return ir.values[idx];
   };
+  // A fill Figma would draw: a paint not hidden and not fully transparent.
+  const visibleFill = (p) => p.fills !== undefined && value(p.fills).some((f) => isObj(f) && f.visible !== false && !(f.opacity === 0));
 
   // ---- the records: structure, expected placement, visibility
   const recs = task.nodes;
@@ -580,6 +585,12 @@ export function judgeTask(args) {
       if (!excuse && (codesOf.get(t.i) || []).some((n) => n.code === CODE.SOURCE_FEATURE_UNSUPPORTED && sfuGeometry(n.detail))) excuse = CODE.SOURCE_FEATURE_UNSUPPORTED;
       if (!excuse && kinds.every((k) => covered.has(k))) excuse = CODE.VECTOR_ORACLE_DIFFERS;
     }
+    // Nothing drawn either side: no visible fill, no oracle path, only Figma's fill geometry of a closed
+    // loop with no region (P19B regionlessFill). Checked after the codes set before VERIFY, which win, and
+    // never on a record the reader pre-registered with an oracle class (its class has its own rule).
+    if (!excuse && kinds.length === 1 && kinds[0] === "count" && !visibleFill(p) && fig.length > 0 &&
+      !(codesOf.get(t.i) || []).some((n) => n.code === CODE.VECTOR_ORACLE_DIFFERS) &&
+      (p.oracleFillGeometry !== undefined ? value(p.oracleFillGeometry) : p.fillGeometry !== undefined ? value(p.fillGeometry) : []).length === 0) { V.unfilled++; continue; }
     if (excuse) {
       add(V.excused, excuse);
       if (BUILT_FROM_ORACLE.indexOf(excuse) >= 0) add(V.excusedBuiltFromOracle, excuse);

@@ -155,7 +155,7 @@ const judge = (s) => {
   const probs = checkJShape(J);
   if (probs.length) fail("J shape: " + probs.slice(0, 3).join("; "));
   const v = J.vectors, excused = Object.values(v.excused).reduce((a, b) => a + b, 0);
-  if (v.checked !== v.match + v.regrouped + excused + v.differs.length) fail("vectors.checked is not match + regrouped + excused + differs: " + show(v));
+  if (v.checked !== v.match + v.regrouped + v.unfilled + excused + v.differs.length) fail("vectors.checked is not match + regrouped + unfilled + excused + differs: " + show(v));
   return J;
 };
 const sumMap = (m) => Object.values(m).reduce((a, b) => a + b, 0);
@@ -313,6 +313,11 @@ const widenScene = (by) => {
     "a native boolean's winding label is Figma's own (P19B: NONZERO for every operation), so only its count and bounds are judged", show(Jb.vectors));
   const sb2 = scene(); rowOf(sb2, 8)[ROW.vec] = [V("NONZERO", 162, 10, 190, 30)];
   check(same(judge(sb2).vectors.differs, [{ i: 8, kind: "bounds" }]), "a native boolean 2 px off still differs");
+  const su = scene(); su.ir.nodes[2].props.fills = 0; su.ir.nodes[2].props.oracleFillGeometry = 0; rowOf(su, 2)[ROW.vec] = [V("NONZERO", 40, 10, 50, 18)];
+  const Ju = judge(su);
+  check(Ju.vectors.unfilled === 1 && Ju.vectors.differs.length === 0, "a vector with no visible fill, no oracle path and Figma fill geometry is unfilled, not a defect (P19B regionlessFill)", show(Ju.vectors));
+  const su2 = scene(); su2.ir.nodes[2].props.fills = 1; su2.ir.nodes[2].props.oracleFillGeometry = 0; rowOf(su2, 2)[ROW.vec] = [V("NONZERO", 40, 10, 50, 18)];
+  check(same(judge(su2).vectors.differs, [{ i: 2, kind: "count" }]), "the same with a visible fill is still a count difference");
   const s3 = scene(); rowOf(s3, 2)[ROW.vec] = [];
   check(same(judge(s3).vectors.differs, [{ i: 2, kind: "count" }]), "a vector with no paths where the oracle has one");
   const s4 = scene(); rowOf(s4, 2)[ROW.vec] = [V("NONZERO", 40.9, 9.1, 50.9, 18.9)];

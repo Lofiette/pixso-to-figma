@@ -452,6 +452,10 @@ B.constraintsPass = async function (st) {
     }
     var c = ctx.prop(rec, "constraints");
     if (c === undefined) continue;
+    // Figma refuses constraints on a native boolean ("object is not extensible", default value included;
+    // the first live build, 2026-10-05). They only matter when the designer later resizes the parent, so
+    // the write is skipped and counted, never a failure.
+    if (st.node[k] && st.node[k].type === "BOOLEAN_OPERATION") { st.detail.constraintsSkippedOnBoolean = (st.detail.constraintsSkippedOnBoolean || 0) + 1; continue; }
     if (B.set(st, st.node[k], rec.i, "constraints", c)) st.counters.constraintsSet++;
   }
 };
