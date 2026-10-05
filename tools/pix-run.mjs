@@ -129,7 +129,7 @@ export function balanceLines(B) {
   const m = (o) => Object.keys(o).map((k) => k + " " + o[k]).join(" + ") || "0";
   return [
     "BALANCE (" + (B.ok ? "adds up" : "does NOT add up") + ")",
-    "  stored " + (S.stored === null ? "unknown" : S.stored) + " = " + terms + " = " + S.sum + (S.ok ? "" : "   <- " + (S.why || "differs")),
+    "  stored " + (S.stored === null ? "unknown" : S.stored) + " = " + terms + " = " + S.sum + (S.ok ? "" : "   <- " + (S.why || "differs")) + "   (the reader's own check, repeated)",
     "  IR non-instance " + NI.ir + " = built (S1 " + NI.builtS1 + " + S2 " + NI.builtS2 + ") + " + CODE.OUT_OF_SCOPE + " (" + m(NI.outOfScope) + ") = " + NI.sum + (NI.ok ? "" : "   <- differs"),
     "  IR INSTANCE " + I.ir + " = placeholders " + I.placeholders + " + " + CODE.OUT_OF_SCOPE + " (" + m(I.outOfScope) + ") = " + I.sum + (I.ok ? "" : "   <- differs"),
   ];

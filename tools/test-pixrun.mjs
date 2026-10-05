@@ -496,6 +496,27 @@ async function runGroup() {
   check(/pix2fig$/.test(defaultDataDir({ LOCALAPPDATA: join(TMP, "la") }, "win32")) && defaultDataDir({}, "linux").indexOf("pix2fig") > 0, "the per-user data folder");
 }
 
+// Review S4/F7: the stored-node equation carries every term the reader counts (outOfScope under
+// --scope pages, documents), and a term it does not know fails it loudly. Review F10: a dropped
+// image filter is counted. On part A's fixture, read with and without a page scope.
+{
+  const { makeFixture } = await import("./pix/fixture.mjs");
+  const { pixToIR } = await import("./pix/ir/index.mjs");
+  const fx = makeFixture();
+  for (const page of ["0:1", "0:4"]) {
+    const scope = "pages:" + page;
+    const r = pixToIR(fx.pix, { settings: { scope } });
+    const B = planM1(r.ir, r.stats, { runId: RUN, settings: { scope } }).balance;
+    check(B.ok && B.stored.ok && B.stored.terms.outOfScope === r.stats.notCarried.outOfScope && r.stats.notCarried.outOfScope > 0 && "documents" in B.stored.terms,
+      "--scope " + scope + " on the fixture: the stored-node equation adds up with the reader's out-of-scope term (" + B.stored.terms.outOfScope + ")", JSON.stringify(B.stored));
+  }
+  const r = pixToIR(fx.pix, { settings: {} });
+  const odd = JSON.parse(JSON.stringify(r.stats)); odd.notCarried.newKind = 0;
+  const Bo = planM1(r.ir, odd, { runId: RUN }).balance;
+  check(!Bo.ok && !Bo.stored.ok && /newKind unknown to the planner/.test(Bo.stored.why), "a not-carried term the planner does not know fails the stored equation, by name", JSON.stringify(Bo.stored));
+  check(planM1(r.ir, r.stats, { runId: RUN }).balance.filtersUnrendered === 1, "the fixture's dropped vibrance filter is counted for FILTER_UNRENDERED");
+}
+
 // ============================================================================================
 // 5. the verdict
 // ============================================================================================
@@ -565,6 +586,16 @@ function goodRun() {
   check(m1Gates(T, G.states, { audit: audit(true) }).verdict === "PASS" && m1Gates(T, G.states, { audit: audit(true, 1) }).verdict.indexOf(BUILT_NOT_AUDITED) === 0 &&
     /FAIL \(audit\)/.test(m1Gates(T, G.states, { audit: audit(false) }).verdict) && m1Gates(T, G.states, { audit: { roots: audit(true).roots } }).verdict.indexOf(BUILT_NOT_AUDITED) === 0,
     "PASS only with an audit covering every built root; a partial or malformed audit is not one, a failed root is FAIL");
+  {
+    // Review F6: G4 also measures the built side, which the planned equations cannot see.
+    const t = JSON.parse(JSON.stringify(T)); t.count.nonInstance -= 1;
+    const t2 = JSON.parse(JSON.stringify(T)); t2.placeholders.aligned -= 1; t2.placeholders.misaligned = [];
+    check(m1Gates(t, G.states, {}).failed.join() === "G4 balance" && /built side does not match: non-instance/.test(m1Gates(t, G.states, {}).gates.find((g) => g.id === "G4").detail) &&
+      m1Gates(t2, G.states, {}).failed.indexOf("G4 balance") >= 0 && /built side matches/.test(m1Gates(T, G.states, {}).gates.find((g) => g.id === "G4").detail),
+      "G4 fails when the judged non-instance nodes or aligned placeholders differ from the plan's built side");
+    const s = JSON.parse(JSON.stringify(G.states)); s.balance.filtersUnrendered = 2;
+    check(/FILTER_UNRENDERED 2/.test(m1Gates(T, s, {}).verdict), "the verdict line counts the image filters the reader dropped as FILTER_UNRENDERED");
+  }
   const failG = JSON.parse(JSON.stringify(T)); failG.geometry.visibleOver1 = 3;
   check(!/PASS/.test(m1Gates(failG, G.states, { audit: audit(true) }).verdict) && !/PASS/.test(m1Verdict(T, G.states, {}).join("\n")),
     "no PASS with a failing gate, and none without an audit");

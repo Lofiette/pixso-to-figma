@@ -254,9 +254,9 @@ const flowParent = (n) => { const p = IR.nodes[n.parent]; return !!p && (p.props
     notesOn(n.i).indexOf(CODE.GEOMETRY_INVALID) >= 0);
   const run = await runOnce("missing", { plant: (no, env) => { if (buildTaskOf(GOOD, target.i).taskNo === no) nodeOf(env, target.i).remove(); } });
   const T = run.totals;
-  check(failedGates(run).join() === "G3 count,G9 vectors" && T.count.built === T.count.expected - 1 && T.vectors.differs.length === 1 &&
+  check(failedGates(run).join() === "G3 count,G4 balance,G9 vectors" && T.count.built === T.count.expected - 1 && T.vectors.differs.length === 1 &&
     T.vectors.differs[0].i === target.i && T.vectors.differs[0].kind === "missing" && T.vectors.excused[CODE.VECTOR_ORACLE_DIFFERS] === ORACLE_CLASSES.length,
-    "a missing node fails G3 (count) and G9 (missing), though its codes excuse any mismatch of its paths", show([failedGates(run), T.count, T.vectors]));
+    "a missing node fails G3 (count), G4 (the built side is one short of the plan) and G9 (missing), though its codes excuse any mismatch of its paths", show([failedGates(run), T.count, T.vectors]));
 }
 {
   // Review F2: a stroked leaf moved under an unrelated frame with no child records. The totals agree
@@ -275,8 +275,8 @@ const flowParent = (n) => { const p = IR.nodes[n.parent]; return !!p && (p.props
   // A missing root: VERIFY cannot find it (ROOT_NOT_FOUND).
   const target = inScopeOf().find((n) => n.parent < 0 && n.type === "FRAME");
   const run = await runOnce("root", { plant: (no, env) => { if (buildTaskOf(GOOD, target.i).taskNo === no) nodeOf(env, target.i).remove(); } });
-  check(failedGates(run).join() === "G2 roots,G3 count" && run.totals.codes[CODE.ROOT_NOT_FOUND] === 1,
-    "a root removed after the build fails G2 (ROOT_NOT_FOUND) and G3", show(failedGates(run)));
+  check(failedGates(run).join() === "G2 roots,G3 count,G4 balance" && run.totals.codes[CODE.ROOT_NOT_FOUND] === 1,
+    "a root removed after the build fails G2 (ROOT_NOT_FOUND), G3 and G4 (its subtree is missing from the built side)", show(failedGates(run)));
 }
 {
   // A task the plugin refuses: BUILD_FAILED, its verify skipped, G1 (and G2, a verify that did not run).

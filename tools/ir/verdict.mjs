@@ -95,7 +95,17 @@ export function m1Gates(totals, states, opts) {
   const bal = [B.stored && B.stored.ok ? "stored adds up" : "stored does not add up" + (B.stored && B.stored.why ? " (" + B.stored.why + ")" : ""),
     B.nonInstance && B.nonInstance.ok ? "non-instance adds up" : "non-instance does not add up",
     B.instances && B.instances.ok ? "instances add up" : "instances do not add up"];
-  gate("G4", !B.ok, bal.join(", "));
+  // Both equations are planned counts (the stored one repeats the reader's own check), so they alone
+  // cannot see a build. The built side is measured: the judge's non-instance nodes and aligned
+  // placeholders, summed over the verify tasks, against the planned S1 + S2 and placeholders.
+  let measuredOk = true;
+  if (J && B.nonInstance && B.instances) {
+    const want = B.nonInstance.builtS1 + B.nonInstance.builtS2;
+    measuredOk = J.count.nonInstance === want && J.placeholders.aligned === B.instances.placeholders;
+    bal.push("built side " + (measuredOk ? "matches" : "does not match") + ": non-instance " + J.count.nonInstance + " of " + want + ", placeholders " +
+      J.placeholders.aligned + " of " + B.instances.placeholders);
+  } else bal.push("built side not measured");
+  gate("G4", !B.ok || !measuredOk, bal.join(", "));
 
   const failures = T.reduce((s, t) => s + (t.failures || 0), 0);
   gate("G5", failures > 0, failures + " build failures");
@@ -137,6 +147,7 @@ export function m1Gates(totals, states, opts) {
   const read = taskCodes(states, "build");
   const counts = { placeholders: B.instances ? B.instances.placeholders : 0 };
   for (const c of COUNTED) counts[c] = (read[c] || 0) + ((B.notes && B.notes[c]) || 0);
+  counts[CODE.FILTER_UNRENDERED] += B.filtersUnrendered || 0;
   counts.excusedVectors = J ? sum(J.vectors.excused) : 0;
   let verdict;
   if (failed.length) verdict = "FAIL (" + failed.join(", ") + ")";

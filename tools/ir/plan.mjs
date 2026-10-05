@@ -361,20 +361,26 @@ export function planM1(ir, stats, opts) {
   return { tasks, ledger, scope: { built: builtIdx, outOfScope }, balance, preflight, populations: lists };
 }
 
+// The reader's not-carried terms (tools/pix/ir/index.mjs notCarried), in the order they are printed.
+// A key the reader writes that is not here makes the stored equation fail loudly rather than drift.
+export const STORED_TERMS = ["pages", "directories", "documents", "styleDefinitions", "variables", "unsupported", "degenerate",
+  "foldedOperands", "outOfScope"];
+
 // The two equations of docs/M1.md §8.2, every term printed, `ok` only when both (and the instance
-// split) add up. Without part A's stats the stored-node side is unknown, and that is not ok.
+// split) add up. Without part A's stats the stored-node side is unknown, and that is not ok. The
+// stored equation repeats the reader's own check (pixToIR throws when it fails); both are planned
+// counts, and gate G4 also holds the built side against the judge's (tools/ir/verdict.mjs).
 export function balanceOf(ir, stats, ctx) {
   const N = ir.nodes || [];
   const nc = (stats && stats.notCarried) || null;
   const t = (k) => (nc && Number.isFinite(nc[k]) ? nc[k] : 0);
-  const stored = {
-    stored: stats && Number.isFinite(stats.stored) ? stats.stored : null,
-    terms: { records: N.length, pages: t("pages"), directories: t("directories"), styleDefinitions: t("styleDefinitions"),
-      variables: t("variables"), unsupported: t("unsupported"), degenerate: t("degenerate"), foldedOperands: t("foldedOperands") },
-  };
+  const stored = { stored: stats && Number.isFinite(stats.stored) ? stats.stored : null, terms: { records: N.length } };
+  for (const k of STORED_TERMS) stored.terms[k] = t(k);
   stored.sum = Object.values(stored.terms).reduce((s, x) => s + x, 0);
-  stored.ok = stored.stored !== null && !!nc && stored.sum === stored.stored;
+  const unknown = nc ? Object.keys(nc).filter((k) => STORED_TERMS.indexOf(k) < 0) : [];
+  stored.ok = stored.stored !== null && !!nc && stored.sum === stored.stored && !unknown.length;
   if (!nc || stored.stored === null) stored.why = "part A's stats (stored, notCarried) are not at hand";
+  else if (unknown.length) stored.why = "reader term " + unknown.join(", ") + " unknown to the planner";
   const P = ctx.popStats;
   const nonInstance = { ir: N.filter((r) => r.type !== "INSTANCE").length, builtS1: 0, builtS2: 0, outOfScope: {} };
   const instances = { ir: N.filter((r) => r.type === "INSTANCE").length, placeholders: 0, outOfScope: {} };
@@ -395,8 +401,14 @@ export function balanceOf(ir, stats, ctx) {
   instances.sum = instances.placeholders + sumOf(instances.outOfScope);
   instances.ok = instances.sum === instances.ir;
   const notes = {};
-  for (const n of ir.notes || []) if (!Number.isInteger(n.node) || ctx.B[n.node]) notes[n.code] = (notes[n.code] || 0) + 1;
-  return { ok: stored.ok && nonInstance.ok && instances.ok, stored, nonInstance, instances, notes, planCodes: ctx.planCodes,
+  // An image filter Figma has no value for (the reader's "hue filter", "vibrance"), dropped from the
+  // paint: counted as FILTER_UNRENDERED on the verdict line (docs/M1.md D10).
+  let filtersUnrendered = 0;
+  for (const n of ir.notes || []) if (!Number.isInteger(n.node) || ctx.B[n.node]) {
+    notes[n.code] = (notes[n.code] || 0) + 1;
+    if (n.code === CODE.SOURCE_FEATURE_UNSUPPORTED && typeof n.detail === "string" && /^(hue filter|vibrance)(:|$)/.test(n.detail)) filtersUnrendered++;
+  }
+  return { ok: stored.ok && nonInstance.ok && instances.ok, stored, nonInstance, instances, notes, filtersUnrendered, planCodes: ctx.planCodes,
     populations: Object.keys(P).reduce((o, k) => { o[k] = P[k].records; return o; }, {}) };
 }
 
