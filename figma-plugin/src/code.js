@@ -9,13 +9,16 @@
 // Nothing that arrives over the network is ever run as code. The builder and the verifier used to
 // arrive inside every job as text and be compiled here with the async-function constructor, and a
 // "render" job was any script at all — so whatever could reach the runner's port could run anything
-// in the designer's file. A job now names one of five fixed commands and carries data for it:
+// in the designer's file. A job now names one of six fixed commands and carries data for it:
 //
 //   build    the payload is the tree to build (tools/pack4.mjs writes it)
 //   verify   the same payload, and the id of the root to measure
 //   clean    which roots a rebuild replaces (the rule tools/test-clean.mjs proves)
 //   render   one named operation from RENDER_OPS below, with its parameters
-//   probe    the measurements docs/REWRITE.md §9 needs from the real plugin (P1, P2, P3)
+//   probe    the measurements docs/REWRITE.md §9 needs from the real plugin (P1, P2, P3, and the
+//            IR layer's own, PXF_IR.probes)
+//   ir       one task cut from the IR (tools/ir/task.mjs): validated, then run by the IR layer's op
+//            for it (PXF_IR.ops, figma-plugin/src/ir/*.js; docs/M1.md §5.3)
 //
 // Any other kind is refused with an error report. No string is ever compiled.
 figma.showUI(__html__, { width: 380, height: 300 });
@@ -25,12 +28,19 @@ figma.showUI(__html__, { width: 380, height: 300 });
 // frame stayed latched on "busy" and went on heartbeating, and the runner saw a live plugin that
 // would never take another job.
 var SLICE = 400000;
-var buf = [], ibuf = [], job = null, images = {};
+var buf = [], ibuf = [], job = null, images = {}, imageErrors = {};
 
 function log(m) { figma.ui.postMessage({ t: "log", m: String(m) }); }
 function own(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
 function isStr(v, max) { return typeof v === "string" && v.length <= (max || 4096); }
-function stampOf(n) { try { return n.getPluginData("pxSrc"); } catch (e) { return ""; } }
+// A root's source stamp: the private one the payload builder writes, else the shared one the IR
+// builder writes (namespace pix2fig, docs/M1.md §5.3), so RENDER, CLEAN and the sweep find both.
+function stampOf(n) {
+  var s = "";
+  try { s = n.getPluginData("pxSrc"); } catch (e) {}
+  if (!s) { try { s = n.getSharedPluginData(PXF_IR.NS, "pxSrc"); } catch (e2) {} }
+  return s || "";
+}
 // A built root is always a top-level child of a page: the builder appends it to the current page.
 function topLevel(n) { try { return !!(n && n.parent && n.parent.type === "PAGE"); } catch (e) { return false; } }
 function refuse(m) { var e = new Error(m); e.refused = true; throw e; }
@@ -199,6 +209,8 @@ function scratchNodes() {
     for (var k = 0; k < kids.length; k++) {
       var mark = "";
       try { mark = kids[k].getPluginData("pxScratch"); } catch (e) {}
+      // The IR layer's scratch text node carries the mark shared as well (ctx.stamp).
+      if (mark !== "1") { try { mark = kids[k].getSharedPluginData(PXF_IR.NS, "pxScratch"); } catch (e2) {} }
       if (mark === "1") out.push(kids[k]);
     }
   }
@@ -374,7 +386,10 @@ async function probeP3(A) {
   return { pluginToUi: down, uiToPlugin: up, largestDownMB: largest(down), largestUpMB: largest(up) };
 }
 
-var PROBES = { P1: probeP1, P2: probeP2, P3: probeP3 };
+// P1-P3 are functions of the common arguments. The IR layer's probes (PXF_IR.probes, upper-case names
+// such as P19B) are { args(raw) -> their own arguments, run(args) }: args sees the whole payload and
+// throws on a bad argument, which refuses the job before anything runs.
+var PROBES = Object.assign({ P1: probeP1, P2: probeP2, P3: probeP3 }, PXF_IR.probes);
 
 function numberIn(v, dflt, lo, hi, what) {
   if (v === undefined) return dflt;
@@ -395,20 +410,59 @@ async function cmdProbe(P) {
     deadlineMs: numberIn(P.deadlineMs, 30000, 100, 600000, "deadlineMs"),
     sizesMB: sizes
   };
+  // Every probe's own arguments are checked before any probe runs.
+  var own2 = {};
+  for (var q = 0; q < list.length; q++) {
+    var pr = PROBES[list[q]];
+    if (typeof pr === "function") continue;
+    if (!pr || typeof pr.args !== "function" || typeof pr.run !== "function") refuse("probe: " + list[q] + " is not a probe");
+    try { own2[list[q]] = pr.args(P) || {}; }
+    catch (ea) { refuse("probe: " + list[q] + ": " + String((ea && ea.message) || ea)); }
+  }
   var out = { plugin: PXF_VERSION, label: isStr(P.label, 80) ? P.label : null, args: A, probes: {} };
   for (var p = 0; p < list.length; p++) {
     var t0 = clockNow();
-    try { out.probes[list[p]] = await PROBES[list[p]](A); }
+    try {
+      var probe = PROBES[list[p]];
+      out.probes[list[p]] = typeof probe === "function" ? await probe(A) : await probe.run(Object.assign({}, A, own2[list[p]]));
+    }
     catch (e) { out.probes[list[p]] = { error: String((e && e.message) || e) }; }
+    if (!out.probes[list[p]] || typeof out.probes[list[p]] !== "object") out.probes[list[p]] = { result: out.probes[list[p]] === undefined ? null : out.probes[list[p]] };
     out.probes[list[p]].ms = Math.round(clockNow() - t0);
   }
   return out;
 }
 
 // ---------------------------------------------------------------------------------------------
+// ir: one task of the IR path (docs/M1.md §5.2, §5.3). The task is validated here, whole, before
+// anything is touched; then the op it names runs with a fresh context. The ops themselves live in
+// figma-plugin/src/ir/*.js (PXF_IR.ops); an op this build does not have is refused by name.
+//
+// The IR layer reaches this host only through what is given here: the images created this session
+// and the ones Figma refused, and the progress counter, which the window forwards to the runner as
+// the liveness signal (a heartbeat alone never extends a task).
+PXF_IR.setHost({
+  images: function () { return images; },
+  imageErrors: function () { return imageErrors; },
+  progress: function (done, id) { figma.ui.postMessage({ t: "progress", id: id, done: done }); },
+  log: log
+});
+
+async function cmdIr(P, j) {
+  // The ceiling, not the planner's cap: the runner already cut the task to its --max-task-mb.
+  var v = PXF_TASK.validateTask(P, { schema: PXF_SCHEMA, maxChars: PXF_TASK.MAX_TASK_CHARS_CEILING, maxErrors: 20 });
+  if (!v.ok) {
+    refuse("ir: the task is refused: " + v.errors.slice(0, 5).map(function (e) { return (e.path || "(task)") + ": " + e.message; }).join("; ") +
+      (v.errors.length > 5 ? " (and " + (v.errors.length - 5) + " more)" : ""));
+  }
+  if (!own(PXF_IR.ops, P.op) || typeof PXF_IR.ops[P.op] !== "function") refuse("ir: this plugin has no " + JSON.stringify(P.op) + " op");
+  return PXF_IR.ops[P.op](PXF_IR.makeCtx(figma, P, j), P);
+}
+
+// ---------------------------------------------------------------------------------------------
 // the host: a fixed table of commands, and the transport that feeds it
 
-var COMMANDS = { build: cmdBuild, verify: cmdVerify, clean: cmdClean, render: cmdRender, probe: cmdProbe };
+var COMMANDS = { build: cmdBuild, verify: cmdVerify, clean: cmdClean, render: cmdRender, probe: cmdProbe, ir: cmdIr };
 
 function sendReport(id, report) {
   var text = "";
@@ -449,10 +503,16 @@ figma.ui.onmessage = async function (msg) {
   if (msg.t === "image-begin") { ibuf = []; return; }
   if (msg.t === "image-chunk") { if (typeof msg.d === "string") ibuf.push(msg.d); return; }
   if (msg.t === "image-end") {
+    // A refusal is remembered by hash for the IR builder (ctx.S.imageErrors()), which then draws a
+    // counted placeholder instead of an IMAGE paint Figma has no image for.
     try {
       var im = figma.createImage(figma.base64Decode(ibuf.join("")));
       images[String(msg.hash)] = im.hash;
-    } catch (e) { log("image " + String(msg.hash).slice(0, 8) + " failed: " + (e.message || e)); }
+      delete imageErrors[String(msg.hash)];
+    } catch (e) {
+      imageErrors[String(msg.hash)] = String((e && e.message) || e);
+      log("image " + String(msg.hash).slice(0, 8) + " failed: " + (e.message || e));
+    }
     ibuf = [];
     return;
   }

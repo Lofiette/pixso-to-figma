@@ -431,7 +431,7 @@ else fail("snapshotId: " + snapshotId(header("pix")) + " / " + snapshotId(header
 // names removed, and must give the same answers as the module.
 // The same holds for every module the plugin bundles (tools/build-plugin.mjs): no import, nothing
 // the sandbox may lack, and `export` only at the start of a line, where the bundler strips it.
-const BUNDLED = ["schema.mjs", "props.mjs"];
+const BUNDLED = ["schema.mjs", "props.mjs", "task.mjs", "pathgeom.mjs"];
 {
   const banned = [[/^\s*import\b/m, "an import"], [/\bTextEncoder\b/, "TextEncoder"], [/\b(?:0x[0-9a-f]+|\d+)n\b/i, "a BigInt literal"], [/\bBigInt\s*\(/, "a BigInt call"],
     [/\S[ \t]*\bexport\s/, "an export that is not at the start of a line"], [/^export\s+(?!const |function )/m, "an export other than export const or export function"]];

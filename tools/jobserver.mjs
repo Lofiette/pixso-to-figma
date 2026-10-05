@@ -30,8 +30,24 @@ import { randomBytes, randomInt, timingSafeEqual, createHash } from "node:crypto
 
 // The only kinds of job the plugin runs (figma-plugin/src/code.js); anything else is refused here
 // before it is queued, and refused again there.
-export const JOB_KINDS = Object.freeze(["build", "verify", "clean", "render", "probe"]);
+export const JOB_KINDS = Object.freeze(["build", "verify", "clean", "render", "probe", "ir"]);
 const MAX_PAIR_TRIES = 5;
+
+// The shape of post()'s opts, or what is wrong with it (null when it is fine or absent).
+export function checkPostOpts(opts) {
+  if (opts === undefined || opts === null) return null;
+  if (typeof opts !== "object" || Array.isArray(opts)) return "opts must be an object";
+  for (const k of Object.keys(opts)) if (["liveness", "ceilingMs", "onProgress"].indexOf(k) < 0) return "unknown option " + JSON.stringify(k);
+  const pos = (v) => typeof v === "number" && isFinite(v) && v > 0;
+  if (opts.liveness !== undefined) {
+    const l = opts.liveness;
+    if (!l || typeof l !== "object" || !pos(l.warnMs) || !pos(l.failMs) || Object.keys(l).some((k) => k !== "warnMs" && k !== "failMs")) return "liveness is { warnMs, failMs }, both positive";
+    if (l.warnMs >= l.failMs) return "liveness.warnMs must be below failMs";
+  }
+  if (opts.ceilingMs !== undefined && !pos(opts.ceilingMs)) return "ceilingMs must be a positive number";
+  if (opts.onProgress !== undefined && typeof opts.onProgress !== "function") return "onProgress must be a function";
+  return null;
+}
 
 export function newSecrets() {
   return { token: randomBytes(32).toString("hex"), pairCode: String(randomInt(0, 1000000)).padStart(6, "0") };
@@ -398,12 +414,19 @@ export function startJobServer(port = 3778, opts = {}) {
     lastPoll: () => lastPoll,
     // Queue one job and resolve when the plugin reports back. One job at a time by construction:
     // the plugin only ever sees the job that is pending right now.
-    post(job, payloadText, images = new Map(), timeoutMs = 20 * 60 * 1000) {
+    //
+    // opts (docs/M1.md §5.3, the IR path) = { liveness: { warnMs, failMs }, ceilingMs, onProgress(done) }:
+    // warn after warnMs without an advancing progress counter, fail with PLUGIN_STALLED after failMs
+    // without one or once ceilingMs has passed. Part P0 checks their shape and does not act on them
+    // yet; part E enforces them (and forwards the window's progress to onProgress).
+    post(job, payloadText, images = new Map(), timeoutMs = 20 * 60 * 1000, opts = undefined) {
       if (!job || !JOB_KINDS.includes(job.kind)) {
         return Promise.reject(new Error("refused: unknown job kind " + JSON.stringify(job && job.kind) +
           " — the plugin runs only " + JOB_KINDS.join(", ")));
       }
       if (typeof payloadText !== "string") return Promise.reject(new Error("a job's payload is JSON text"));
+      const badOpts = checkPostOpts(opts);
+      if (badOpts) return Promise.reject(new Error("post: " + badOpts));
       const id = "j" + (++seq);
       pending = { id, kind: job.kind, rootNodeId: job.rootNodeId || null,
                   cleanupRootId: job.cleanupRootId || null, page: job.page || null,
