@@ -64,7 +64,7 @@ const SWITCHES = { "--no-pixso": "noPixso", "--dry": "dry", "--yes": "yes" };
 function posNum(v, f) { const n = Number(v); if (!(n > 0)) throw new RangeError(f + " is a positive number"); return n; }
 
 export function parseArgs(argv) {
-  const o = { file: null, noPixso: false, dry: false, yes: false };
+  const o = { file: null, noPixso: false, dry: false, yes: false, given: [] };
   for (const f of Object.keys(SETTINGS)) o[SETTINGS[f][0]] = SETTINGS[f][2];
   for (let k = 0; k < argv.length; k++) {
     const a = argv[k];
@@ -75,6 +75,7 @@ export function parseArgs(argv) {
       if (v === undefined) throw new RangeError(a + " needs a value");
       if (Array.isArray(rule)) { if (rule.indexOf(v) < 0) throw new RangeError(a + " is one of " + rule.join(", ") + "; got " + JSON.stringify(v)); o[key] = v; }
       else o[key] = rule(v);
+      if (o.given.indexOf(key) < 0) o.given.push(key);
       continue;
     }
     if (a.startsWith("--")) throw new RangeError("unknown option " + a);
@@ -87,6 +88,24 @@ export function parseArgs(argv) {
   // --no-pixso is the same as --images archive (docs/M1.md §3).
   if (o.noPixso) o.images = "archive";
   return o;
+}
+
+// The reader's settings an IR was read with (its header), which --from-ir must keep: the planner
+// and the run folder describe the IR, not the command line's defaults. A flag given that
+// contradicts one is refused; one not given takes the header's value. Returns the refusal, or null.
+export const READER_FLAGS = { booleans: "--booleans", spaceEvenlySingle: "--space-evenly-single", textFit: "--text-fit", scope: "--scope" };
+export function adoptIrSettings(o, header) {
+  const hs = (header && header.settings) || {};
+  const sc = header && header.scope;
+  const fromHeader = { booleans: hs.booleans, spaceEvenlySingle: hs.spaceEvenlySingle, textFit: hs.textFit,
+    scope: sc && sc.kind === "pages" && Array.isArray(sc.ids) ? "pages:" + sc.ids.join(",") : sc && sc.kind === "file" ? "file" : undefined };
+  for (const k of Object.keys(READER_FLAGS)) {
+    const v = fromHeader[k];
+    if (v === undefined) continue;
+    if ((o.given || []).indexOf(k) >= 0 && o[k] !== v) return READER_FLAGS[k] + " " + o[k] + " contradicts the IR, which was read with " + v;
+    o[k] = v;
+  }
+  return null;
 }
 
 // The settings recorded in states.json, and the run folder's name.
@@ -153,7 +172,6 @@ async function loadReader() {
 export async function main(argv) {
   let o;
   try { o = parseArgs(argv); } catch (e) { say("pix-run: " + e.message); return 1; }
-  const settings = runSettings(o);
   let dataDir;
   try { dataDir = assertOutsideRepo(o.data ? resolve(o.data) : defaultDataDir()); }
   catch (e) { say("pix-run: " + e.message); return 1; }
@@ -174,6 +192,8 @@ export async function main(argv) {
   } catch (e) { say("pix-run: the source cannot be read: " + ((e && e.message) || e) + (e && e.code ? " (" + e.code + ")" : "")); return 1; }
   const v = validate(ir);
   if (!v.ok) { say("pix-run: the IR is refused: " + v.errors.slice(0, 5).map((x) => x.path + ": " + x.message).join("; ")); return 1; }
+  if (o.fromIr) { const why = adoptIrSettings(o, ir.header); if (why) { say("pix-run: " + why); return 1; } }
+  const settings = runSettings(o);
   const sha = ir.header.source.sha256 || createHash("sha256").update(JSON.stringify(ir.header.source)).digest("hex");
   const runDir = join(dataDir, "runs", runDirName(sha, settings));
   try {

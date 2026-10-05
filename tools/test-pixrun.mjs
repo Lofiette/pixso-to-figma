@@ -26,7 +26,7 @@ import { GATES, m1Gates, m1Verdict, sumJs, BUILT_NOT_AUDITED } from "./ir/verdic
 import { emptyJ, checkJShape, TOTALS_SHAPE } from "./ir/judge.mjs";
 import { REPO_ROOT } from "./ir/outside-repo.mjs";
 import { fakePixso } from "./test/fake-pixso.mjs";
-import { parseArgs, SETTINGS as RUN_SETTINGS } from "./pix-run.mjs";
+import { adoptIrSettings, parseArgs, SETTINGS as RUN_SETTINGS } from "./pix-run.mjs";
 import { accept, legacyLostBorders } from "./m1-accept.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -715,6 +715,23 @@ function pixRunGroup() {
     check(c.code === 1 && /inside the repository/.test(c.out), "pix-run refuses the repository named with its drive letter in the other case");
   } else console.log("skip the drive-letter case: not Windows");
   check(Object.keys(RUN_SETTINGS).length === 19, "every setting of §3 is a pix-run flag (with --data, --only, --from-ir and --stats)");
+  {
+    // Review S7: --from-ir keeps the reader's settings the IR header records.
+    const header = { settings: { textFit: "source-box", booleans: "flatten", spaceEvenlySingle: "center" }, scope: { kind: "pages", ids: ["0:4"] } };
+    const a = parseArgs(["--from-ir", "x.json"]);
+    const why = adoptIrSettings(a, header);
+    const b = parseArgs(["--from-ir", "x.json", "--text-fit", "widen"]);
+    const c = parseArgs(["--from-ir", "x.json", "--booleans", "flatten"]);
+    check(why === null && a.textFit === "source-box" && a.booleans === "flatten" && a.spaceEvenlySingle === "center" && a.scope === "pages:0:4" &&
+      /--text-fit widen contradicts the IR, which was read with source-box/.test(adoptIrSettings(b, header)) && adoptIrSettings(c, header) === null,
+      "--from-ir takes booleans, spaceEvenlySingle, textFit and scope from the IR header, and refuses a flag that contradicts it");
+    const flat = JSON.parse(JSON.stringify(S.ir)); flat.header.settings.textFit = "source-box"; flat.header.settings.booleans = "flatten";
+    writeFileSync(join(src, "ir-flat.json"), JSON.stringify(flat));
+    let out = "", code = 0;
+    try { out = execFileSync(process.execPath, [join(HERE, "pix-run.mjs"), "--from-ir", join(src, "ir-flat.json"), "--stats", join(src, "stats.json"), "--dry", "--no-pixso", "--data", join(TMP, "data-flat")], { encoding: "utf8", stdio: "pipe" }); }
+    catch (e) { code = e.status; out = String(e.stdout || "") + String(e.stderr || ""); }
+    check(code === 0 && /"booleans":"flatten"/.test(out) && /"textFit":"source-box"/.test(out), "pix-run --from-ir records and prints the settings the IR was read with", out.slice(0, 600));
+  }
 }
 
 // ============================================================================================
