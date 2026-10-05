@@ -35,7 +35,8 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { performance } from "node:perf_hooks";
 import { buildPlugin, generatePlugin, forbiddenIn, DIST_DIR } from "./build-plugin.mjs";
-import { startJobServer, newSecrets, JOB_KINDS } from "./jobserver.mjs";
+import { startJobServer, newSecrets, JOB_KINDS, IMAGE_TRANSPORTS as IR_TRANSPORTS } from "./jobserver.mjs";
+import { p4Images } from "./plugin-probe.mjs";
 import { openSession, waitForPlugin } from "./session.mjs";
 import { cleanScenario } from "./test-clean.mjs";
 import { buildAll, verdict, staleBuildNote } from "./build-lib.mjs";
@@ -221,8 +222,16 @@ try {
 // ============================================================================================
 // Plain geometry only: a node is a relative transform and a size, an absolute transform is the
 // product up to the page, and a bounding box is that transform applied to the four corners.
-function makeFigma() {
-  const reg = { seq: 0, byId: new Map(), exportBytes: 16 };
+//
+// With { dynamicPage: true } it behaves as Figma does under the manifest's documentAccess
+// "dynamic-page" (docs/M1.md §6 E): figma.getNodeById throws, figma.currentPage cannot be assigned
+// (setCurrentPageAsync loads and switches), and a page that is not loaded lists no children until
+// page.loadAsync() or figma.loadAllPagesAsync(). reg.unload(page) makes a page look like one from an
+// earlier session.
+function makeFigma(opts) {
+  const dyn = !!(opts && opts.dynamicPage);
+  const reg = { seq: 0, byId: new Map(), exportBytes: 16, loaded: new Set(), createImages: 0 };
+  const kidsOf = (p) => p._kids || p.children;
   const mul = (a, b) => [
     [a[0][0] * b[0][0] + a[0][1] * b[1][0], a[0][0] * b[0][1] + a[0][1] * b[1][1], a[0][0] * b[0][2] + a[0][1] * b[1][2] + a[0][2]],
     [a[1][0] * b[0][0] + a[1][1] * b[1][0], a[1][0] * b[0][1] + a[1][1] * b[1][1], a[1][0] * b[0][2] + a[1][1] * b[1][2] + a[1][2]]];
@@ -254,7 +263,7 @@ function makeFigma() {
       setSharedPluginData(ns, k, v) { (this._spd[ns] || (this._spd[ns] = {}))[k] = String(v); },
       getSharedPluginData(ns, k) { return (this._spd[ns] || {})[k] || ""; },
       remove() {
-        if (this.parent) { const i = this.parent.children.indexOf(this); if (i >= 0) this.parent.children.splice(i, 1); }
+        if (this.parent) { const k = kidsOf(this.parent), i = k.indexOf(this); if (i >= 0) k.splice(i, 1); }
         this.parent = null; this.removed = true; reg.byId.delete(this.id);
       },
       exportAsync() { return Promise.resolve(new Uint8Array(reg.exportBytes)); },
@@ -262,17 +271,33 @@ function makeFigma() {
     if (type !== "RECTANGLE" && type !== "ELLIPSE") {
       n.children = [];
       n.appendChild = function (c) {
-        if (c.parent) { const i = c.parent.children.indexOf(c); if (i >= 0) c.parent.children.splice(i, 1); }
-        c.parent = this; this.children.push(c);
+        if (c.parent) { const k = kidsOf(c.parent), i = k.indexOf(c); if (i >= 0) k.splice(i, 1); }
+        c.parent = this; kidsOf(this).push(c);
       };
+    }
+    if (type === "PAGE") {
+      reg.loaded.add(n);
+      n.loadAsync = async function () { reg.loaded.add(this); };
+      if (dyn) {
+        n._kids = n.children;
+        delete n.children;
+        Object.defineProperty(n, "children", { get() { return reg.loaded.has(this) ? this._kids : []; }, enumerable: true });
+      }
     }
     reg.byId.set(n.id, n);
     return n;
   }
+  reg.unload = (p) => { reg.loaded.delete(p); };
   const root = node("DOCUMENT");
   const page = node("PAGE"); page.name = "Page 1"; root.appendChild(page);
+  let current = page;
   const figma = {
-    root, currentPage: page, ui: { postMessage() {}, onmessage: null }, _reg: reg, _node: node,
+    root, ui: { postMessage() {}, onmessage: null }, _reg: reg, _node: node,
+    get currentPage() { return current; },
+    set currentPage(p) {
+      if (dyn) throw new Error("Cannot set figma.currentPage with documentAccess: dynamic-page; use figma.setCurrentPageAsync");
+      current = p;
+    },
     showUI() {},
     createFrame: () => node("FRAME"), createRectangle: () => node("RECTANGLE"), createEllipse: () => node("ELLIPSE"),
     createSection: () => node("SECTION"),
@@ -280,23 +305,25 @@ function makeFigma() {
     createText() { throw new Error("the stand-in has no text"); },
     createNodeFromSvg() { throw new Error("the stand-in has no SVG import"); },
     createImage: (bytes) => {
+      reg.createImages++;
       if (!bytes || !bytes.length) throw new Error("Image is empty");
       return { hash: createHash("sha1").update(Buffer.from(bytes)).digest("hex") };
     },
     base64Decode: (s) => new Uint8Array(Buffer.from(s, "base64")),
     base64Encode: (u8) => Buffer.from(u8).toString("base64"),
     getNodeByIdAsync: async (id) => reg.byId.get(id) || null,
-    loadAllPagesAsync: async () => {},
+    loadAllPagesAsync: async () => { for (const p of root.children) reg.loaded.add(p); },
     loadFontAsync: async () => {},
-    setCurrentPageAsync: async (p) => { figma.currentPage = p; },
+    setCurrentPageAsync: async (p) => { reg.loaded.add(p); current = p; },
   };
+  if (dyn) figma.getNodeById = () => { throw new Error("figma.getNodeById is not available with documentAccess: dynamic-page; use getNodeByIdAsync"); };
   return figma;
 }
 
 // The host alone, fed messages the way the window feeds it, recording what it posts back. Probe
 // questions are answered the way the window answers them.
 function bareHost(opts) {
-  const figma = makeFigma(), posted = [];
+  const figma = makeFigma(opts), posted = [];
   figma.ui.postMessage = (m) => {
     posted.push(m);
     if (m.t === "probe-ping") setImmediate(() => figma.ui.onmessage({ t: "probe-answer", k: m.k }));
@@ -554,6 +581,76 @@ const FONTS_TASK = () => ({ format: "pix2fig.task", version: 1, op: "fonts", run
     check(listed.left.indexOf("pxf-test-shared-scratch") >= 0 && swept.swept >= 1 && s.removed,
       "the scratch list and sweep find a node marked pxScratch in shared plugin data", JSON.stringify([listed, swept]));
   }
+}
+
+// Part E's probes in the host: real (not stubs), their own arguments refused before anything runs,
+// and the window round trip the host hands them (io.ask) reaching the window.
+{
+  const H = bareHost();
+  const IRG = H.g.PXF_IR;
+  check(["P4", "P8", "P19B"].every((p) => IRG.probes[p] && !IRG.probes[p].run.notInThisBuild && typeof IRG.probes[p].args === "function"),
+    "P4, P8 and P19B are real probes in this build, not stubs");
+  const refusals = [];
+  for (const [payload, want] of [[{ probes: ["P4"] }, /P4: P4 needs p4/], [{ probes: ["P8"], p8: { cases: ["png9999"] } }, /P8: p8\.cases/],
+    [{ probes: ["P19B"], p19b: { keep: "yes" } }, /P19B: p19b\.keep/], [{ probes: ["P1", "P4"], p4: { hashes: ["nothex"] } }, /P4: p4\.hashes/]]) {
+    const before = H.posted.length;
+    const { report } = await H.job("probe", JSON.stringify(payload));
+    if (!(report.refused && want.test(report.error)) || H.posted.slice(before).some((m) => m.t === "probe-echo")) refusals.push(JSON.stringify(payload) + " -> " + report.error);
+  }
+  check(!refusals.length, "a probe's own bad argument refuses the whole job before any probe runs (P4 without images, P8's cases, P19B's keep)", refusals.join("; "));
+  // io.ask: the host's round trip, as P4 uses it. The bare host answers probe-fetch like the window would.
+  const bytes = Buffer.from("pxf synthetic bytes for P4"), hash = createHash("sha1").update(bytes).digest("hex");
+  const answer = H.figma.ui.postMessage;
+  H.figma.ui.postMessage = (m) => {
+    answer(m);
+    if (m.t === "probe-fetch") setImmediate(() => H.figma.ui.onmessage({ t: "probe-answer", k: m.k, d: m.as === "raw" ? new Uint8Array(bytes) : bytes.toString("base64") }));
+  };
+  const made = H.figma._reg.createImages;
+  const { report } = await H.job("probe", JSON.stringify({ probes: ["P4"], p4: { hashes: [hash], repeat: 2 }, deadlineMs: 2000 }));
+  const p4 = report.probes && report.probes.P4;
+  check(p4 && p4.verdicts && p4.verdicts.sameHash === "ok" && IR_TRANSPORTS.indexOf(p4.verdicts.transport) >= 0 && H.figma._reg.createImages - made === 4,
+    "P4 runs in the host: it asks the window for the bytes both ways (io.ask), creates an image from each, and the hashes hold", JSON.stringify(report.probes).slice(0, 200));
+  H.figma.ui.postMessage = answer;
+}
+
+// documentAccess "dynamic-page" (manifest.json): builder4's BUILD and VERIFY, CLEAN and RENDER, under
+// a stand-in that refuses the synchronous calls and lists no children on a page that is not loaded.
+check(JSON.parse(readFileSync(join(ROOT, "figma-plugin", "manifest.json"), "utf8")).documentAccess === "dynamic-page",
+  "the manifest sets documentAccess \"dynamic-page\" (docs/REWRITE.md §4)");
+{
+  const H = bareHost({ dynamicPage: true });
+  const f = H.figma;
+  check(/dynamic-page/.test((() => { try { f.currentPage = f.root.children[0]; return ""; } catch (e) { return e.message; } })()) &&
+    /dynamic-page/.test((() => { try { f.getNodeById("0:0"); return ""; } catch (e) { return e.message; } })()),
+    "the dynamic-page stand-in refuses figma.currentPage = … and figma.getNodeById, as Figma does");
+  if (PAYLOAD) {
+    const b = (await H.job("build", JSON.stringify(PAYLOAD), { page: "pxf synthetic page" })).report;
+    const v = (await H.job("verify", JSON.stringify(PAYLOAD), { rootNodeId: b.rootId, page: "pxf synthetic page" })).report;
+    check(!b.error && b.nodes === 3 && !v.error && v.count === 3 && (v.visibleOver1 || 0) === 0,
+      "under dynamic-page, BUILD makes its page current before writing to it and builds, and VERIFY measures 3 of 3", JSON.stringify([b.error, v.error]));
+  }
+  // A root built in an earlier session, on a page not loaded: RENDER finds it by its stamp, CLEAN
+  // removes it, and the scratch list sees a mark there.
+  const other = f.createPage(); other.name = "pxf other page";
+  const old = f.createFrame(); other.appendChild(old); old.setSharedPluginData("pix2fig", "pxSrc", "pxf-src-earlier");
+  const mark = f.createRectangle(); other.appendChild(mark); mark.name = "pxf-test-dyn-scratch"; mark.setPluginData("pxScratch", "1");
+  const gone = f.createFrame(); other.appendChild(gone); gone.setPluginData("pxSrc", "pxf-src-gone");
+  f._reg.unload(other);
+  const ex = (await H.job("render", JSON.stringify({ op: "export", id: "1:999999", src: "pxf-src-earlier", constraint: { type: "SCALE", value: 1 } }))).report;
+  check(ex.relocated === old.id && !ex.e, "under dynamic-page, RENDER export loads the pages before it looks for a root by its stamp", JSON.stringify(ex).slice(0, 160));
+  f._reg.unload(other);
+  const listed = (await H.job("render", JSON.stringify({ op: "scratch-list" }))).report;
+  f._reg.unload(other);
+  const cl = (await H.job("clean", JSON.stringify({ want: [{ src: "pxf-src-gone", id: null }] }))).report;
+  check(listed.left.indexOf("pxf-test-dyn-scratch") >= 0 && cl.removed === 1 && gone.removed,
+    "under dynamic-page, the scratch list and CLEAN load the pages first and find what sits on one not loaded", JSON.stringify([listed, cl]));
+  mark.remove();
+  f._reg.unload(other);
+  const lines = [];
+  let bad = 0;
+  try { bad = await cleanScenario(async (jobDesc, payload) => (await H.job(jobDesc.kind, payload)).report, (l) => lines.push(l)); }
+  catch (e) { bad = 1; lines.push("FAIL " + e.message); }
+  check(bad === 0, "tools/test-clean.mjs's scenario passes through CLEAN and RENDER under dynamic-page", lines.filter((l) => l.startsWith("FAIL")).join("; "));
 }
 
 // P2 where the sandbox has no performance.now: a millisecond clock, on which a step of microseconds
@@ -823,7 +920,7 @@ function hreq(port, method, path, headers, body) {
 // The window runs in its own context, as in Figma. Its fetch goes to the test server's port and
 // carries Origin "null", as a sandboxed frame's does; its postMessage reaches the plugin, and the
 // plugin's reaches it, each through a structured clone on a later turn.
-function wire(uiHtml, port, code) {
+function wire(uiHtml, port, code, tap) {
   const figma = makeFigma();
   const els = {};
   const el = (id) => els[id] || (els[id] = { id, textContent: "", className: "", hidden: ["pairrow", "scoperow", "go"].indexOf(id) >= 0,
@@ -840,7 +937,7 @@ function wire(uiHtml, port, code) {
   const a = uiHtml.indexOf("<script>"), b = uiHtml.lastIndexOf("</script>");
   const win = createContext({
     fetch: winFetch, document: { getElementById: el },
-    parent: { postMessage: (m) => { const c = structuredClone(m.pluginMessage); setImmediate(() => { if (!closed) figma.ui.onmessage(c); }); } },
+    parent: { postMessage: (m) => { const c = structuredClone(m.pluginMessage); if (tap) tap(c); setImmediate(() => { if (!closed) figma.ui.onmessage(c); }); } },
     setTimeout, clearTimeout, setInterval, clearInterval, AbortController, Promise, JSON, URL, console,
   });
   figma.ui.postMessage = (m) => { const c = structuredClone(m); setImmediate(() => { if (!closed && win.onmessage) win.onmessage({ data: { pluginMessage: c } }); }); };
@@ -855,7 +952,8 @@ function wire(uiHtml, port, code) {
   const chainDist = buildPlugin({ outDir: join(scratch, "dist-chain"), token: sec.token });
   const srv = startJobServer(0, Object.assign({ log: () => {}, pluginVersion: chainDist.version }, sec));
   await srv.ready;
-  const W = wire(readFileSync(chainDist.uiPath, "utf8"), srv.port);
+  const toPlugin = [];
+  const W = wire(readFileSync(chainDist.uiPath, "utf8"), srv.port, null, (m) => toPlugin.push(m));
   try {
     await until(() => srv.lastPoll() > 0, 5000, "the window to ask for work");
     ok("a window carrying the run's key reaches the runner without being asked for a code");
@@ -899,6 +997,46 @@ function wire(uiHtml, port, code) {
     const irr = await srv.post({ kind: "ir" }, JSON.stringify(FONTS_TASK()), new Map(), 30000);
     ops.fonts = was;
     check(!irr.error && irr.reached === 1 && irr.op === "fonts", "an ir job travels the whole chain, runner -> window -> plugin op -> back", JSON.stringify(irr).slice(0, 200));
+
+    // P4 through the real window: the probe fetches the job's images itself, both ways, and the window
+    // does not hand them to the plugin first.
+    const p4imgs = p4Images([40, 60]);
+    const made = W.figma._reg.createImages;
+    const p4 = await srv.post({ kind: "probe" }, JSON.stringify({ probes: ["P4"], p4: { hashes: [...p4imgs.keys()], repeat: 1 }, deadlineMs: 5000 }), p4imgs, 30000);
+    const v4 = p4.probes && p4.probes.P4;
+    check(v4 && v4.verdicts.sameHash === "ok" && IR_TRANSPORTS.indexOf(v4.verdicts.transport) >= 0 && W.figma._reg.createImages - made === 4 &&
+      !toPlugin.some((m) => m.t === "image-begin" && p4imgs.has(m.hash)),
+      "P4 travels the whole chain: the window serves /image/<hash> as base64 and as bytes, the hashes hold, and a probe job's images are not pre-made", JSON.stringify(p4).slice(0, 240));
+
+    // The binary image transport (P4's verdict): Uint8Array slices of at most 4 MB, the hash kept.
+    const big = Buffer.alloc(5 * 1048576 + 7);
+    for (let i = 0, x = 99; i < big.length; i++) { x = (x * 1103515245 + 12345) >>> 0; big[i] = x >>> 24; }
+    const bigHash = createHash("sha1").update(big).digest("hex");
+    const opsB = W.plugin.PXF_IR.ops, wasB = opsB.fonts;
+    opsB.fonts = async (ctx) => Object.assign(ctx.report, { figmaHash: ctx.S.images()[bigHash] || null });
+    const rb = await srv.post({ kind: "ir", imageTransport: "binary" }, JSON.stringify(FONTS_TASK()), new Map([[bigHash, big]]), 30000);
+    opsB.fonts = wasB;
+    const slices = toPlugin.filter((m) => m.t === "image-chunk" && typeof m.d === "object");
+    check(rb.figmaHash === bigHash && slices.length === 2 && slices.every((m) => m.d.length <= 4 * 1048576) && toPlugin.some((m) => m.t === "image-begin" && m.hash === bigHash && m.binary === true),
+      "the binary image transport sends a 5 MB image as two Uint8Array slices of at most 4 MB, and Figma's hash is its SHA-1", JSON.stringify([rb.figmaHash === bigHash, slices.map((m) => m.d.length)]));
+
+    // Liveness through the chain: the plugin's progress counter, forwarded by the window, keeps a task
+    // alive past failMs; a task that stops advancing fails with PLUGIN_STALLED.
+    const opsL = W.plugin.PXF_IR.ops, wasL = opsL.fonts;
+    opsL.fonts = async (ctx) => { for (let k = 0; k < 3; k++) { ctx.progress(); await sleep(1050); } return ctx.report; };
+    const heard = [], t0 = Date.now();
+    const rl = await srv.post({ kind: "ir" }, JSON.stringify(FONTS_TASK()), new Map(), 30000, { liveness: { warnMs: 600, failMs: 1600 }, ceilingMs: 20000, onProgress: (d) => heard.push(d) });
+    check(!rl.error && Date.now() - t0 > 1600 && heard.length >= 3 && heard.every((d, k) => k === 0 || d > heard[k - 1]),
+      "progress posted by ctx.progress() reaches the runner through the window (/alive?done=n) and keeps a task alive past failMs", JSON.stringify([rl.error, heard, Date.now() - t0]));
+    opsL.fonts = async (ctx) => { ctx.progress(); await sleep(1500); return ctx.report; };
+    let stalled = null;
+    try { await srv.post({ kind: "ir" }, JSON.stringify(FONTS_TASK()), new Map(), 30000, { liveness: { warnMs: 300, failMs: 700 }, ceilingMs: 20000 }); }
+    catch (e) { stalled = e; }
+    await sleep(1200);   // the plugin finishes the abandoned task; its late report is ignored
+    opsL.fonts = wasL;
+    check(stalled && stalled.code === "PLUGIN_STALLED" && stalled.resumable === true, "a task whose counter stops advancing fails with PLUGIN_STALLED through the chain", stalled && stalled.message);
+    const after = await srv.post({ kind: "render" }, JSON.stringify({ op: "ping" }), new Map(), 15000);
+    check(after.ok === 1, "after a stalled task the window takes the next job");
   } catch (e) { fail("the chain: " + e.message); }
   W.close();
   srv.close();

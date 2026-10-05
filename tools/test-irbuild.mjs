@@ -434,7 +434,9 @@ const mixedNodes = () => [
     const E = env({ wrap: autoSizing });
     const { R, ctx } = await build(E, mkTask({ nodes, settings: { textRead: mode } }));
     const n = E.D.node(ctx.S.nodes["1"]);
-    const pinIn = E.D.writes.find((w) => w.id === n.id && w.prop === "textAutoResize" && w.value === "NONE");
+    // Part E's double also logs the NONE a resize in creation sets on a new (auto-width) text, as
+    // Figma does; the pin is the last NONE written (merge of part E).
+    const pinIn = E.D.writes.filter((w) => w.id === n.id && w.prop === "textAutoResize" && w.value === "NONE").pop();
     check(same(R.textPinned, [1]) && n.width === 100 && n.height === 20 && n.textAutoResize === "NONE" && pinIn && pinIn.phase === (mode === "measure" ? "measure" : "create") &&
       (mode === "measure" ? !E.D.reads.byPhase.create : E.D.reads.byPhase.create > 0),
       "textRead " + mode + ": a text whose built box differs from the source is pinned to it, " + (mode === "measure" ? "after the settle, with no read in creation" : "inside the creation loop (P6)"),
@@ -671,7 +673,10 @@ if (!hasLayout) {
     const E = env();
     const { R, ctx } = await build(E, task);
     const n = E.D.node(ctx.S.nodes["1"]);
-    check(near(n.width, 120, 0.5) && near(n.height, 40, 0.5) && R.counters.sizeRepaired >= 1, "repair: a hugging flow frame is fixed at the source size", JSON.stringify([n.width, n.height, R.counters]));
+    // repair1 fixes it, and repair1 is not counted (builder4.js:381), so sizeRepaired stays 0: the
+    // check looks for the repair pass's resize instead (merge of part E).
+    const repaired = E.D.writes.some((w) => w.id === n.id && w.prop === "resize()" && /^repair/.test(w.phase));
+    check(near(n.width, 120, 0.5) && near(n.height, 40, 0.5) && repaired, "repair: a hugging flow frame is fixed at the source size", JSON.stringify([n.width, n.height, R.counters]));
   }
   {
     const task = mkTask({ nodes: [frame(0, -1, [T6(0, 0), 100, 100]), frame(1, 0, [T6(10, 10), 4, 4], { layoutMode: "HORIZONTAL", paddingLeft: 4, paddingRight: 4 })] });

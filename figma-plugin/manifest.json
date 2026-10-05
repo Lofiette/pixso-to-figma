@@ -5,6 +5,7 @@
   "main": "dist/code.js",
   "ui": "dist/ui.html",
   "editorType": ["figma"],
+  "documentAccess": "dynamic-page",
   "networkAccess": {
     "allowedDomains": ["http://localhost:3778"],
     "reasoning": "Pulls migration jobs from the local runner (tools/migrate.mjs) and posts the verification report back. Localhost only."

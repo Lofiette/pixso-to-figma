@@ -531,7 +531,9 @@ function bundleWith(D, host, irFiles) {
   sc.vec.vectorPaths = [{ windingRule: "EVENODD", data: "M 0 0 L 13 0 L 5 8 Z" }];
   const rep2 = await IR.ops.verify(IR.makeCtx(D.figma, task, { id: "v2" }), task);
   const J2 = judge({ ir, task, build: null, verify: rep2 });
-  check(J2.geometry.visibleOver1 === 1 && J2.geometry.worst[0].i === 1 && same(J2.vectors.excused, { VECTOR_FROM_GEOMETRY: 1 }) &&
+  // Part E's double gives a redrawn vector its drawing's size (P19B pending), so the vector may also
+  // be a size entry in worst, ranked above the move: look the moved node up (merge of part E).
+  check(J2.geometry.visibleOver1 === 1 && J2.geometry.worst.some((w) => w.i === 1 && near(w.dx, 1.2)) && same(J2.vectors.excused, { VECTOR_FROM_GEOMETRY: 1 }) &&
     same(J2.vectors.excusedBuiltFromOracle, { VECTOR_FROM_GEOMETRY: 1 }), "a node moved 1.2 px and a redrawn geometry vector are found end to end", show(J2.geometry));
   // A root that is not there.
   const t3 = clone(task); t3.nodes[0].guid = "7:100";
@@ -582,7 +584,12 @@ function toyText(D) {
       if (prop !== "height" && prop !== "width") return target[prop];
       const mode = target.textAutoResize;
       if (mode !== "HEIGHT" && mode !== "WIDTH_AND_HEIGHT") return target[prop];
-      const size = target.fontSize, font = target.fontName, lh = target.lineHeight || { unit: "AUTO" };
+      // Part E's double reads figma.mixed at node level where ranges differ; the toy then takes the
+      // last character's value, which no range here covers (merge of part E).
+      const last = String(target.characters).length;
+      const base = (v, get) => (typeof v === "symbol" ? target[get](last - 1, last) : v);
+      const size = base(target.fontSize, "getRangeFontSize"), font = base(target.fontName, "getRangeFontName"),
+        lh = base(target.lineHeight, "getRangeLineHeight") || { unit: "AUTO" };
       const L = lh.unit === "PIXELS" ? lh.value : lh.unit === "PERCENT" ? lh.value / 100 * size : FACTOR[font.family] * size;
       const paras = String(target.characters).split("\n");
       const cw = 0.6 * size;
