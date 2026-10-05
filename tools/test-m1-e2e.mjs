@@ -65,7 +65,7 @@ const notesOn = (i) => IR.notes.filter((n) => n.node === i).map((n) => n.code);
 async function runOnce(label, opts) {
   const o = opts || {};
   const { bytes, table } = await resolveImages(IR, PIX, { links: ["archive"], verdicts: VERDICTS });
-  const plan = planM1(IR, STATS, { m1Scope: "default", images: table, runId: RUN });
+  const plan = planM1(IR, STATS, Object.assign({ m1Scope: "default", images: table, runId: RUN }, o.maxChars ? { maxChars: o.maxChars } : {}));
   const D = makeDouble({ verdicts: VERDICTS });
   const host = defaultHost();
   host.phase = D.setPhase;
@@ -266,6 +266,38 @@ const flowParent = (n) => { const p = IR.nodes[n.parent]; return !!p && (p.props
   check(S.tasks[1].state === "failed" && S.tasks[1].codes[CODE.BUILD_FAILED] === 1 && S.tasks[2].state === "skipped" &&
     failedGates(run).indexOf("G1 tasks") >= 0 && failedGates(run).indexOf("G2 roots") >= 0 && /^FAIL/.test(run.gates.verdict),
     "a refused task fails G1 (BUILD_FAILED, its verify skipped) and the verdict is FAIL", show(failedGates(run)));
+}
+
+// ============================================================================================
+// 3b. a root split across tasks (review S1): the plan's size cap lowered so the fixture's auto-layout
+// row is split, its later pieces attached by a later task to the row an earlier task built
+// ============================================================================================
+{
+  const SPLIT = 4500;
+  const plan = planM1(IR, STATS, { m1Scope: "default", runId: RUN, maxChars: SPLIT });
+  const builds = plan.tasks.filter((t) => t.op === "build");
+  const split = builds.flatMap((t) => t.roots.filter((r) => typeof r.attachTo === "object").map((r) => ({ taskNo: t.taskNo, i: r.i, parent: r.attachTo.i })));
+  const inFlow = split.filter((s) => { const p = IR.nodes[s.parent].props; return (p.layoutMode === "HORIZONTAL" || p.layoutMode === "VERTICAL") && IR.nodes[s.i].props.layoutPositioning !== "ABSOLUTE"; });
+  const ledgerOk = plan.ledger.filter((l) => l.op === "verify").every((l) => Number.isInteger(l.build) && plan.tasks[l.build - 1].op === "build" &&
+    JSON.stringify(plan.tasks[l.build - 1].roots) === JSON.stringify(plan.tasks[l.taskNo - 1].roots));
+  const chainTask = split.length ? split[0].taskNo : 0;
+  const parentTask = split.length ? builds.find((t) => t.nodes.some((n) => n.i === split[0].parent)).taskNo : 0;
+  const parentVerify = plan.ledger.find((l) => l.op === "verify" && l.build === parentTask);
+  check(inFlow.length > 0 && ledgerOk && parentVerify && parentVerify.taskNo > chainTask,
+    "a split plan: " + split.length + " split roots (" + inFlow.length + " in an auto-layout flow); each verify names its build, and the split parent's verify runs after the chain's last build",
+    show({ split, ledger: plan.ledger }));
+  const run = await runOnce("split", { maxChars: SPLIT });
+  check(run.r.stopped === null && failedGates(run).length === 0 && run.states.tasks.every((t) => t.state === "built" || t.state === "built-with-fallbacks"),
+    "the split run builds, and every gate passes: each split piece sits where the IR puts it in its parent", show([failedGates(run), run.totals && run.totals.geometry.worst.slice(0, 3)]));
+  const target = inFlow[0];
+  const moved = await runOnce("split-move", { maxChars: SPLIT, plant: (no, env) => {
+    if (no !== target.taskNo) return;
+    const n = env.D.node(env.ctxs.get(no).S.nodes[String(target.i)]);
+    n.relativeTransform = [[1, 0, n.relativeTransform[0][2] + 50], [0, 1, n.relativeTransform[1][2]]];
+  } });
+  const w = moved.totals.geometry.worst.find((x) => x.i === target.i);
+  check(failedGates(moved).join() === "G6 position" && w && w.dx === 50,
+    "a split root moved 50 px in its parent after its build fails G6, as the same move inside one task does", show([failedGates(moved), w]));
 }
 
 // ============================================================================================

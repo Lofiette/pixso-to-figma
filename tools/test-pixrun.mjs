@@ -246,12 +246,16 @@ function syntheticIR(opts) {
     const old = mk();
     for (const t of old.tasks) t.state = "built";
     const lastPiece = split[split.length - 1].taskNo;
+    // A verify names its build (the ledger's `build`): a chain's verifies come after all its builds.
+    const verifyOf = (no) => bp.ledger.find((l) => l.op === "verify" && l.build === no).taskNo;
     old.tasks.find((t) => t.taskNo === lastPiece).state = "failed";
-    old.tasks.find((t) => t.taskNo === lastPiece + 1).state = "skipped";
+    old.tasks.find((t) => t.taskNo === verifyOf(lastPiece)).state = "skipped";
     const r = resumeStates(old, mk(), bp.tasks);
     const st = (no) => r.states.tasks.find((t) => t.taskNo === no).state;
     const outside = bp.tasks.filter((t) => t.op === "build" && chain.indexOf(t.taskNo) < 0);
-    check(chain.length === split.length + 1 && chain.every((no) => st(no) === "pending" && st(no + 1) === "pending") && outside.length > 0 && outside.every((t) => st(t.taskNo) === "built"),
+    const order = bp.tasks.map((t) => t.op).join();
+    check(chain.length === split.length + 1 && chain.every((no) => st(no) === "pending" && st(verifyOf(no)) === "pending") && outside.length > 0 && outside.every((t) => st(t.taskNo) === "built") &&
+      chain.every((no) => verifyOf(no) > Math.max(...chain)) && order.indexOf("build,verify") >= 0,
       "a resume runs a split root's whole chain again (the task that builds it and every piece) when one piece did not build; other tasks stay built",
       JSON.stringify({ chain, states: r.states.tasks.map((t) => t.taskNo + ":" + t.state) }));
     check(resumeStates(old, mk()).states.tasks.filter((t) => t.state === "built").length === old.tasks.filter((t) => t.op !== "fonts").length - 2, "without the plan's tasks, a resume keeps pairs as before");

@@ -200,9 +200,57 @@ async function flowDeltas(st) {
   return { dp: dp, exp: exp };
 }
 
+// A split root in an auto-layout parent an earlier task built: the flow places it among siblings this
+// task does not hold, which the passes above never see (they start from each root's built matrix).
+// Where it lands more than half a pixel from its IR place in that parent, it leaves the flow onto its
+// wanted matrix, the parent frozen at its size; if any sibling moves, or it is not nearer, everything
+// is put back, and the judge counts the offset (VERIFY's roots[].inParent).
+async function splitRootsFix(st) {
+  var ctx = st.ctx, C = st.counters, D = st.detail;
+  if (!st.splitTried) st.splitTried = {};
+  // Last first: a later flow child leaves without moving the earlier ones.
+  for (var r = st.rootKs.length - 1; r >= 0; r--) {
+    var k = st.rootKs[r], to = st.attachTo[k];
+    if (!to || typeof to !== "object" || st.splitTried[k] || !B.isAL(st.attachMode[k])) continue;
+    if (st.flowAbs[k] || st.rotPinned[k] || st.native[k]) continue;
+    var rec = st.recs[k], n = st.node[k], par = st.attach[k];
+    if (ctx.prop(rec, "layoutPositioning") === "ABSOLUTE" || ctx.prop(rec, "visible") === false) continue;
+    await B.tick(st, k);
+    st.splitTried[k] = 1;
+    var pa = par.absoluteTransform;
+    var e = mul6([pa[0][0], pa[0][1], pa[0][2], pa[1][0], pa[1][1], pa[1][2]], st.want[k].rt);
+    var now = deltaOf(st, k, e);
+    if (now.d <= 0.5) continue;
+    var sibs = [], sibXY = [], kids = par.children || [];
+    for (var s = 0; s < kids.length; s++) if (kids[s].id !== n.id) { sibs.push(kids[s]); sibXY.push([kids[s].x, kids[s].y]); }
+    var pw = par.width, ph = par.height;
+    try {
+      B.set(st, par, to.i, "primaryAxisSizingMode", "FIXED");
+      B.set(st, par, to.i, "counterAxisSizingMode", "FIXED");
+      n.layoutPositioning = "ABSOLUTE";
+      n.relativeTransform = U.matrix(st.want[k].rt);
+      if (Math.abs(par.width - pw) > 0.01 || Math.abs(par.height - ph) > 0.01) {
+        try { B.resize(par, par.type, pw, ph); } catch (e1) { ctx.failure(to.i, "resize", msgOf(e1)); }
+      }
+      var moved = 0, worstSib = 0;
+      for (var q = 0; q < sibs.length; q++) {
+        var ds = Math.max(Math.abs(sibs[q].x - sibXY[q][0]), Math.abs(sibs[q].y - sibXY[q][1]));
+        if (ds > 0.5) { moved++; if (ds > worstSib) worstSib = ds; }
+      }
+      var after = deltaOf(st, k, e);
+      if (moved || after.d > now.d - 0.01) {
+        try { n.layoutPositioning = "AUTO"; } catch (e2) {}
+        if (moved) { D.flowSiblingGuard++; if (worstSib > D.flowSiblingWorst) D.flowSiblingWorst = r2(worstSib); }
+        else C.flowReverted++;
+      } else { C.flowAbsolute++; st.flowAbs[k] = 1; }
+    } catch (e3) { C.flowStillOff++; }
+  }
+}
+
 B.flowFixPass = async function (st, last) {
   var ctx = st.ctx, C = st.counters, D = st.detail;
   await ctx.settle(firstRoot(st));
+  await splitRootsFix(st);
   var fd = await flowDeltas(st), dp = fd.dp, EXP = fd.exp;
   for (var g = 0; g < st.n; g++) {
     await B.tick(st, g);

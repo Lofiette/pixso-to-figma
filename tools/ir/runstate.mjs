@@ -6,9 +6,12 @@
 // states.json v2:
 //   { version: 2, snapshot, irVersion, runId, settings, probes: { P4, P5, P6, P8, P18, P19B: "run <date>" | "pending" },
 //     pixso: { used, identity, q5 }, fonts: { missing: [{ family, style }] }, balance: {…},
-//     tasks: [{ taskNo, op, roots: [IR index], nodes, ceilingMs, state, codes, ms, error, failures }] }
+//     tasks: [{ taskNo, op, roots: [IR index], nodes, ceilingMs, state, codes, ms, error, failures, build? }] }
 //   state: pending | built | built-with-fallbacks | failed | skipped. `failures` (the build report's
-//   failures[] count, gate G5) is the one key this file adds to docs/M1.md §6 D's task record.
+//   failures[] count, gate G5) is a key this file adds to docs/M1.md §6 D's task record; `build`, on a
+//   verify task, names the build task it verifies (the plan's ledger; a split chain's verifies come
+//   after all its builds, so a verify is not always the task after its build). A record without it
+//   (states.json written before) pairs a verify with the task before it (buildNoOf).
 //
 // Transitions (TRANSITIONS): pending -> built | built-with-fallbacks | failed | skipped; on resume
 // failed and skipped -> pending. A built task is never re-run by a resume of the same snapshot and
@@ -65,10 +68,14 @@ export function newStates({ snapshot, irVersion, runId, settings, probes, pixso,
     version: STATES_VERSION, snapshot, irVersion, runId, settings, probes,
     pixso: pixso || { used: false, identity: null, q5: false },
     fonts: { missing: [] }, balance,
-    tasks: ledger.map((t) => ({ taskNo: t.taskNo, op: t.op, roots: t.roots.slice(), nodes: t.nodes, ceilingMs: t.ceilingMs,
-      state: "pending", codes: {}, ms: {}, error: null, failures: 0 })),
+    tasks: ledger.map((t) => Object.assign({ taskNo: t.taskNo, op: t.op, roots: t.roots.slice(), nodes: t.nodes, ceilingMs: t.ceilingMs,
+      state: "pending", codes: {}, ms: {}, error: null, failures: 0 }, t.op === "verify" && Number.isInteger(t.build) ? { build: t.build } : {})),
   };
 }
+
+// The build task a verify task verifies: its `build`, or the task before it (states written before
+// the ledger named it).
+export function buildNoOf(t) { return Number.isInteger(t.build) ? t.build : t.taskNo - 1; }
 
 // A fresh state for this plan, keeping what an earlier state of the same snapshot, settings and plan
 // already built: a build and its verify are kept only together; failed and skipped go back to pending.
@@ -79,22 +86,26 @@ export function newStates({ snapshot, irVersion, runId, settings, probes, pixso,
 // kept, every build of the chain and its verify run again; the clean before each build removes the
 // earlier top-level root with whatever was attached to it.
 export function resumeStates(old, fresh, tasks) {
-  const sameTask = (a, b) => a && b && a.op === b.op && a.taskNo === b.taskNo && a.nodes === b.nodes && JSON.stringify(a.roots) === JSON.stringify(b.roots);
+  const sameTask = (a, b) => a && b && a.op === b.op && a.taskNo === b.taskNo && a.nodes === b.nodes && JSON.stringify(a.roots) === JSON.stringify(b.roots) &&
+    (a.op !== "verify" || buildNoOf(a) === buildNoOf(b));
   if (!old || old.version !== STATES_VERSION || old.snapshot !== fresh.snapshot || JSON.stringify(old.settings) !== JSON.stringify(fresh.settings) ||
     !Array.isArray(old.tasks) || old.tasks.length !== fresh.tasks.length || !old.tasks.every((t, k) => sameTask(t, fresh.tasks[k]))) {
     return { states: fresh, resumed: 0 };
   }
   const done = (t) => t.state === "built" || t.state === "built-with-fallbacks";
+  const idx = new Map(fresh.tasks.map((t, k) => [t.taskNo, k]));
+  const verifyOf = new Map();
+  fresh.tasks.forEach((t, k) => { if (t.op === "verify") verifyOf.set(buildNoOf(t), k); });
   const keep = fresh.tasks.map((t, k) => {
     const o = old.tasks[k];
-    if (t.op === "build") return done(o) && !!old.tasks[k + 1] && old.tasks[k + 1].op === "verify" && done(old.tasks[k + 1]);
-    if (t.op === "verify") return done(o) && done(old.tasks[k - 1]);
+    if (t.op === "build") return done(o) && verifyOf.has(t.taskNo) && done(old.tasks[verifyOf.get(t.taskNo)]);
+    if (t.op === "verify") return done(o) && idx.has(buildNoOf(t)) && done(old.tasks[idx.get(buildNoOf(t))]);
     return false;
   });
   for (const group of splitChains(tasks || [])) {
-    const ks = group.map((no) => fresh.tasks.findIndex((t) => t.taskNo === no)).filter((k) => k >= 0);
+    const ks = group.map((no) => idx.has(no) ? idx.get(no) : -1).filter((k) => k >= 0);
     if (ks.every((k) => keep[k])) continue;
-    for (const k of ks) { keep[k] = false; if (fresh.tasks[k + 1] && fresh.tasks[k + 1].op === "verify") keep[k + 1] = false; }
+    for (const k of ks) { keep[k] = false; if (verifyOf.has(fresh.tasks[k].taskNo)) keep[verifyOf.get(fresh.tasks[k].taskNo)] = false; }
   }
   let resumed = 0;
   fresh.tasks.forEach((t, k) => {
@@ -177,7 +188,7 @@ export async function runTasks(o) {
   };
   for (const task of tasks) {
     const rec = byNo.get(task.taskNo);
-    if (o.only && task.op !== "fonts" && task.taskNo !== o.only && task.taskNo !== o.only + 1) continue;
+    if (o.only && task.op !== "fonts" && task.taskNo !== o.only && !(task.op === "verify" && buildNoOf(rec) === o.only)) continue;
     if (rec.state !== "pending") {
       if (task.op === "build") builds.set(task.taskNo, null);
       continue;
@@ -193,9 +204,9 @@ export async function runTasks(o) {
         }
       }
       if (task.op === "verify") {
-        const b = byNo.get(task.taskNo - 1);
+        const b = byNo.get(buildNoOf(rec));
         if (!b || (b.state !== "built" && b.state !== "built-with-fallbacks")) {
-          transition(states, task.taskNo, "skipped", { error: "its build task " + (task.taskNo - 1) + " is " + (b ? b.state : "missing") });
+          transition(states, task.taskNo, "skipped", { error: "its build task " + buildNoOf(rec) + " is " + (b ? b.state : "missing") });
           save(states);
           continue;
         }
@@ -253,7 +264,7 @@ export async function runTasks(o) {
       const codes = {};
       const lost = (report.roots || []).filter((r) => !r.found).length;
       if (lost) count(codes, CODE.ROOT_NOT_FOUND, lost);
-      const build = builds.has(task.taskNo - 1) ? builds.get(task.taskNo - 1) : null;
+      const build = builds.has(buildNoOf(rec)) ? builds.get(buildNoOf(rec)) : null;
       const J = o.judge ? o.judge({ task, build, verify: report }) : null;
       if (J) Js.push(Object.assign({ taskNo: task.taskNo }, { J }));
       transition(states, task.taskNo, "built", { codes, ms: report.ms || {} });

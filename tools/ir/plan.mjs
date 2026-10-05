@@ -17,8 +17,10 @@
 //   runId     16 lowercase hex; random when absent (pass one for byte-identical task text)
 //
 // tasks are task objects (tools/ir/task.mjs): a fonts task first, then per page group a build task
-// followed by its verify task, the service page (S2) before the user pages (S1). ledger[k] describes
-// tasks[k] for states.json: { taskNo, op, roots: [IR index], nodes, ceilingMs }.
+// followed by its verify task, the service page (S2) before the user pages (S1); where a root is split
+// across tasks, the chain's build tasks come first and their verify tasks after them, in the same
+// order. ledger[k] describes tasks[k] for states.json: { taskNo, op, roots: [IR index], nodes,
+// ceilingMs }, and a verify's entry names its build task (build: taskNo).
 //
 // Which records are built. Every record is claimed by exactly one population (POPULATIONS):
 //   user                         every record on a user page (S1: built, always)
@@ -295,14 +297,33 @@ export function planM1(ir, stats, opts) {
   const fontsTask = assemble("fonts", { recs: builtIdx, group: { page: { background: null }, service: false } }, 1);
   Object.assign(fontsTask, { page: null, roots: [], nodes: [], notes: [], values: {}, images: [], expect: null });
   const tasks = [fontsTask];
-  for (const b of buckets) {
-    tasks.push(assemble("build", b, tasks.length + 1));
-    tasks.push(assemble("verify", b, tasks.length + 1));
-  }
+  // A root split across buckets makes a chain (a bucket whose root attaches to a record of an earlier
+  // one joins that one's chain). A chain's builds go first and its verifies after them, so every
+  // verify sees the tree with all its pieces attached: the parent's size and flow after the later
+  // appends, as well as each piece in place (docs/M1.md §15, review S1).
+  const holder = new Map(), up = buckets.map((_, k) => k);
+  const find = (a) => { while (up[a] !== a) a = up[a]; return a; };
+  buckets.forEach((b, k) => { for (const i of b.recs) holder.set(i, k); });
+  buckets.forEach((b, k) => {
+    for (const i of b.recs) {
+      const p = N[i].parent;
+      if (p >= 0 && B[p] && !b.inSet.has(p) && holder.has(p)) { const x = find(k), y = find(holder.get(p)); if (x !== y) up[Math.max(x, y)] = Math.min(x, y); }
+    }
+  });
+  const buildOf = new Map();
+  const emitted = new Set();
+  buckets.forEach((b, k) => {
+    const c = find(k);
+    if (emitted.has(c)) return;
+    emitted.add(c);
+    const chain = buckets.map((_, j) => j).filter((j) => find(j) === c);
+    const nos = chain.map((j) => { const t = assemble("build", buckets[j], tasks.length + 1); tasks.push(t); return t.taskNo; });
+    chain.forEach((j, q) => { const t = assemble("verify", buckets[j], tasks.length + 1); tasks.push(t); buildOf.set(t.taskNo, nos[q]); });
+  });
   for (const t of tasks) t.of = tasks.length;
   const perNode = Number(st.ceilingMsPerNode);
-  const ledger = tasks.map((t) => ({ taskNo: t.taskNo, op: t.op, roots: t.roots.map((r) => r.i), nodes: t.nodes.length,
-    ceilingMs: CEILING_BASE_MS + perNode * t.nodes.length }));
+  const ledger = tasks.map((t) => Object.assign({ taskNo: t.taskNo, op: t.op, roots: t.roots.map((r) => r.i), nodes: t.nodes.length,
+    ceilingMs: CEILING_BASE_MS + perNode * t.nodes.length }, t.op === "verify" ? { build: buildOf.get(t.taskNo) } : {}));
   let largest = 0;
   for (const t of tasks) {
     const n = taskChars(t);

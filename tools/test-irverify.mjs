@@ -394,11 +394,28 @@ const sumMap = (m) => Object.values(m).reduce((a, b) => a + b, 0);
   s.task.nodes = s.task.nodes.filter((t) => t.i === 7);
   s.task.roots = [{ i: 7, attachTo: { i: 6 }, place: null }];
   s.task.notes = []; s.task.expect = { count: 1, nonInstance: 1, placeholders: 0 };
-  s.verify = { op: "verify", taskNo: 2, roots: [{ i: 7, id: "9:7", found: true }], count: 1, rows: [[7, "RECTANGLE", 0, false, 0, 0, 5, 5, null, null, null]] };
+  s.verify = { op: "verify", taskNo: 2, roots: [{ i: 7, id: "9:7", found: true, inParent: [2, 2] }], count: 1, rows: [[7, "RECTANGLE", 0, false, 0, 0, 5, 5, null, null, null]] };
   s.build = { op: "build", codes: {}, coded: [], failures: [], textWidened: [] };
   const J = judge(s);
   check(J.count.ok && J.geometry.hiddenOver05 === 0 && J.geometry.visible === 0 && J.geometry.worst.length === 0,
     "a split root is its own origin, and it is hidden because an IR ancestor outside the task is", show(J.geometry));
+  // Review S1: a split root's place in its parent is held to its IR relativeTransform.
+  const v = scene();
+  v.task.nodes = v.task.nodes.filter((t) => t.i === 16);
+  v.task.roots = [{ i: 16, attachTo: { i: 15 }, place: null }];
+  v.task.notes = []; v.task.expect = { count: 1, nonInstance: 1, placeholders: 0 };
+  v.build = { op: "build", codes: {}, coded: [], failures: [], textWidened: [] };
+  const row16 = [16, "RECTANGLE", 0, true, 0, 0, 40, 20, null, null, null];
+  v.verify = { op: "verify", taskNo: 2, roots: [{ i: 16, id: "9:16", found: true, inParent: [10, 1] }], count: 1, rows: [row16] };
+  let Jv = judge(v);
+  check(Jv.geometry.visibleOver05 === 0 && Jv.geometry.worst.length === 0, "a split root where the IR puts it in its parent is no finding", show(Jv.geometry));
+  v.verify.roots[0].inParent = [60, 1];
+  Jv = judge(v);
+  check(Jv.geometry.visibleOver1 === 1 && Jv.geometry.worst[0].i === 16 && Jv.geometry.worst[0].dx === 50 && Jv.geometry.sizeVisibleOver05 === 0,
+    "a split root 50 px off in its parent is a visible position finding (G6), though it is its own origin", show(Jv.geometry));
+  delete v.verify.roots[0].inParent;
+  Jv = judge(v);
+  check(Jv.geometry.visibleOver1 === 1, "a split root VERIFY found but did not place in its parent counts as off by more than 1 px", show(Jv.geometry));
 }
 {
   check(/judgeTask: /.test(threw(() => judgeTask({}))) && /judgeTask: /.test(threw(() => judgeTask(Object.assign(scene(), { verify: null })))) &&

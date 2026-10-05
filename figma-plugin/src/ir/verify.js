@@ -11,7 +11,10 @@
 //        listed in fontsMissing, and ctx.S.fonts marks it "sub" unless the session already knows it
 //        (so countLines writes what the build wrote).
 //     2. roots: ctx.findRoot(i) for every task root; one not found is { i, id: null, found: false }
-//        and is coded ROOT_NOT_FOUND (the judge counts it from `roots`).
+//        and is coded ROOT_NOT_FOUND (the judge counts it from `roots`). A split root found (attachTo
+//        { i }) also carries inParent: [x, y], the min corner of its box (0..width, 0..height) under
+//        its absolute transform relative to its Figma parent's, measured after the settle, so the
+//        judge holds its place in the parent an earlier task built.
 //     3. settle: one ctx.settle on the first root found.
 //     4. walk: from each root found, in task.roots order, depth first. A Figma child is paired with
 //        the task's child record at the same position (task.nodes is parent-first, so task.nodes[k]
@@ -102,8 +105,9 @@ IR.ops.verify = async function (ctx, task) {
     var ri = taskRoots[t].i;
     ctx.progress();
     var node = await ctx.findRoot(ri);
-    roots.push({ i: ri, id: node ? node.id : null, found: !!node });
-    if (node) found.push([node, byI[ri]]);
+    var entry = { i: ri, id: node ? node.id : null, found: !!node };
+    roots.push(entry);
+    if (node) found.push([node, byI[ri], entry, taskRoots[t]]);
     else ctx.code(CODE.ROOT_NOT_FOUND, ri, null);
   }
 
@@ -148,6 +152,14 @@ IR.ops.verify = async function (ctx, task) {
     for (var c = 0; c < children.length; c++) await walk(children[c], c < mine.length ? mine[c] : null, shown, rootInv);
   }
   try {
+    // A split root (attachTo { i }) is the origin of its own subtree; its place in the parent an
+    // earlier task built is reported apart: the min corner of its box relative to that parent.
+    for (var q = 0; q < found.length; q++) {
+      var to = found[q][3] && found[q][3].attachTo, sn = found[q][0];
+      if (!to || typeof to !== "object" || !sn.parent || !("absoluteTransform" in sn.parent)) continue;
+      var pm = boxMin(IR.util.mul(IR.util.inv(sn.parent.absoluteTransform), sn.absoluteTransform), sn.width, sn.height);
+      found[q][2].inParent = [r3(pm[0]), r3(pm[1])];
+    }
     if (measureAny && found.length) await IR.prepareMeasure(ctx);
     for (var g = 0; g < found.length; g++) {
       var root = found[g][0];

@@ -9,8 +9,8 @@
 //     task    the build (or verify) task (tools/ir/task.mjs) that was built and verified; each of its
 //             records must be the IR record of the same index (same guid and type)
 //     build   the plugin's build report (docs/M1.md §6 B), or null when the build failed
-//     verify  the plugin's verify report: { op: "verify", taskNo, roots: [{ i, id, found }], count, rows }
-//             where each row is an array indexed by ROW below
+//     verify  the plugin's verify report: { op: "verify", taskNo, roots: [{ i, id, found, inParent? }], count, rows }
+//             where each row is an array indexed by ROW below (inParent: a split root's [x, y] in its parent)
 //     lostBorder  optional: part A's stats.populations.lostBorder (IR indices). Only it names the
 //             lost-border population (the .pix border fields are not in the IR); without it
 //             sides.lostBorder stays { population: 0, ok: 0 }
@@ -30,8 +30,11 @@
 //
 // Placement. The expected transform is the IR relativeTransform composed down from the record's task
 //   root, whose own transform is the origin (a split root's and an S2 root's alike, so `place` never
-//   counts); VERIFY measures the same way (the node's transform relative to its root's). Effective
-//   visibility is the IR's: the record and every IR ancestor visible.
+//   counts); VERIFY measures the same way (the node's transform relative to its root's). A split root
+//   (attachTo { i }) is also held to its place in the parent an earlier task built: VERIFY's
+//   roots[].inParent against the min corner of its IR box under its own relativeTransform, by the
+//   position rule below (its size is its row's); one found without inParent counts as a visible
+//   offset over 1 px. Effective visibility is the IR's: the record and every IR ancestor visible.
 // count      expected = task.expect.count (or the record count); built = verify.count;
 //   placeholders = rows at INSTANCE records; nonInstance = built - placeholders; ok when the three
 //   equal the expectation (expect.nonInstance, expect.placeholders) and every root was found (G3).
@@ -355,43 +358,44 @@ export function judgeTask(args) {
   };
   const G = J.geometry;
   const worst = [];
-  for (const t of recs) {
-    const w = row.get(t.i);
-    if (!w) continue;
-    const p = P(t.i);
-    const box = boxOf(exp.get(t.i), p.width, p.height);
-    const dx = w[ROW.absX] - box.x0, dy = w[ROW.absY] - box.y0, dw = w[ROW.w] - p.width, dh = w[ROW.h] - p.height;
+  // One box judged: record i expected at m (its own space's matrix) with the IR size, measured at
+  // (ax, ay) with size (rw, rh). sized false judges the position only (a split root's place in its
+  // parent; its size is judged by its row). counted false: the visible count is booked elsewhere.
+  const judgeBox = (i, m, ax, ay, rw, rh, builtType, sized, counted) => {
+    const p = P(i);
+    const box = boxOf(m, p.width, p.height);
+    const dx = ax - box.x0, dy = ay - box.y0, dw = sized ? rw - p.width : 0, dh = sized ? rh - p.height : 0;
     const dp = Math.hypot(dx, dy), ds = Math.max(Math.abs(dw), Math.abs(dh));
-    const vis = shown(t.i);
-    if (vis) G.visible++;
+    const vis = shown(i);
+    if (vis && counted) G.visible++;
     if (dp <= HALF && ds <= HALF) {
       if (vis && ds > G.maxSizeVisible) G.maxSizeVisible = r2(ds);
-      continue;
+      return;
     }
-    worst.push({ i: t.i, dx: r2(dx), dy: r2(dy), dw: r2(dw), dh: r2(dh), visible: vis });
+    worst.push({ i, dx: r2(dx), dy: r2(dy), dw: r2(dw), dh: r2(dh), visible: vis });
     if (!vis) {
       if (dp > HALF) G.hiddenOver05++;
       if (ds > HALF) G.sizeHiddenOver05++;
       add(G.classified, "hidden");
-      continue;
+      return;
     }
     const classes = new Set();
     let posOk = dp <= HALF, sizeOk = ds <= HALF;
     if (!posOk) {
-      const W = widenUnderRoot.get(rootOf.get(t.i)) || 0;
+      const W = widenUnderRoot.get(rootOf.get(i)) || 0;
       if (W > 0 && Math.abs(dx) <= W + SIDE_TOL && Math.abs(dy) <= HALF) { posOk = true; classes.add("textWidened"); }
-      else if (dp <= POS && insideHalf(t.i)) { posOk = true; classes.add("insideHalfPixel"); }
+      else if (dp <= POS && insideHalf(i)) { posOk = true; classes.add("insideHalfPixel"); }
     }
     if (!sizeOk) {
-      const W = widenAtOrBelow(t.i);
+      const W = widenAtOrBelow(i);
       if (W > 0 && dw >= -SIDE_TOL && dw <= W + SIDE_TOL && Math.abs(dh) <= HALF) { sizeOk = true; classes.add("textWidened"); }
     }
-    if ((!posOk || !sizeOk) && (w[ROW.builtType] === "VECTOR" || w[ROW.builtType] === "BOOLEAN_OPERATION")) {
+    if ((!posOk || !sizeOk) && (builtType === "VECTOR" || builtType === "BOOLEAN_OPERATION")) {
       const d = drawingBox(p, value);
       if (d) {
         const dW = d.x1 - d.x0, dH = d.y1 - d.y0;
-        const at = boxOf(mul(exp.get(t.i), [[1, 0, d.x0], [0, 1, d.y0]]), dW, dH);
-        if (Math.hypot(w[ROW.absX] - at.x0, w[ROW.absY] - at.y0) <= POS + EPS && Math.abs(w[ROW.w] - dW) <= POS + EPS && Math.abs(w[ROW.h] - dH) <= POS + EPS) {
+        const at = boxOf(mul(m, [[1, 0, d.x0], [0, 1, d.y0]]), dW, dH);
+        if (Math.hypot(ax - at.x0, ay - at.y0) <= POS + EPS && (!sized || (Math.abs(rw - dW) <= POS + EPS && Math.abs(rh - dH) <= POS + EPS))) {
           posOk = true; sizeOk = true; classes.add("vectorBox");
         }
       }
@@ -406,6 +410,26 @@ export function judgeTask(args) {
       G.sizeVisibleOver05++;
       if (ds > POS) G.sizeVisibleOver1++;
     }
+  };
+  for (const t of recs) {
+    const w = row.get(t.i);
+    if (!w) continue;
+    judgeBox(t.i, exp.get(t.i), w[ROW.absX], w[ROW.absY], w[ROW.w], w[ROW.h], w[ROW.builtType], true, true);
+  }
+  // A split root's place in the parent an earlier task built (VERIFY's roots[].inParent): held to
+  // its IR relativeTransform, as a child inside one task is. One found without that measurement
+  // cannot be placed, and counts as a visible offset over 1 px.
+  const rootEntry = new Map();
+  for (const r of verify.roots) if (isObj(r)) rootEntry.set(r.i, r);
+  for (const r of task.roots) {
+    if (!isObj(r) || !isObj(r.attachTo) || found.get(r.i) !== true || !rec.has(r.i)) continue;
+    const e = rootEntry.get(r.i), w = row.get(r.i);
+    const at = e && Array.isArray(e.inParent) && e.inParent.length === 2 && e.inParent.every((v) => typeof v === "number" && isFinite(v)) ? e.inParent : null;
+    if (!at) {
+      if (shown(r.i)) { G.visibleOver05++; G.visibleOver1++; } else G.hiddenOver05++;
+      continue;
+    }
+    judgeBox(r.i, M(P(r.i).relativeTransform), at[0], at[1], 0, 0, w ? w[ROW.builtType] : null, false, false);
   }
   worst.sort((a, b) => delta(b) - delta(a));
   G.worst = worst.slice(0, 30);
