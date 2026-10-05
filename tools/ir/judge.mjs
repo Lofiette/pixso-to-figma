@@ -553,7 +553,10 @@ export function judgeTask(args) {
       } else {
         for (let k = 0; k < o.length; k++) {
           if (!near(boxOfEntry(o[k]), boxOfEntry(fig[k])) && kinds.indexOf("bounds") < 0) kinds.push("bounds");
-          if (o[k][0] !== fig[k][0] && kinds.indexOf("winding") < 0) kinds.push("winding");
+          // A native boolean's result path is Figma's own: P19B (2026-10-05) read NONZERO for UNION,
+          // SUBTRACT, INTERSECT and EXCLUDE alike, where Pixso stores XOR as EVENODD. The shape is
+          // judged by count and bounds; its winding label is not comparable.
+          if (o[k][0] !== fig[k][0] && t.type !== "BOOLEAN_OPERATION" && kinds.indexOf("winding") < 0) kinds.push("winding");
         }
       }
     }

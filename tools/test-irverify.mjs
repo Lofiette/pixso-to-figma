@@ -307,6 +307,12 @@ const widenScene = (by) => {
     "an unexcused vector 2 px off is VECTOR_GEOMETRY_DIFFERS (G9)", show(J.vectors));
   const s2 = scene(); rowOf(s2, 2)[ROW.vec] = [V("EVENODD", 40, 10, 50, 18)];
   check(same(judge(s2).vectors.differs, [{ i: 2, kind: "winding" }]), "an unexcused winding difference");
+  const sb = scene(); rowOf(sb, 8)[ROW.vec] = [V("EVENODD", 160, 10, 190, 30)];
+  const Jb = judge(sb);
+  check(Jb.vectors.differs.length === 0 && Jb.vectors.match === 5,
+    "a native boolean's winding label is Figma's own (P19B: NONZERO for every operation), so only its count and bounds are judged", show(Jb.vectors));
+  const sb2 = scene(); rowOf(sb2, 8)[ROW.vec] = [V("NONZERO", 162, 10, 190, 30)];
+  check(same(judge(sb2).vectors.differs, [{ i: 8, kind: "bounds" }]), "a native boolean 2 px off still differs");
   const s3 = scene(); rowOf(s3, 2)[ROW.vec] = [];
   check(same(judge(s3).vectors.differs, [{ i: 2, kind: "count" }]), "a vector with no paths where the oracle has one");
   const s4 = scene(); rowOf(s4, 2)[ROW.vec] = [V("NONZERO", 40.9, 9.1, 50.9, 18.9)];
