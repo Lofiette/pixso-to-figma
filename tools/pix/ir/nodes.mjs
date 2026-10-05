@@ -248,7 +248,11 @@ function propsOf(cx, p, rec, parentNode, internal) {
   } else if (type === "STAR" || type === "POLYGON") {
     put("pointCount", Number.isInteger(n.count) && n.count >= 3 ? n.count : type === "STAR" ? 5 : 3);
     if (type === "STAR") put("innerRadius", r6(isFin(n.starInnerScale) ? n.starInnerScale : 0.382));
-    put("oracleFillGeometry", geometryOf(cx, n.fillGeometry) || undefined);
+    const fill = geometryOf(cx, n.fillGeometry);
+    put("oracleFillGeometry", fill || undefined);
+    // Figma always draws a native STAR or POLYGON, so with nothing stored to hold its paths to the
+    // judge would count 0 paths against Figma's (review S3): a counted loss of the oracle instead.
+    if (!fill) cx.feature("no stored geometry", "a " + type + " built natively, its paths unchecked");
   } else if (type === "LINE") {
     if (p.lineHeight) cx.feature("LINE with height", "no stored geometry: built as a line, height dropped");
     put("oracleFillGeometry", geometryOf(cx, n.fillGeometry) || undefined);

@@ -290,7 +290,7 @@ export const IDS = {
   boolEmpty: "3:66",
   vNet: "3:70", vLoop: "3:71", vNoFill: "3:72", vWinding: "3:73", vBounds: "3:74", vOpen: "3:75", vRight: "3:76",
   nanGroup: "3:77", nanVector: "3:78", nanBad: "3:79", connect: "3:80", lineHeight: "3:81", section: "3:82",
-  maskGroup: "3:83", maskShape: "3:84", maskContent: "3:85", jpegRect: "3:86", mismatchRect: "3:87",
+  maskGroup: "3:83", maskShape: "3:84", maskContent: "3:85", jpegRect: "3:86", mismatchRect: "3:87", starShape: "3:88", polygonShape: "3:89",
   unsupported: "1:68", star: "1:21", heart: "1:23", badgeText: "1:41", label: "1:12",
 };
 const G = (s) => { const [a, b] = s.split(":").map(Number); return g(a, b); };
@@ -323,7 +323,8 @@ const G = (s) => { const [a, b] = s.split(":").map(Number); return g(a, b); };
 //     nested one and an empty one; networks (per-vertex radius, a region-less loop, a region with no
 //     fill geometry, a winding and a bounds disagreement, an open region under no fill, RIGHT_ANGLE);
 //     a NaN size with geometry, a group taking its box from that child, and a NaN path; a
-//     CONNECTLINE; a LINE with height; a SECTION with a stroke; a group mask.
+//     CONNECTLINE; a LINE with height; a SECTION with a stroke; a group mask; a STAR and a POLYGON with
+//     no stored geometry (Figma draws both natively).
 export function fixtureMessage(defs) {
   const E = enumsOf(defs);
   const T = E.NodeType;
@@ -523,6 +524,11 @@ export function fixtureMessage(defs) {
     { guid: C("mismatchRect"), parentIndex: under(CASES, "z"), type: T.RECTANGLE, name: "Mismatched entry", size: box(20, 20), transform: at(190, 300),
       fillPaints: [{ type: E.PaintType.IMAGE, image: { hash: mismatchName, name: "mismatch" }, imageScaleMode: E.ImageScaleMode.TILE, scale: 0.5,
         rotation: 450, paintFilter: { exposure: 0.25, vibrance: 0.5 }, opacity: 1, visible: true }] },
+    // A STAR and a POLYGON with no stored fill geometry: Figma draws both from their point count.
+    { guid: C("starShape"), parentIndex: under(CASES, "za"), type: T.STAR, name: "Star shape", size: box(20, 20), transform: at(220, 300),
+      fillPaints: [solid(250, 200, 0)], count: 5, starInnerScale: 0.5 },
+    { guid: C("polygonShape"), parentIndex: under(CASES, "zb"), type: T.REGULAR_POLYGON, name: "Polygon shape", size: box(20, 20), transform: at(250, 300),
+      fillPaints: [solid(0, 150, 250)], count: 6 },
   ];
 
   const nodes = [

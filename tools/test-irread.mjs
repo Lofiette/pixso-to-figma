@@ -107,13 +107,13 @@ check("the balance: stored = records + pages + directories + style definitions +
   const nc = stats.notCarried;
   eq(nc, { pages: 3, directories: 1, documents: 0, styleDefinitions: 2, variables: 0, unsupported: 1, foldedOperands: 5, degenerate: 2, outOfScope: 0 });
   const sum = Object.values(nc).reduce((a, b) => a + b, 0);
-  eq([stats.stored, ir.nodes.length, stats.records + sum], [87, 73, 87]);
-  return "87 = 73 + " + sum;
+  eq([stats.stored, ir.nodes.length, stats.records + sum], [89, 75, 89]);
+  return "89 = 75 + " + sum;
 });
 check("the populations, as root records and record counts", () => {
   const P = stats.populations, n = (k) => P[k].length;
   eq([n("userTop"), n("userMasters"), n("mastersNoInstance"), n("mastersWithInstanceInternal"), n("internalLoose"), n("stateGroupsInternal"), n("lostBorder")],
-    [28, 0, 5, 1, 0, 1, 3]);
+    [30, 0, 5, 1, 0, 1, 3]);
   eq(P.mastersNoInstance.map((i) => ir.nodes[i].guid), ["1:11", "1:14", "1:20", "1:22", "1:40"]);
   eq(P.mastersWithInstanceInternal.map((i) => ir.nodes[i].guid), ["1:30"]);
   eq(P.lostBorder.map((i) => ir.nodes[i].guid), [IDS.ring, IDS.dashed, IDS.noPath]);
@@ -451,6 +451,14 @@ check("image paints: STRETCH is CROP with its transform; TILE scales; rotation u
   eq(val(rec(IDS.mismatchRect).props.fills)[0], { type: "IMAGE", scaleMode: "TILE", imageHash: fx.mismatch.name.toString("hex"), scalingFactor: 0.5, rotation: 90, filters: { exposure: 0.25 } });
   eq(notesOf(IDS.mismatchRect).map((n) => n.detail), ["vibrance"]);
 });
+check("a STAR and a POLYGON with no stored geometry: no oracle, and a SOURCE_FEATURE_UNSUPPORTED note that says so (review S3)", () => {
+  for (const [g, t, pc] of [[IDS.starShape, "STAR", 5], [IDS.polygonShape, "POLYGON", 6]]) {
+    const r = rec(g);
+    eq([r.type, r.props.pointCount, r.props.oracleFillGeometry], [t, pc, undefined]);
+    eq(notesOf(g).map((n) => [n.code, n.detail]), [[CODE.SOURCE_FEATURE_UNSUPPORTED, "no stored geometry: a " + t + " built natively, its paths unchecked"]]);
+  }
+  eq(rec(IDS.starShape).props.innerRadius, 0.5);
+});
 check("values are interned once each, compared as canonical JSON", () => new Set(ir.values.map((v) => canonicalJSON(v))).size === ir.values.length);
 
 // ---------- 12. scope ----------
@@ -481,7 +489,7 @@ try {
       JSON.parse(r2.stdout).records === R.native.ir.nodes.length) ok("pix-to-ir writes the IR outside the repository, and the stats beside it");
   else fail("pix-to-ir outside the repository: exit " + r2.status + ", " + JSON.stringify((r2.stderr || "").slice(0, 300)));
   const r3 = run(file, "--stats-only");
-  if (r3.status === 0 && JSON.parse(r3.stdout).stored === 87) ok("pix-to-ir --stats-only prints counts and writes nothing");
+  if (r3.status === 0 && JSON.parse(r3.stdout).stored === 89) ok("pix-to-ir --stats-only prints counts and writes nothing");
   else fail("pix-to-ir --stats-only: exit " + r3.status);
   const bad = join(tmp, "truncated.pix");
   writeFileSync(bad, makeFixture("truncated").pix);

@@ -449,23 +449,23 @@ try {
     has("the schema", "  schema: " + defs.length + " definitions");
     has("the document size", "  document decompresses to " + fx.message.length + " bytes");
     const decoded = lines.find((l) => l.startsWith("  decoded "));
-    if (/^  decoded 87 nodes and 31 blobs in \d+\.\ds — every byte consumed$/.test(decoded || "")) ok("pix-open prints the node and blob counts");
+    if (/^  decoded 89 nodes and 31 blobs in \d+\.\ds — every byte consumed$/.test(decoded || "")) ok("pix-open prints the node and blob counts");
     else fail("pix-open's decode line: " + JSON.stringify(decoded));
     // 30 rectangles counting the style node; 6 symbols: 2 variants, 2 icons, Card, Badge; 5 instances:
     // 3 on the page, 2 nested in Card; the M1 cases bring the rest.
-    has("the type counts", "  RECTANGLE 30, VECTOR 11, TEXT 7, FRAME 6, SYMBOL 6, BOOLEAN_OPERATION 6, INSTANCE 5, ELLIPSE 4, CANVAS 3, LINE 3, GROUP 2, DIRECTORY 1, RADIAL_PATTERN 1, CONNECTLINE 1, SECTION 1");
+    has("the type counts", "  RECTANGLE 30, VECTOR 11, TEXT 7, FRAME 6, SYMBOL 6, BOOLEAN_OPERATION 6, INSTANCE 5, ELLIPSE 4, CANVAS 3, LINE 3, GROUP 2, DIRECTORY 1, RADIAL_PATTERN 1, CONNECTLINE 1, SECTION 1, STAR 1, REGULAR_POLYGON 1");
     // Page 1: 5 children; as stored 1+1+5+1+1 = 9; expanded, each instance adds its derived entries:
     // Card instance 1+5, Button instance 1+2, Styled 5, Badge instance 1+1, widget 1 = 17.
     has("the user page", '    "Page 1"                                5 top-level        9 /      17');
     // Internal: set 7, Star 2, Heart 2, Card 4 (6 expanded: each nested icon adds one), Badge 2, two styles.
     has("the internal canvas", '    "Internal Only Canvas"                  7 top-level       19 /      21');
-    has("the page inside the directory", '    "M1 cases"                             26 top-level       55 /      55');
+    has("the page inside the directory", '    "M1 cases"                             28 top-level       57 /      57');
     has("the geometry", "  geometry: 19 nodes carry paths, 22 blobs decoded, 0 refused");
     // The one that does not: the vector whose size is NaN.
     has("the box check", "  the path's own bounding box matches the node's size on 14 of 15 — a second field of the format agreeing with the first");
-    check("pix-open --out writes 87 nodes, the images and 15 shapes", () => {
+    check("pix-open --out writes 89 nodes, the images and 15 shapes", () => {
       const out = join(tmp, "out");
-      if (JSON.parse(readFileSync(join(out, "nodes.json"), "utf8")).length !== 87) return false;
+      if (JSON.parse(readFileSync(join(out, "nodes.json"), "utf8")).length !== 89) return false;
       deepStrictEqual(readFileSync(join(out, "img", hashHex(fx.image.hash) + ".png")), fx.image.png);
       return readdirSync(join(out, "img")).length === 3 && readdirSync(join(out, "svg")).length === 15;
     });

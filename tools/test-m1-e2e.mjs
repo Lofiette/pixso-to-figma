@@ -179,7 +179,12 @@ const GOOD = await runOnce("built");
   // Vectors: every excused vector carries its pre-registered code; nothing built from the oracle differs.
   const vecs = inScope.filter((n) => VECTOR_TYPES.indexOf(n.type) >= 0);
   const classed = vecs.filter((n) => noteOf(n.i, CODE.VECTOR_ORACLE_DIFFERS).length);
-  check(T.vectors.checked === vecs.length && T.vectors.differs.length === 0 && Object.keys(T.vectors.excused).every((c) => c === CODE.VECTOR_ORACLE_DIFFERS) &&
+  // Review S3: a STAR and a POLYGON with no stored geometry carry their note, and it excuses them.
+  const natives = vecs.filter((n) => (n.type === "STAR" || n.type === "POLYGON") && IR.nodes[n.i].props.oracleFillGeometry === undefined);
+  check(natives.length === 2 && natives.every((n) => noteOf(n.i, CODE.SOURCE_FEATURE_UNSUPPORTED).some((x) => /^no stored geometry/.test(x.detail))) &&
+    T.vectors.excused[CODE.SOURCE_FEATURE_UNSUPPORTED] === natives.length,
+    "a STAR and a POLYGON with no stored geometry are noted SOURCE_FEATURE_UNSUPPORTED and excused under it, not VECTOR_GEOMETRY_DIFFERS", show(T.vectors));
+  check(T.vectors.checked === vecs.length && T.vectors.differs.length === 0 && Object.keys(T.vectors.excused).every((c) => c === CODE.VECTOR_ORACLE_DIFFERS || c === CODE.SOURCE_FEATURE_UNSUPPORTED) &&
     T.vectors.excused[CODE.VECTOR_ORACLE_DIFFERS] === classed.length && classed.length === ORACLE_CLASSES.length &&
     ORACLE_CLASSES.every((c) => classed.some((n) => noteOf(n.i, CODE.VECTOR_ORACLE_DIFFERS)[0].detail.split(":")[0] === c)),
     "each excused vector carries its pre-registered code: " + classed.length + " VECTOR_ORACLE_DIFFERS, one per class (" + ORACLE_CLASSES.join(", ") + "); no vector differs", show(T.vectors));
