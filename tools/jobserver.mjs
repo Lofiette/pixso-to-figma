@@ -34,10 +34,11 @@
 // file and verified them in the other (ROOT_NOT_FOUND: 3 roots for G2, their 160 records for G3 and
 // G4, 54 placeholders for G11), and three more verifies measured another file's copy of their build.
 // A window names itself in X-PXF-Window, a random id it makes when it opens (no header: the window
-// ""). The first window given a job is this runner's window for good; any other gets 423 on /job,
+// ""). The first window given a job is this runner's window; any other gets 423 on /job,
 // /job/<id>/payload, /image, /alive and /report, never a job, and is told to close: every build,
-// verify and clean of a run happens in one file. To move a run to another file, or to go on after
-// the runner's window was closed, stop the runner and start it again.
+// verify and clean of a run happens in one file. Once the runner's window has been silent for 90 s
+// (closed), the next window to ask takes the run over and does the pending job again (the live kit
+// build of 2026-10-05 stopped for good when the designer reopened the plugin mid-run).
 //
 // Liveness (docs/REWRITE.md §6, docs/M1.md §6 E). A job posted with opts.liveness and opts.ceilingMs
 // (the IR path's tasks) is watched by its progress counter, not by the heartbeat: the plugin posts
@@ -159,12 +160,17 @@ export function startJobServer(port = 3778, opts = {}) {
   let lastPoll = 0;            // when the plugin last asked for work
   let staleSeen = 0;           // when a plugin window of another build last asked (409)
   let owner = null;            // X-PXF-Window of the window given this runner's first job ("" when it names none)
+  let ownerSeen = 0;           // when that window last asked anything
+  // Silent this long, it is gone, and another window may take the run. 90 s: a busy window in the
+  // background may speak only once a minute (timer throttling, P2), and that is not gone.
+  const OWNER_GONE_MS = Number.isFinite(opts.ownerGoneMs) ? opts.ownerGoneMs : 90000;
   let othersRefused = 0;       // requests refused because another window is this runner's (423)
   const windowOf = (req) => String(req.headers["x-pxf-window"] || "").slice(0, 64);
   // Gives the pending job to `win` when it is this runner's window, or the first ever to be given one.
   const claim = (win) => {
     if (owner === null) {
       owner = win;
+      ownerSeen = Date.now();
       warn("  this runner's plugin window is " + (win ? JSON.stringify(win) : "one that names none") +
         ": every job of the run goes to it, and any other window is refused");
     }
@@ -298,6 +304,7 @@ export function startJobServer(port = 3778, opts = {}) {
     }
 
     if (url.pathname === "/control" && req.method === "GET") {
+      if (owner !== null && windowOf(req) === owner) ownerSeen = Date.now();
       cors("application/json");
       const body = () => JSON.stringify({ rev: rev, phase: phase, lines: progress.slice(-14) });
       const seen = Number(url.searchParams.get("rev") || 0);
@@ -341,8 +348,20 @@ export function startJobServer(port = 3778, opts = {}) {
     // The run's work goes to one window (see the header): once a window has been given a job, any
     // other is refused on every route that carries a job, before it can take, move or answer one.
     const win = windowOf(req);
-    if (owner !== null && win !== owner && (url.pathname === "/job" || url.pathname === "/alive" || url.pathname === "/report" ||
-      /^\/job\/[^/]+\/payload$/.test(url.pathname) || /^\/image\//.test(url.pathname))) {
+    const jobRoute = url.pathname === "/job" || url.pathname === "/alive" || url.pathname === "/report" ||
+      /^\/job\/[^/]+\/payload$/.test(url.pathname) || /^\/image\//.test(url.pathname);
+    if (owner !== null && win === owner) ownerSeen = Date.now();
+    // The runner's window went silent (closed, or its file closed): the next window to ask for work
+    // takes the run over, and the job it had, which stays pending until a report arrives, is done
+    // again there. A live window holds /job or /control almost all the time, so OWNER_GONE_MS of silence is gone.
+    if (owner !== null && win !== owner && jobRoute && Date.now() - ownerSeen > OWNER_GONE_MS) {
+      warn("  the runner's plugin window " + JSON.stringify(String(owner).slice(0, 24)) + " has been silent for " +
+        Math.round((Date.now() - ownerSeen) / 1000) + " s; window " + JSON.stringify(win.slice(0, 24)) + " takes over this run" +
+        (pending ? " and does job " + pending.id + " again" : ""));
+      owner = win;
+      ownerSeen = Date.now();
+    }
+    if (owner !== null && win !== owner && jobRoute) {
       req.resume();
       return otherWindow(req, res, url.pathname, cors);
     }

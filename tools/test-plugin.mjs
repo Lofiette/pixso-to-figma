@@ -950,6 +950,39 @@ function hreq(port, method, path, headers, body) {
     "the runner says which window is its own, and that another one asked and must be closed");
   srv.close();
 }
+// ...but not for good: the runner's window closed (the designer reopened the plugin, the live kit
+// build of 2026-10-05) is silent, and after ownerGoneMs the next window to ask takes the run over and
+// does the pending job again. A window that keeps asking keeps the run.
+{
+  const said = [];
+  const sec = newSecrets();
+  const VER = distKeyed.version;
+  const srv = startJobServer(0, Object.assign({ log: (m) => said.push(m), pluginVersion: VER, ownerGoneMs: 400 }, sec));
+  await srv.ready;
+  const P = srv.port;
+  const as = (w) => ({ Origin: "null", Authorization: "Bearer " + sec.token, "X-PXF-Plugin": VER, "X-PXF-Window": w, "Content-Type": "application/json" });
+  const posted = srv.post({ kind: "render" }, JSON.stringify({ op: "ping" }), new Map(), 5000);
+  const a = await hreq(P, "GET", "/job?client=plugin", as("win-a"));
+  let ja = {};
+  try { ja = JSON.parse(a.body); } catch (e) {}
+  const soon = await hreq(P, "GET", "/job?client=plugin", as("win-b"));
+  await sleep(150);
+  const keep = await hreq(P, "GET", "/control?rev=0", as("win-a"));
+  await sleep(300);
+  const stillA = await hreq(P, "GET", "/job?client=plugin", as("win-b"));
+  await sleep(500);
+  const taken = await hreq(P, "GET", "/job?client=plugin", as("win-b"));
+  let jt = {};
+  try { jt = JSON.parse(taken.body); } catch (e) {}
+  await hreq(P, "POST", "/report", as("win-b"), JSON.stringify({ id: jt.id, i: 0, n: 1, d: JSON.stringify({ ok: 7, from: "b" }) }));
+  const got = await posted;
+  const lateA = await hreq(P, "GET", "/job?client=plugin", as("win-a"));
+  check(a.status === 200 && soon.status === 423 && keep.status === 200 && stillA.status === 423 && taken.status === 200 && jt.id === ja.id &&
+    got.from === "b" && srv.window === "win-b" && lateA.status === 423 && said.some((l) => /has been silent for/.test(l) && /takes over this run/.test(l)),
+    "a window that keeps asking keeps the run; once it is silent past ownerGoneMs the next window takes the run over and does the pending job again",
+    [a.status, soon.status, keep.status, stillA.status, taken.status, jt.id === ja.id, got.from, srv.window, lateA.status].join(","));
+  srv.close();
+}
 
 // Tools that post at once first wait for a window holding this session's key (tools/session.mjs). A
 // window still holding the last key is answered 401 and does not count; one with this key does.

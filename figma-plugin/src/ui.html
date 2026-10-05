@@ -190,6 +190,15 @@ function otherWindow() {
   SCOPEROW.hidden = true;
   PAIRROW.hidden = true;
   state({ link: "up", auth: "taken" });
+  // Not for good: the runner hands the run to another window once its own has been silent for 30 s
+  // (it was closed: the live kit build of 2026-10-05 stopped because the designer reopened the plugin).
+  // So ask again now and then; while the other window lives, the answer is 423 again.
+  setTimeout(() => {
+    if (ST.auth !== "taken") return;
+    state({ auth: "ok" });
+    const w = pairWaiters; pairWaiters = [];
+    for (const r of w) r();
+  }, 15000);
 }
 function needPairing() {
   if (ST.auth !== "ok") return;
