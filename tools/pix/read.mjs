@@ -9,8 +9,10 @@
 //   pix.entries    every zip entry, bytes unread until entry.data() is called
 //   pix.images     lowercase SHA-1 hex → its "<sha1>.png" entry
 //   pix.document   { name, size, version, tag, bytes }
-//   pix.stats      { decodeMs, bytesAfterFrame }: bytesAfterFrame counts the zero padding or skippable
-//                  zstd frames let through after the document's frame (see afterFrame)
+//   pix.stats      { decodeMs, bytesAfterFrame, unzipMs, zstdMs }: bytesAfterFrame counts the zero
+//                  padding or skippable zstd frames let through after the document's frame (see
+//                  afterFrame); unzipMs is the archive and the schema (the document entry's inflate
+//                  included), zstdMs the document's frame, decodeMs the Kiwi decode (docs/M1.md §0.2)
 //
 // The format, measured on a 13 MB component library:
 //
@@ -39,6 +41,7 @@ const HEADER_MAX = 4096;
 const IMAGE_ENTRY = /^([0-9a-f]{40})\.png$/i;
 
 export function readPix(buffer, opts = {}) {
+  const tz = Date.now();
   const entries = unzip(buffer);
   const schemaEntry = entries.find((e) => e.name === "pixso.binary");
   const docEntry = entries.find((e) => e.name.toLowerCase().endsWith(".pix"));
@@ -47,7 +50,11 @@ export function readPix(buffer, opts = {}) {
 
   const defs = parseSchema(schemaEntry.data());
   checkShape(defs);
-  const doc = openDocument(docEntry.data(), opts);
+  const docBytes = docEntry.data();
+  const unzipMs = Date.now() - tz;
+  const tzstd = Date.now();
+  const doc = openDocument(docBytes, opts);
+  const zstdMs = Date.now() - tzstd;
 
   const t0 = Date.now();
   const msg = createDecoder(defs, { keep: opts.keep }).decode(doc.bytes, "PixsoMsg");
@@ -68,7 +75,7 @@ export function readPix(buffer, opts = {}) {
     entries,
     images,
     document: { name: docEntry.name, size: docEntry.size, version: doc.version, tag: doc.tag, bytes: doc.bytes },
-    stats: { decodeMs, bytesAfterFrame: doc.bytesAfterFrame },
+    stats: { decodeMs, bytesAfterFrame: doc.bytesAfterFrame, unzipMs, zstdMs },
   };
 }
 
