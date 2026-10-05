@@ -496,7 +496,7 @@ check(/props is tools\/ir\/props\.mjs/.test(threw(() => taskMod.validateTask(bui
 check(checkPostOpts(undefined) === null && checkPostOpts({ liveness: { warnMs: 60000, failMs: 300000 }, ceilingMs: 140000, onProgress: () => {} }) === null &&
   /below failMs/.test(checkPostOpts({ liveness: { warnMs: 5, failMs: 5 } })) && /unknown option/.test(checkPostOpts({ heartbeat: 1 })) &&
   /function/.test(checkPostOpts({ onProgress: 1 })), "post()'s liveness options are checked for shape: { liveness: { warnMs, failMs }, ceilingMs, onProgress }");
-check(schema.SETTING_DEFAULTS.booleans === "auto" && schema.SETTING_DEFAULTS.spaceEvenlySingle === "between" && schema.SETTING_DEFAULTS.textFit === "widen" &&
+check(schema.SETTING_DEFAULTS.booleans === "auto" && schema.SETTING_DEFAULTS.spaceEvenlySingle === "center" && schema.SETTING_DEFAULTS.textFit === "widen" &&
   taskMod.TASK_SETTING_DEFAULTS.layoutOrder === "deepestFirst" && taskMod.TASK_SETTING_DEFAULTS.textRead === "measure" && taskMod.TASK_SETTING_DEFAULTS.fallbackFont.family === "Inter",
   "every M1 setting has its stated default (docs/M1.md §3)");
 check(validate({ header: { format: "pix2fig.ir", version: schema.VERSION } }).ok === false, "validate() is the IR check every caller uses");

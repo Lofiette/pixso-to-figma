@@ -56,7 +56,7 @@ export const SETTING_FLAGS = { mode: "--mode", overrides: "--overrides", drift: 
   kitmaps: "--kitmaps" };
 // The owner's default for each (docs/M1.md §3, REWRITE.md §11). mode has none: it is chosen per run.
 export const SETTING_DEFAULTS = { overrides: "fidelity", drift: "link", deleted: "publish",
-  resync: "pixso-unless-edited", textFit: "widen", booleans: "auto", spaceEvenlySingle: "between", kitmaps: "default" };
+  resync: "pixso-unless-edited", textFit: "widen", booleans: "auto", spaceEvenlySingle: "center", kitmaps: "default" };   // spaceEvenlySingle: P18, 2026-10-05
 
 // Figma's node types, which the IR speaks. Pixso never produces SLOT, but the Figma Сова kit uses
 // it inside its components, and the matcher and verifier read Figma trees with this same list.

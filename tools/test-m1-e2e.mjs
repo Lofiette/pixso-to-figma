@@ -153,8 +153,10 @@ const GOOD = await runOnce("built");
     "every task of the run is built (" + S.tasks.length + " tasks)", show(S.tasks.map((t) => t.taskNo + ":" + t.state + (t.error ? " " + t.error.split("\n")[0] : ""))));
   const G = GOOD.gates;
   check(G.gates.length === 12 && G.gates.every((g) => !g.fail), "every gate of §8.1 passes on the fixture", show(G.gates.filter((g) => g.fail)));
-  check(G.verdict.indexOf(BUILT_NOT_AUDITED) === 0 && G.pending.length > 0 && GOOD.accepted.lines.some((l) => /^VERDICT: BUILT, NOT VISUALLY AUDITED: .*creation order not frozen/.test(l)),
-    "without Pixso and without an audit the verdict reads BUILT, NOT VISUALLY AUDITED, with creation order not frozen while probes are pending", G.verdict);
+  // Every gating probe is recorded since the live session of 2026-10-05, so the order is frozen.
+  check(G.verdict.indexOf(BUILT_NOT_AUDITED) === 0 && G.pending.length === 0 && GOOD.accepted.lines.some((l) => /^VERDICT: BUILT, NOT VISUALLY AUDITED: /.test(l)) &&
+    !GOOD.accepted.lines.some((l) => /creation order not frozen/.test(l)),
+    "without Pixso and without an audit the verdict reads BUILT, NOT VISUALLY AUDITED; with every gating probe recorded the creation order is frozen", G.verdict);
   check(S.pixso.used === false && GOOD.table.every((t) => t.source === "archive" || t.source === "none") && GOOD.table.some((t) => t.source === "none") &&
     G.counts[CODE.IMAGE_PLACEHOLDER] === GOOD.table.filter((t) => t.source === "none").length,
     "no Pixso: the archive is the only image link, and each unresolved image is a counted placeholder (" + G.counts[CODE.IMAGE_PLACEHOLDER] + ")", show(GOOD.table));

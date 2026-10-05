@@ -54,7 +54,7 @@ const eq = (a, b, what) => { try { deepStrictEqual(a, b); } catch (e) { throw ne
 
 const fx = makeFixture();
 const read = (settings) => pixToIR(fx.pix, { settings });
-const R = { auto: read(), native: read({ booleans: "native" }), flatten: read({ booleans: "flatten" }), center: read({ spaceEvenlySingle: "center" }) };
+const R = { auto: read(), native: read({ booleans: "native" }), flatten: read({ booleans: "flatten" }), center: read({ spaceEvenlySingle: "center" }), between: read({ spaceEvenlySingle: "between" }) };
 const { ir, stats } = R.auto;
 const idx = (I, guid) => I.nodes.findIndex((n) => n.guid === guid);
 const rec = (guid, I = ir) => { const i = idx(I, guid); if (i < 0) throw new Error("no record for " + guid); return I.nodes[i]; };
@@ -79,7 +79,7 @@ check("a schema that numbers every enum differently gives the same IR (names, ne
 check("the header: format, version 2, pix source, file scope, the settings", () => {
   eq(ir.header.format, "pix2fig.ir"); eq(ir.header.version, 2); eq(ir.header.source.kind, "pix");
   eq(ir.header.scope, { kind: "file" });
-  eq([ir.header.settings.booleans, ir.header.settings.spaceEvenlySingle, ir.header.settings.textFit], ["auto", "between", "widen"]);
+  eq([ir.header.settings.booleans, ir.header.settings.spaceEvenlySingle, ir.header.settings.textFit], ["auto", "center", "widen"]);
   eq(R.flatten.ir.header.settings.booleans, "flatten");
   return /^[0-9a-f]{64}$/.test(ir.header.source.sha256);
 });
@@ -229,7 +229,9 @@ check("a child filling the counter axis is STRETCH only when stored at the paren
   eq([rec(IDS.cornersEqual, capped.ir).props.layoutAlign, capped.stats.counterFillKeptFixed], ["STRETCH", 0]);
 });
 check("SPACE_EVENLY: two visible flow children → SPACE_BETWEEN; one → the setting (between, center)", () => {
-  eq([rec(IDS.evenlyTwo).props.primaryAxisAlignItems, rec(IDS.evenlyOne).props.primaryAxisAlignItems], ["SPACE_BETWEEN", "SPACE_BETWEEN"]);
+  // The default is center since P18 (2026-10-05): Figma puts a single SPACE_BETWEEN child at the start, Pixso centres it.
+  eq([rec(IDS.evenlyTwo).props.primaryAxisAlignItems, rec(IDS.evenlyOne).props.primaryAxisAlignItems], ["SPACE_BETWEEN", "CENTER"]);
+  eq([rec(IDS.evenlyTwo, R.between.ir).props.primaryAxisAlignItems, rec(IDS.evenlyOne, R.between.ir).props.primaryAxisAlignItems], ["SPACE_BETWEEN", "SPACE_BETWEEN"]);
   eq([rec(IDS.evenlyTwo, R.center.ir).props.primaryAxisAlignItems, rec(IDS.evenlyOne, R.center.ir).props.primaryAxisAlignItems], ["SPACE_BETWEEN", "CENTER"]);
   eq(stats.spaceEvenly, { between: 1, single: 1 });
 });

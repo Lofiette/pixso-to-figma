@@ -44,7 +44,7 @@ export const SETTINGS = {
   "--scope": ["scope", (v) => (parseScope(v), v), "file"],
   "--m1-scope": ["m1Scope", M1_SCOPES, "default"],
   "--booleans": ["booleans", IR_SETTINGS.booleans, "auto"],
-  "--space-evenly-single": ["spaceEvenlySingle", IR_SETTINGS.spaceEvenlySingle, "between"],
+  "--space-evenly-single": ["spaceEvenlySingle", IR_SETTINGS.spaceEvenlySingle, "center"],   // P18, 2026-10-05
   "--text-fit": ["textFit", IR_SETTINGS.textFit, "widen"],
   "--layout-order": ["layoutOrder", TASK_SETTINGS.layoutOrder, "deepestFirst"],   // P5, 2026-10-05
   "--text-read": ["textRead", TASK_SETTINGS.textRead, "measure"],
