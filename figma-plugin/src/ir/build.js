@@ -22,7 +22,9 @@
 //     textTrimSkipped) and imagesRemapped (render images whose Figma hash differs), typeFallbacks
 //     (records Figma would not take as their type where they sit, built as frames, each a failure
 //     entry) and vectorOriginShifted.
-//     Phases: fonts, images, pages (the task's page found by its pxPage stamp or made and stamped;
+//     Phases: fonts, images, pages (the task's page found by its pxPage and pxSnap stamps, or made
+//     and stamped with both, so two .pix migrated into one Figma file never share a page or the
+//     service page, though page guids such as "0:1" repeat across files;
 //     a split root's built parent found and stamped as a task-boundary parent), create, vectors,
 //     booleans and layout write and never read layout (layout under deepestFirst too; under
 //     creation the auto layout is written at creation, as builder4 does), settle once, measure,
@@ -39,10 +41,10 @@
 //
 //   IR.ops.clean(ctx, task) -> Promise<{ op: "clean", taskNo, runId, removed, kept, ms, codes, coded, failures }>
 //     Removes every top-level node of a page (never a page, the document or a nested node: the
-//     guard rule of figma-plugin/src/code.js cmdClean) stamped pxSrc with a task root's guid and
-//     pxRun other than task.runId; kept counts the ones this run built. With task.page the search is
-//     that page (found by pxPage; none means nothing to clean), with page null every page, each
-//     loaded first.
+//     guard rule of figma-plugin/src/code.js cmdClean) stamped pxSrc with a task root's guid,
+//     pxSnap = task.snapshot and pxRun other than task.runId; kept counts the ones this run built.
+//     With task.page the search is that page (found by pxPage and pxSnap; none means nothing to
+//     clean), with page null every page, each loaded first.
 var B = IR.B || (IR.B = {});
 var CODE = IR.CODE, U = IR.util;
 
@@ -78,14 +80,19 @@ function checkTask(ctx, task) {
 }
 
 // ---------- pages ----------
+// A page of this snapshot: its pxPage key and pxSnap both. A page stamped before pages carried
+// pxSnap matches none, and the task makes a new one.
+function pageIs(ctx, page, key) {
+  return ctx.stampOf(page, "pxPage") === key && ctx.stampOf(page, "pxSnap") === String(ctx.task.snapshot);
+}
 async function findPage(ctx, key, regKey) {
   var F = ctx.figma;
   if (own(ctx.S.pages, regKey)) {
     var known = await F.getNodeByIdAsync(String(ctx.S.pages[regKey]));
-    if (known && !known.removed && known.type === "PAGE" && ctx.stampOf(known, "pxPage") === key) return known;
+    if (known && !known.removed && known.type === "PAGE" && pageIs(ctx, known, key)) return known;
   }
   var pages = F.root.children;
-  for (var p = 0; p < pages.length; p++) if (ctx.stampOf(pages[p], "pxPage") === key) return pages[p];
+  for (var p = 0; p < pages.length; p++) if (pageIs(ctx, pages[p], key)) return pages[p];
   return null;
 }
 
@@ -121,6 +128,7 @@ async function pagesPhase(st) {
     page = F.createPage();
     page.name = String(pg.name);
     ctx.stamp(page, "pxPage", key);
+    ctx.stamp(page, "pxSnap", st.task.snapshot);
   }
   if (pg.background !== null && pg.background !== undefined) {
     try { page.backgrounds = IR.mapPaints(ctx, ctx.value(pg.background), null); }
@@ -219,7 +227,7 @@ IR.ops.clean = async function (ctx, task) {
   if (task.page) {
     var key = task.page.service ? PXF_TASK.SERVICE_PAGE_GUID : String(task.page.guid);
     var all = F.root.children;
-    for (var p = 0; p < all.length; p++) if (ctx.stampOf(all[p], "pxPage") === key) pages.push(all[p]);
+    for (var p = 0; p < all.length; p++) if (pageIs(ctx, all[p], key)) pages.push(all[p]);
   } else pages = F.root.children.slice();
   var removed = 0, kept = 0, doomed = [];
   for (var q = 0; q < pages.length; q++) {
@@ -228,7 +236,8 @@ IR.ops.clean = async function (ctx, task) {
     var kids = pages[q].children;
     for (var c = 0; c < kids.length; c++) {
       var src = ctx.stampOf(kids[c], "pxSrc");
-      if (!src || !own(guids, src)) continue;
+      // Another snapshot's node is another file's (or another version's), even when its guid repeats.
+      if (!src || !own(guids, src) || ctx.stampOf(kids[c], "pxSnap") !== String(task.snapshot)) continue;
       if (ctx.stampOf(kids[c], "pxRun") === String(task.runId)) kept++; else doomed.push(kids[c]);
     }
   }

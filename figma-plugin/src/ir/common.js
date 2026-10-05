@@ -77,7 +77,7 @@
 //
 // Stamps (docs/M1.md §5.3): roots and task-boundary parents carry pxSrc (guid), pxIdx (IR index),
 // pxRun, pxSnap, pxIr = "2" and pxState ("built" or "partial"); components pxDef; pages pxPage (page
-// guid, or "m1-service"); the scratch text node pxScratch, shared and private. Nothing else is stamped.
+// guid, or "m1-service") and pxSnap (part F, review S5: a page belongs to one snapshot); the scratch text node pxScratch, shared and private. Nothing else is stamped.
 // A root is stamped pxState "partial" when it is created and "built" in the stamp phase; a task-boundary
 // parent is stamped by the later task that attaches a split root to it (the earlier task cannot know
 // which of its records are boundaries), so a split root's task is refused when its parent is not found

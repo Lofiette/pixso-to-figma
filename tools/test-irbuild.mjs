@@ -87,7 +87,7 @@ function mkTask(o) {
   const roots = o.roots || nodes.filter((n) => !inTask.has(n.parent)).map((n) => ({ i: n.i, attachTo: n.parent === -1 || (page && page.service) ? "page" : { i: n.parent }, place: null }));
   const placeholders = nodes.filter((n) => n.type === "INSTANCE").length;
   const op = o.op || "build";
-  return { format: "pix2fig.task", version: 1, op, runId: o.runId || RUN, taskNo: o.taskNo || 1, of: o.of || 9, snapshot: SNAP, irVersion: 2,
+  return { format: "pix2fig.task", version: 1, op, runId: o.runId || RUN, taskNo: o.taskNo || 1, of: o.of || 9, snapshot: o.snapshot || SNAP, irVersion: 2,
     settings: Object.assign(SETTINGS(), o.settings || {}), page, roots, nodes, notes: o.notes || [], values, fonts: o.fonts || fonts,
     images: o.images || [], expect: op === "build" || op === "verify" ? { count: nodes.length, nonInstance: nodes.length - placeholders, placeholders } : null };
 }
@@ -647,7 +647,10 @@ for (const [verdict, expectCode, detail] of [["throw", 1, /refused/], ["drop", 1
   // An earlier run's leftover of the same root, and a copy of the stamp nested inside a frame.
   const other = E.D.figma.createPage();
   const old = E.D.figma.createFrame(); other.appendChild(old);
-  for (const [k, v] of [["pxSrc", "1:100"], ["pxRun", "a".repeat(16)]]) old.setSharedPluginData("pix2fig", k, v);
+  for (const [k, v] of [["pxSrc", "1:100"], ["pxRun", "a".repeat(16)], ["pxSnap", SNAP]]) old.setSharedPluginData("pix2fig", k, v);
+  // The same root guid from another file (another snapshot): never this file's to remove (review S5).
+  const foreign = E.D.figma.createFrame(); other.appendChild(foreign);
+  for (const [k, v] of [["pxSrc", "1:100"], ["pxRun", "b".repeat(16)], ["pxSnap", "another-snapshot"]]) foreign.setSharedPluginData("pix2fig", k, v);
   const holder = E.D.figma.createFrame(); other.appendChild(holder);
   const nested = E.D.figma.createFrame(); holder.appendChild(nested);
   for (const [k, v] of [["pxSrc", "1:100"], ["pxRun", RUN2]]) nested.setSharedPluginData("pix2fig", k, v);
@@ -657,13 +660,34 @@ for (const [verdict, expectCode, detail] of [["throw", 1, /refused/], ["drop", 1
   const ctx = E.IR.makeCtx(E.D.figma, c1, { id: "c" });
   const R = await E.IR.ops.clean(ctx, c1);
   const stillThere = (n) => E.D.node(n.id) !== null;
-  check(R.op === "clean" && R.removed === 2 && R.kept === 0 && !stillThere(old) && stillThere(nested) && stillThere(holder),
-    "clean (page null) removes every top-level node stamped with a root's guid from another run, on every page, and never a nested one", JSON.stringify(R));
+  check(R.op === "clean" && R.removed === 2 && R.kept === 0 && !stillThere(old) && stillThere(nested) && stillThere(holder) && stillThere(foreign),
+    "clean (page null) removes every top-level node stamped with a root's guid and this snapshot from another run, on every page; never a nested one, nor another snapshot's", JSON.stringify(R));
   const E2 = env();
   await build(E2, mkTask({ runId: RUN, page, nodes: [frame(0, -1, [T6(0, 0), 10, 10])] }));
   const c2 = clean(RUN, page);
   const R2 = await E2.IR.ops.clean(E2.IR.makeCtx(E2.D.figma, c2, { id: "c2" }), c2);
   check(R2.removed === 0 && R2.kept === 1, "clean keeps what this run built (kept), on the task's page");
+}
+{
+  // Review S5: two .pix into one Figma file share page guids ("0:1" is in every file) and the
+  // service page. Each snapshot gets its own pages; the second never lands on the first's.
+  const E = env();
+  const page = { index: 0, guid: "0:1", name: "Page A", service: false, background: null };
+  const svc = { index: null, guid: "m1-service", name: "pix2fig service: S2 masters", service: true, background: null };
+  const SNAP2 = schema.snapshotId({ source: { kind: "pix", sha256: "0".repeat(62) + "b2" } });
+  await build(E, mkTask({ runId: RUN, page, nodes: [frame(0, -1, [T6(0, 0), 10, 10])] }));
+  await build(E, mkTask({ runId: RUN, taskNo: 2, page: svc, roots: [{ i: 0, attachTo: "page", place: [0, 0] }], nodes: [frame(0, -1, [T6(0, 0), 10, 10])] }));
+  await build(E, mkTask({ runId: RUN2, snapshot: SNAP2, page, nodes: [frame(0, -1, [T6(0, 0), 10, 10])] }));
+  await build(E, mkTask({ runId: RUN2, snapshot: SNAP2, taskNo: 2, page: svc, roots: [{ i: 0, attachTo: "page", place: [0, 0] }], nodes: [frame(0, -1, [T6(0, 0), 10, 10])] }));
+  const tag = (p) => (p.sharedPluginData.pix2fig || {});
+  const pages = E.D.tree().children;
+  const userPages = pages.filter((p) => tag(p).pxPage === "0:1"), svcPages = pages.filter((p) => tag(p).pxPage === "m1-service");
+  check(userPages.length === 2 && svcPages.length === 2 && userPages.every((p) => p.children.length === 1) && svcPages.every((p) => p.children.length === 1) &&
+    new Set(userPages.map((p) => tag(p).pxSnap)).size === 2,
+    "two snapshots that share a page guid get a page each, and a service page each; neither lands on the other's", JSON.stringify(pages.map((p) => [tag(p), p.children.length])));
+  const c = Object.assign(mkTask({ op: "clean", runId: RUN2, snapshot: SNAP2, page, nodes: [frame(0, -1, [T6(0, 0), 10, 10])] }), { expect: null });
+  const R = await E.IR.ops.clean(E.IR.makeCtx(E.D.figma, c, { id: "cs" }), c);
+  check(R.removed === 0 && R.kept === 1 && userPages.every((p) => E.D.node(p.id).children.length === 1), "the second snapshot's clean leaves the first snapshot's root alone", JSON.stringify(R));
 }
 
 // ============================================================================================
