@@ -1,5 +1,5 @@
 {
-  "comment": "Probe verdicts the headless double reproduces (docs/M1.md §5.4, §6 E, D9). Results already recorded come from docs/REWRITE.md §9 (2026-10-04); P4, P8 and P19B are pending until the live session (docs/M1.md §10 step 1), after which part F records them here. A case is one of ok, throw, drop, empty, or pending; the image chain treats throw and drop as 'move to the next link'. Counts and behaviours only: no file names, no keys.",
+  "comment": "Probe verdicts the headless double reproduces (docs/M1.md §5.4, §6 E, D9). Results already recorded come from docs/REWRITE.md §9 (2026-10-04); P4, P8 and P19B are pending until the live session (docs/M1.md §10 step 1), after which part F records them here from tools/plugin-probe.mjs. A case is ok, throw, drop, empty or pending; the P19B geometry cases may also read differs (Figma did something else; the probe result says what), and P4 has its own values: transport base64 or binary, sameHash ok or differs. tools/double/behaviour.mjs says what each value means to the double and which value it assumes while a case is pending; a recorded value it does not model refuses to build the double, so the double changes first. The image chain treats throw and drop as move to the next link. Counts and behaviours only: no file names, no keys.",
   "version": 1,
   "probes": {
     "P2": {
