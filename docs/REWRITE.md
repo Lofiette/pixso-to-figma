@@ -120,9 +120,15 @@ described in our own words and marked "(seen in Rainbow)".
   - A reference resolves by guid, or else through a local copy's `overrideKey`; `0:0` and the all-ones guid mean
     "no style". A reference that resolves nowhere keeps the node's raw values and is counted
     STYLE_MISSING_IN_SOURCE.
-  - On ordinary nodes, the node's own value is what Pixso draws. The style is bound when its value equals the node's
-    within 1/255 per channel; otherwise the raw value stays and STYLE_VALUE_DIFFERS is counted. In override
-    records, the referenced style wins over the cached paint.
+  - **Corrected (2026-10-05, a render pair of P):** a node draws its resolved style's value, on ordinary nodes as in
+    override records: the node's own paints are a cache that goes stale when the style changes (a section whose own
+    fill is grey and whose fill style is blue draws blue). Where the reference resolves to a style definition of its
+    kind that carries a value, that value is written and the style bound, and STYLE_VALUE_DIFFERS counts the nodes
+    whose own copy differed; a reference that resolves to no definition (a library style the file does not carry),
+    or to one with no value, keeps the node's own value and is counted STYLE_MISSING_IN_SOURCE. Fill, stroke and
+    effect styles alike (a stroke style is a paint style); the fill case is C, strokes and effects are I. The rule
+    this replaces ("the node's own value is what Pixso draws; the style is bound only when the values match") was
+    I and is wrong for resolved fill styles.
   - Style identity is the styleKey plus a value signature, never the name and never the guid alone, so copies of one
     styleKey with different values stay separate (seen in Rainbow).
   - A soft-deleted target is bound if it was built; otherwise raw values are kept and counted.

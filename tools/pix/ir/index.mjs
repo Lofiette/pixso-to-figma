@@ -26,7 +26,8 @@
 //     populations: { userTop, userMasters, mastersNoInstance, mastersWithInstanceInternal, internalLoose,
 //                    stateGroupsInternal, lostBorder }   (IR indices; tools/pix/ir/populations.mjs)
 //     populationCounts, records, nonInstance, instances, vectors, text, spaceEvenly, strokeAlignDecided,
-//     cornerRadiusOnly, lostBorderSections }
+//     cornerRadiusOnly, lostBorderSections, counterFillKeptFixed,
+//     styles: { fill | stroke | effect: { same, styleWins, missing, noValue } } (tools/pix/ir/styles.mjs) }
 // The balance of docs/M1.md §8.2: stored = records + notCarried (every term), checked here.
 import { createHash } from "node:crypto";
 import { readPix, childrenByParent } from "../read.mjs";
@@ -54,6 +55,8 @@ export function readerSettings(given) {
   return s;
 }
 
+const style0 = () => ({ same: 0, styleWins: 0, missing: 0, noValue: 0 });
+
 function newStats() {
   return {
     ms: { unzip: 0, zstd: 0, kiwi: 0, ir: 0 }, stored: 0, byType: {}, notes: {}, unsupported: {},
@@ -65,6 +68,7 @@ function newStats() {
     vectors: { networks: 0, fromNetwork: 0, fromGeometry: 0, loopsClosed: 0, loopsDropped: 0, regionFills: 0, classes: { "region-no-fill": 0, "network-bounds": 0, winding: 0 } },
     text: { fontFromStyle: 0, rawLineHeight: 0, percentOneAuto: 0, styleValueOverridden: 0 },
     spaceEvenly: { between: 0, single: 0 }, strokeAlignDecided: {}, cornerRadiusOnly: {}, lostBorderSections: 0, counterFillKeptFixed: 0,
+    styles: { fill: style0(), stroke: style0(), effect: style0() },
   };
 }
 
@@ -93,7 +97,7 @@ export function pixToIR(buffer, opts) {
   const notes = [];
   const cx = {
     pix, en, settings, stats, byGuid, childrenOf, typeName, at: undefined, featured: null, componentGuids: new Set(),
-    glyphChecked: new Set(),
+    glyphChecked: new Set(), styles: [], styleIds: new Map(), styleGuids: new Map(),
     blob(i) {
       if (i === undefined || i === null) return null;
       if (!(Number.isInteger(i) && i >= 0 && i < pix.blobs.length)) throw corrupt("a path names blob " + i + "; there are " + pix.blobs.length);
@@ -212,7 +216,7 @@ export function pixToIR(buffer, opts) {
     nodes: out.records,
     sets: [],
     components: out.components,
-    styles: [],
+    styles: cx.styles,
     images,
     fonts,
     notes,

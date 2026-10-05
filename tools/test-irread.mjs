@@ -473,6 +473,55 @@ check("a SECTION carries fills only; its stroke is dropped and noted", () => {
   eq([p.strokes, p.strokeWeight, p.clipsContent, val(p.fills).length], [undefined, undefined, undefined, 1]);
   eq(notesOf(IDS.section).map((n) => n.detail), ["SECTION strokes"]);
 });
+check("a SECTION's corner radius, which Figma does not draw, is noted (the first live build of P, 2026-10-05)", () => {
+  const r = pixToIR(mutated((v, at) => { at(IDS.section).cornerRadius = 32; }));
+  eq(notesOf(IDS.section, r.ir).map((n) => n.detail), ["SECTION strokes", "SECTION corner radius"]);
+  return r.stats.unsupported["SECTION corner radius"] + " noted";
+});
+
+// ---------- 8b. styles a node draws (a render pair of P, 2026-10-05: the style's value wins) ----------
+{
+  const LOCAL = "1:64", DANGLING = "1:65", STYLE_GUID = "1:50";
+  const enumOf = (defs, name, member) => defs.find((d) => d.name === name).fields.find((f) => f.name === member).value;
+  const node = (v, id) => v.pixsoNodes.find((x) => x.guid.sessionID + ":" + x.guid.localID === id);
+  check("a node bound to a style with its own value equal to the style's binds it, with no note", () => {
+    const p = rec(LOCAL).props, st = ir.styles[p.fillStyle];
+    eq([st && st.guid, st && st.type, st && st.styleKey, val(p.fills)[0].color], [STYLE_GUID, "PAINT", "fixture-style-key-1", { r: 0, g: 0.333333, b: 1 }]);
+    eq(codesOf(LOCAL).filter((c) => /^STYLE_/.test(c)), []);
+  });
+  check("a reference that resolves nowhere keeps the node's own value, unbound, noted STYLE_MISSING_IN_SOURCE; 0:0 and all ones are no reference", () => {
+    const p = rec(DANGLING).props;
+    eq([p.fillStyle, p.strokeStyle, p.effectStyle, val(p.fills)[0].color], [undefined, undefined, undefined, { r: 0.039216, g: 0.078431, b: 0.117647 }]);
+    eq(notesOf(DANGLING).filter((n) => /^STYLE_/.test(n.code)).map((n) => n.code + ": " + n.detail), [CODE.STYLE_MISSING_IN_SOURCE + ": fill style not in the file; the node's own value kept"]);
+  });
+  check("a resolved fill style's value is drawn over the node's stale copy: the style is bound and STYLE_VALUE_DIFFERS noted", () => {
+    const r = pixToIR(makeFixture("valid", { mutate: (v, d) => {
+      node(v, LOCAL).fillPaints = [{ type: enumOf(d, "PaintType", "SOLID"), color: { r: 228, g: 228, b: 228, a: 255 }, opacity: 1, visible: true }];
+    } }).pix);
+    const p = rec(LOCAL, r.ir).props, st = r.ir.styles[p.fillStyle];
+    eq([val(p.fills, r.ir)[0].color, st && st.guid], [{ r: 0, g: 0.333333, b: 1 }, STYLE_GUID]);
+    eq(codesOf(LOCAL, r.ir).filter((c) => /^STYLE_/.test(c)), [CODE.STYLE_VALUE_DIFFERS]);
+    eq(r.stats.styles.fill.styleWins, 1);
+  });
+  check("stroke and effect styles likewise: a stroke style is a paint style (its fill paints), an effect style its effects; both bound", () => {
+    const r = pixToIR(makeFixture("valid", { mutate: (v, d) => {
+      const style = node(v, STYLE_GUID), n = node(v, LOCAL);
+      const eff = { guid: { sessionID: 1, localID: 90 }, parentIndex: { guid: style.parentIndex.guid, position: "fz" }, type: style.type, name: "Shadow/Small",
+        styleType: enumOf(d, "StyleType", "EFFECT"), styleID: 9,
+        effects: [{ type: enumOf(d, "EffectType", "DROP_SHADOW"), color: { r: 0, g: 0, b: 0, a: 51 }, offset: { x: 0, y: 2 }, radius: 4, visible: true }] };
+      v.pixsoNodes.push(eff);
+      n.inheritStrokeStyleID = style.guid; n.strokePaints = [];
+      n.inheritEffectStyleID = eff.guid; n.effects = [];
+    } }).pix);
+    const p = rec(LOCAL, r.ir).props;
+    eq([val(p.strokes, r.ir).length, val(p.strokes, r.ir)[0].color, r.ir.styles[p.strokeStyle].guid, val(p.effects, r.ir).length, val(p.effects, r.ir)[0].type, r.ir.styles[p.effectStyle].type],
+      [1, { r: 0, g: 0.333333, b: 1 }, STYLE_GUID, 1, "DROP_SHADOW", "EFFECT"]);
+    eq(codesOf(LOCAL, r.ir).filter((c) => /^STYLE_/.test(c)), [CODE.STYLE_VALUE_DIFFERS, CODE.STYLE_VALUE_DIFFERS]);
+    const v = validate(r.ir);
+    if (!v.ok) throw new Error(JSON.stringify(v.errors.slice(0, 2)));
+    return r.ir.styles.length + " styles";
+  });
+}
 
 // ---------- 9. booleans ----------
 check("auto: class A booleans native (a nested one too), class B flattened with its operands folded", () => {
