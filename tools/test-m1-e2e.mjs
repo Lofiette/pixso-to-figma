@@ -36,6 +36,7 @@ import { BUILT_NOT_AUDITED } from "./ir/verdict.mjs";
 import { judgeRun } from "./ir/judge.mjs";
 import { makeDouble, loadVerdicts } from "./double/index.mjs";
 import { loadPluginBundle, defaultHost } from "./ir/plugin-vm.mjs";
+import { startJobServer, newSecrets } from "./jobserver.mjs";
 import { judgeWith } from "./pix-run.mjs";
 import { accept, main as acceptMain } from "./m1-accept.mjs";
 
@@ -92,16 +93,23 @@ async function runOnce(label, opts) {
     if (P.op === "build" && o.plant) await o.plant(P.taskNo, env, P);
     return JSON.parse(JSON.stringify(rep));
   };
-  const imagesFor = (task) => { const m = new Map(); for (const im of task.images) if (im.source !== "none" && bytes.has(im.hash)) m.set(im.hash, bytes.get(im.hash)); return m; };
-  const settings = { source: "pix", scope: "file", m1Scope: "default", booleans: "auto", spaceEvenlySingle: "between", textFit: "widen", layoutOrder: "creation",
-    textRead: "measure", images: "archive", noPixso: true, missingFonts: "ask", fallbackFont: { family: "Inter", style: "Regular" }, maxTaskMb: 4,
-    livenessWarnS: 60, livenessFailS: 300, ceilingMsPerNode: 20 };
-  const states = newStates({ snapshot: plan.tasks[0].snapshot, irVersion: IR.header.version, runId: RUN, settings, probes: probeStatus(VERDICTS),
-    pixso: { used: false, identity: null, q5: false }, balance: plan.balance, ledger: plan.ledger });
+  const imagesFor = imagesOf(bytes);
+  const states = statesFor(IR, plan);
   const reports = [];
   const r = await runTasks({ states, tasks: plan.tasks, post, imagesFor, clean: (t) => cleanTaskFor(t, IR), judge: judgeWith(IR, STATS),
     onReport: (t, rep) => reports.push({ taskNo: t.taskNo, op: t.op, rep }), log: () => {}, missingFonts: "ask" });
-  // The run folder, as pix-run writes it.
+  return Object.assign(env, { table, states, reports, r }, folderOf(label, IR, table, plan, states, r));
+}
+const imagesOf = (bytes) => (task) => { const m = new Map(); for (const im of task.images) if (im.source !== "none" && bytes.has(im.hash)) m.set(im.hash, bytes.get(im.hash)); return m; };
+function statesFor(IR, plan) {
+  const settings = { source: "pix", scope: "file", m1Scope: "default", booleans: "auto", spaceEvenlySingle: "between", textFit: "widen", layoutOrder: "creation",
+    textRead: "measure", images: "archive", noPixso: true, missingFonts: "ask", fallbackFont: { family: "Inter", style: "Regular" }, maxTaskMb: 4,
+    livenessWarnS: 60, livenessFailS: 300, ceilingMsPerNode: 20 };
+  return newStates({ snapshot: plan.tasks[0].snapshot, irVersion: IR.header.version, runId: RUN, settings, probes: probeStatus(VERDICTS),
+    pixso: { used: false, identity: null, q5: false }, balance: plan.balance, ledger: plan.ledger });
+}
+// The run folder, as pix-run writes it, and m1-accept over it.
+function folderOf(label, IR, table, plan, states, r) {
   const runDir = join(SCRATCH, label);
   mkdirSync(join(runDir, "judge"), { recursive: true });
   const out = (f, v) => writeFileSync(join(runDir, f), JSON.stringify(v), "utf8");
@@ -115,7 +123,7 @@ async function runOnce(label, opts) {
   for (const j of r.Js) out(join("judge", j.taskNo + ".json"), j.J);
   const totals = r.Js.length ? judgeRun(r.Js.map((j) => j.J)) : null;
   const A = accept(runDir, {});
-  return Object.assign(env, { table, states, reports, r, totals, runDir, accepted: A, gates: A.gates });
+  return { totals, runDir, accepted: A, gates: A.gates };
 }
 const failedGates = (run) => run.gates.failed.slice().sort();
 const rowsOf = (run) => run.reports.filter((x) => x.op === "verify").flatMap((x) => x.rep.rows);
@@ -357,6 +365,126 @@ const flowParent = (n) => { const p = IR.nodes[n.parent]; return !!p && (p.props
 }
 
 // ============================================================================================
+// 3c. two plugin windows open at once: one run's work stays in one Figma file
+// ============================================================================================
+// The second live build of the test kit K (2026-10-05) had the plugin open in two Figma files, both
+// paired with the runner. The job server answered every held /job request with the pending job, so
+// each window ran whatever it was idle for and the first report back won: one page's build landed in
+// one file and its verify ran in the other, which never made its roots (ROOT_NOT_FOUND: G2, G3 and
+// G11 failed), and other verifies measured another file's copy. Played here through the real job
+// server, each window a client of its routes (as figma-plugin/src/ui.html is) with its own Figma
+// (a double) and its own plugin (the bundled IR layer), in K's order: window B is still finishing a
+// clean when the build after it is posted, so only window A builds; B then takes the verify and
+// answers first. Whatever the windows do, every job must go to one window, so every root a build
+// makes is there for its verify: S2 masters on the service page and split chains included.
+async function twoWindows(label, o) {
+  const opts = o || {};
+  const { bytes, table } = await resolveImages(IR, PIX, { links: ["archive"], verdicts: VERDICTS });
+  const plan = planM1(IR, STATS, Object.assign({ m1Scope: "default", images: table, runId: RUN }, opts.maxChars ? { maxChars: opts.maxChars } : {}));
+  const sec = newSecrets(), said = [];
+  const srv = startJobServer(0, Object.assign({ log: (m) => said.push(String(m)) }, sec));
+  await srv.ready;
+  const base = "http://127.0.0.1:" + srv.port;
+  const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+  // The first of the promises, or nothing after ms; the timer is cleared either way.
+  const within = (ms, ps) => { let t = null; return Promise.race(ps.concat([new Promise((res) => { t = setTimeout(res, ms); })])).finally(() => clearTimeout(t)); };
+  // Signals between the runner and the windows, so the interleaving is K's every time.
+  const verifyPosted = [], reported = new Map();
+  const nextVerify = () => new Promise((res) => verifyPosted.push(res));
+  const heard = (name, what) => {
+    const k = name + ":" + what;
+    if (!reported.has(k)) { let r = null; const p = new Promise((x) => { r = x; }); reported.set(k, { p, r }); }
+    return reported.get(k);
+  };
+  function playWindow(name, hooks) {
+    const D = makeDouble({ verdicts: VERDICTS }), host = defaultHost(), figImages = {}, figErrors = {};
+    host.phase = D.setPhase; host.images = () => figImages; host.imageErrors = () => figErrors;
+    const B = loadPluginBundle({ figma: D.figma, host });
+    const H = { Origin: "null", Authorization: "Bearer " + sec.token, "X-PXF-Window": name };
+    const ctl = new AbortController();
+    const w = { name, D, ran: [], refused: false, polled: 0, error: null };
+    let done = null;
+    w.out = new Promise((res) => { done = res; });
+    const get = (path) => fetch(base + path, { headers: H, signal: ctl.signal });
+    (async () => {
+      try {
+        for (;;) {
+          w.polled++;
+          const jr = await get("/job?client=plugin");
+          if (jr.status === 423) { w.refused = true; break; }
+          const job = await jr.json();
+          if (!job || job.kind === "noop") continue;
+          const pr = await get("/job/" + job.id + "/payload");
+          // Gone already: another window's report ended it (the window posts an error, as ui.html does).
+          if (pr.status !== 200) { w.ran.push("gone " + job.kind); continue; }
+          const P = JSON.parse(await pr.text());
+          for (const h of job.images || []) {
+            const b64 = await (await get("/image/" + h + "?b64=1")).text();
+            try { figImages[h] = D.figma.createImage(new Uint8Array(Buffer.from(b64, "base64"))).hash; } catch (e) { figErrors[h] = String((e && e.message) || e); }
+          }
+          let rep;
+          try {
+            const v = B.PXF_TASK.validateTask(P, { schema: B.PXF_SCHEMA, props: B.PXF_PROPS, maxChars: B.PXF_TASK.MAX_TASK_CHARS_CEILING, maxErrors: 20 });
+            if (!v.ok) throw new Error("ir: the task is refused");
+            rep = JSON.parse(JSON.stringify(await B.PXF_IR.ops[P.op](B.PXF_IR.makeCtx(D.figma, P, { id: job.id }), P)));
+          } catch (e) { rep = { error: String((e && e.message) || e) }; }
+          w.ran.push(P.op + " " + P.taskNo);
+          if (hooks.beforeReport) await hooks.beforeReport(P);
+          const rr = await fetch(base + "/report", { method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, H), signal: ctl.signal,
+            body: JSON.stringify({ id: job.id, i: 0, n: 1, d: JSON.stringify(rep) }) });
+          heard(name, P.op + P.taskNo).r();
+          if (rr.status === 423) { w.refused = true; break; }
+        }
+      } catch (e) { if (!ctl.signal.aborted) w.error = String((e && e.message) || e); }
+      done();
+    })();
+    w.close = () => ctl.abort();
+    return w;
+  }
+  // A does everything, but lets B answer a verify first when B has it too. B holds a clean's report
+  // until the runner has posted the next verify, so the build in between goes to A alone.
+  let B = null;
+  const A = playWindow("e2e-window-a", { beforeReport: (P) => (P.op === "verify" ? within(3000, [heard("e2e-window-b", "verify" + P.taskNo).p, B.out]) : null) });
+  for (const t0 = Date.now(); srv.lastPoll() === 0 && Date.now() - t0 < 5000;) await sleep(5);
+  await sleep(50);   // A's request is held first
+  B = playWindow("e2e-window-b", { beforeReport: (P) => (P.op === "clean" ? within(5000, [nextVerify()]) : null) });
+  while (B.polled === 0) await sleep(5);
+  await sleep(50);
+  const post = (task, p) => {
+    const pr = srv.post({ kind: "ir" }, JSON.stringify(task), p.images, 60000);
+    if (task.op === "verify") while (verifyPosted.length) verifyPosted.shift()();
+    return pr;
+  };
+  const states = statesFor(IR, plan);
+  const reports = [];
+  const r = await runTasks({ states, tasks: plan.tasks, post, imagesFor: imagesOf(bytes), clean: (t) => cleanTaskFor(t, IR), judge: judgeWith(IR, STATS),
+    onReport: (t, rep) => reports.push({ taskNo: t.taskNo, op: t.op, rep }), log: () => {}, missingFonts: "ask" });
+  A.close(); B.close();
+  await Promise.all([A.out, B.out]);
+  srv.close();
+  return Object.assign({ plan, states, reports, r, A, B, srv: { window: srv.window, othersRefused: srv.othersRefused }, said }, folderOf(label, IR, table, plan, states, r));
+}
+// The only part of this test that waits on a network: a deadline, so a job nobody takes fails it.
+const twoWindowsDeadline = setTimeout(() => { console.log("FAIL the two-window runs did not finish within 120 s"); process.exit(1); }, 120000);
+twoWindowsDeadline.unref();
+for (const [label, maxChars] of [["two-windows", 0], ["two-windows-split", 4500]]) {
+  const run = await twoWindows(label, { maxChars });
+  const verifies = run.reports.filter((x) => x.op === "verify");
+  const lost = verifies.flatMap((x) => (x.rep.roots || []).filter((q) => !q.found).map((q) => x.taskNo + ":" + q.i));
+  const tasks = run.plan.tasks.filter((t) => t.op === "build" || t.op === "verify").map((t) => t.op + " " + t.taskNo);
+  const S2 = run.plan.tasks.filter((t) => t.op === "build" && t.page && t.page.service).length;
+  const chains = run.plan.tasks.filter((t) => t.op === "build" && t.roots.some((x) => typeof x.attachTo === "object")).length;
+  check(verifies.length > 0 && !lost.length && failedGates(run).length === 0,
+    label + ": two plugin windows paired at once, and every verify finds every root its build made (" + verifies.length + " verifies, " + S2 + " S2 master task" + (S2 === 1 ? "" : "s") +
+    (chains ? ", " + chains + " split-root task" + (chains === 1 ? "" : "s") : "") + "); every gate passes", show({ lost, gates: failedGates(run), A: run.A.ran.length, B: run.B.ran }));
+  check(tasks.every((t) => run.A.ran.indexOf(t) >= 0) && run.B.ran.length === 0 && run.B.refused && !run.A.error && !run.B.error &&
+    run.srv.window === "e2e-window-a" && run.srv.othersRefused > 0 && run.said.some((l) => /refused 423/.test(l)),
+    label + ": the window that took the first job runs every build and verify of the run; the other is refused (423), takes none, and the runner says so",
+    show({ A: run.A.ran.length + "/" + tasks.length, B: run.B.ran, refused: run.B.refused, server: run.srv, errors: [run.A.error, run.B.error] }));
+}
+clearTimeout(twoWindowsDeadline);
+
+// ============================================================================================
 // 4. pix-run --dry --no-pixso on the fixture file
 // ============================================================================================
 {
@@ -373,3 +501,5 @@ try { rmSync(SCRATCH, { recursive: true, force: true }); } catch (e) { /* the sy
 console.log("");
 if (failed) { console.log(failed + " end-to-end check" + (failed === 1 ? "" : "s") + " FAILED"); process.exit(1); }
 console.log("all end-to-end checks pass");
+// The job server's per-job watch runs every 15 s until its next tick: nothing is left to wait for.
+process.exit(0);

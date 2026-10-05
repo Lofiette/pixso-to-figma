@@ -76,6 +76,9 @@ try {
   line("finished, runner exited", { link: "down" }, "Раннер закончил работу", "on");
   line("runner never started", { sawDone: false, phase: "idle" }, "Раннер не запущен", "wait");
   line("stopped by an error", { link: "up", phase: "stopped" }, "остановлен", "off");
+  // A second plugin window (another Figma file) is refused all of a run's work, and says to close it.
+  line("another window has the run", { auth: "taken" }, "в другом окне плагина", "wait");
+  ctx.state({ auth: "ok" });
 
   // ---------- the watchdog waits past the runner's ceiling ----------
   // A K-sized task at 30 ms a node has a 542 s ceiling; the window's 8-minute floor would report it

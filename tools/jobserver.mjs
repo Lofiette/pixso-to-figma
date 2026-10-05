@@ -26,6 +26,19 @@
 // before /pair, and without spending a pairing try — and the window asks to be closed and reopened.
 // The build id is a hash of the plugin's public sources: not a secret, and 409 reveals nothing else.
 //
+// And one window per runner. Every plugin window holding the key used to be given the pending job: a
+// held /job request was answered with it, whoever held it, and the first report back won. Two windows
+// open at once (the plugin in two Figma files, or one file opened twice) then both ran every job they
+// were idle for, so a build could land in one file and its verify in the other, where its roots were
+// never made: the second live build of the test kit K, 2026-10-05, built one page's 3 roots in one
+// file and verified them in the other (ROOT_NOT_FOUND: 3 roots for G2, their 160 records for G3 and
+// G4, 54 placeholders for G11), and three more verifies measured another file's copy of their build.
+// A window names itself in X-PXF-Window, a random id it makes when it opens (no header: the window
+// ""). The first window given a job is this runner's window for good; any other gets 423 on /job,
+// /job/<id>/payload, /image, /alive and /report, never a job, and is told to close: every build,
+// verify and clean of a run happens in one file. To move a run to another file, or to go on after
+// the runner's window was closed, stop the runner and start it again.
+//
 // Liveness (docs/REWRITE.md §6, docs/M1.md §6 E). A job posted with opts.liveness and opts.ceilingMs
 // (the IR path's tasks) is watched by its progress counter, not by the heartbeat: the plugin posts
 // { t: "progress", id, done } whenever its main thread completes a chunk or a pass, the window
@@ -145,6 +158,28 @@ export function startJobServer(port = 3778, opts = {}) {
   let seq = 0;
   let lastPoll = 0;            // when the plugin last asked for work
   let staleSeen = 0;           // when a plugin window of another build last asked (409)
+  let owner = null;            // X-PXF-Window of the window given this runner's first job ("" when it names none)
+  let othersRefused = 0;       // requests refused because another window is this runner's (423)
+  const windowOf = (req) => String(req.headers["x-pxf-window"] || "").slice(0, 64);
+  // Gives the pending job to `win` when it is this runner's window, or the first ever to be given one.
+  const claim = (win) => {
+    if (owner === null) {
+      owner = win;
+      warn("  this runner's plugin window is " + (win ? JSON.stringify(win) : "one that names none") +
+        ": every job of the run goes to it, and any other window is refused");
+    }
+    return owner === win;
+  };
+  // 423 to a window that is not this runner's: readable by it (CORS), which then asks to be closed.
+  const otherWindow = (req, res, path, cors) => {
+    othersRefused++;
+    refused(423, req, path, "another plugin window (another Figma file, or the same file opened twice) asked for this run's" +
+      " work; every job goes to the window that took the first — close the other one (if the first is gone, stop this runner and start it again)", "(window " + JSON.stringify(windowOf(req).slice(0, 24)) +
+      ", runner's " + JSON.stringify(String(owner).slice(0, 24)) + ")");
+    cors("application/json");
+    res.writeHead(423);
+    res.end(JSON.stringify({ ok: false, otherWindow: true, error: "another plugin window is doing this run's work; close this one" }));
+  };
 
   // Every refusal is said, with the Origin that came with it. Said once per kind every ten seconds,
   // so a page hammering the port cannot bury the run's own output. `detail` is said but is not part
@@ -188,7 +223,7 @@ export function startJobServer(port = 3778, opts = {}) {
     };
     if (req.method === "OPTIONS") {
       cors();
-      res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, X-PXF-Plugin");
+      res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, X-PXF-Plugin, X-PXF-Window");
       res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
       res.setHeader("Access-Control-Max-Age", "600");
       // Every request now carries a key, so every request is preflighted. A Chromium that enforces
@@ -303,11 +338,23 @@ export function startJobServer(port = 3778, opts = {}) {
       });
     }
 
+    // The run's work goes to one window (see the header): once a window has been given a job, any
+    // other is refused on every route that carries a job, before it can take, move or answer one.
+    const win = windowOf(req);
+    if (owner !== null && win !== owner && (url.pathname === "/job" || url.pathname === "/alive" || url.pathname === "/report" ||
+      /^\/job\/[^/]+\/payload$/.test(url.pathname) || /^\/image\//.test(url.pathname))) {
+      req.resume();
+      return otherWindow(req, res, url.pathname, cors);
+    }
+
     if (url.pathname === "/job" && req.method === "GET") {
       const fromPlugin = url.searchParams.get("client") === "plugin";
       if (fromPlugin) lastPoll = Date.now();
       cors("application/json");
-      if (pending || !fromPlugin) return res.end(JSON.stringify(pending || { kind: "noop" }));
+      if (pending || !fromPlugin) {
+        if (pending && !claim(win)) return otherWindow(req, res, url.pathname, cors);
+        return res.end(JSON.stringify(pending || { kind: "noop" }));
+      }
       // Nothing to give it yet, so hold the request instead of answering "noop" and letting the
       // plugin come back later on a timer. Chromium throttles timers in a background window to one
       // wake-up a minute, so "later" meant a minute, and a runner that gives up after 45 s of
@@ -320,6 +367,9 @@ export function startJobServer(port = 3778, opts = {}) {
         clearTimeout(timer);
         const at = waiters.indexOf(answer);
         if (at >= 0) waiters.splice(at, 1);
+        // Every held request is woken when a job is posted; only this runner's window, or the first
+        // woken while it has none, is given the job. The others are told to close.
+        if (pending && !claim(win)) { try { otherWindow(req, res, url.pathname, cors); } catch (e) {} return; }
         lastPoll = Date.now();
         try { res.end(JSON.stringify(pending || { kind: "noop" })); } catch (e) {}
       };
@@ -449,6 +499,10 @@ export function startJobServer(port = 3778, opts = {}) {
     pluginVersion,
     get port() { return boundPort; },
     get paired() { return paired; },
+    // The X-PXF-Window of the window given this runner's first job (null before any), and how many
+    // requests another window has been refused (423).
+    get window() { return owner; },
+    get othersRefused() { return othersRefused; },
     // Wait until somebody presses the button in the plugin window.
     waitForStart() { if (!startWanted) startWanted = new Promise((r) => { startResolve = r; }); return startWanted; },
     // Say something the plugin window can show while a long step runs.

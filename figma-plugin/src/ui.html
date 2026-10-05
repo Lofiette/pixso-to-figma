@@ -73,6 +73,16 @@ if (!/^[0-9a-f]{64}$/.test(TOKEN)) TOKEN = "";
 // sources answers 409, and this window asks to be reopened instead of asking for the code — paired,
 // it would build with whatever builder was on disk when it was opened, and nobody would know.
 const PLUGIN = "__PXF_VERSION__";
+// Which window this is, made when it opens and said on every request (X-PXF-Window). A runner gives
+// all of a run's work to the first window it gives a job to: two windows open at once (the plugin in
+// two Figma files, or one file opened twice) both used to take every job, and a build landed in one
+// file while its verify looked for it in the other (tools/jobserver.mjs). Not a secret: the key is.
+const WINDOW = (function () {
+  const b = new Uint8Array(8);
+  if (typeof crypto !== "undefined" && crypto && typeof crypto.getRandomValues === "function") crypto.getRandomValues(b);
+  else for (let i = 0; i < b.length; i++) b[i] = Math.floor(Math.random() * 256);
+  return Array.from(b, (x) => (x < 16 ? "0" : "") + x.toString(16)).join("");
+})();
 
 function log(m) { L.textContent = (m + "\n" + L.textContent).slice(0, 4000); }
 
@@ -84,7 +94,8 @@ function log(m) { L.textContent = (m + "\n" + L.textContent).slice(0, 4000); }
 // whenever the runner was busy in Pixso or had finished and exited — an emergency where nothing at
 // all was wrong. What the person watching needs is one sentence saying what is happening now, and
 // if something needs doing, what.
-// auth: "ok", "need" (the runner wants the code) or "stale" (the runner wrote another plugin build).
+// auth: "ok", "need" (the runner wants the code), "stale" (the runner wrote another plugin build) or
+// "taken" (the runner gives this run's work to another plugin window).
 const ST = { link: "unknown", phase: "idle", stage: null, trouble: null, sawDone: false, everJob: false, auth: "ok" };
 function paint(t, cls) { S.textContent = t; S.className = cls || ""; }
 function render() {
@@ -92,6 +103,8 @@ function render() {
   if (ST.trouble) return paint(ST.trouble, "off");
   // Nothing this window does can fix it, and no code helps: only a fresh window has the new build.
   if (ST.auth === "stale") return paint("Раннер обновился после того, как открыли этот плагин. Закройте плагин и откройте его снова.", "wait");
+  // Two windows would split one run between two files; the runner keeps the first and refuses this one.
+  if (ST.auth === "taken") return paint("Перенос идёт в другом окне плагина — в другом файле Figma или в этом же, открытом второй раз. Это окно ничего не делает: закройте его. Если другого окна уже нет, перезапустите раннер.", "wait");
   if (ST.stage) return paint(ST.stage, "on");
   if (ST.link === "unknown") return paint("Проверяю связь с раннером…", "wait");
   if (ST.link === "down") {
@@ -148,7 +161,7 @@ let pairWaiters = [];
 // The build id goes on every request, /pair included; the key on every request but /pair.
 function withBuild(opts) {
   const o = Object.assign({}, opts || {});
-  o.headers = Object.assign({}, o.headers || {}, { "X-PXF-Plugin": PLUGIN });
+  o.headers = Object.assign({}, o.headers || {}, { "X-PXF-Plugin": PLUGIN, "X-PXF-Window": WINDOW });
   return o;
 }
 function withKey(opts) {
@@ -167,6 +180,16 @@ function staleBuild() {
   SCOPEROW.hidden = true;
   PAIRROW.hidden = true;
   state({ link: "up", auth: "stale" });
+}
+// Parks for good, like a window of another build: the runner has another window for this run, and
+// only closing one of the two helps.
+function otherWindow() {
+  if (ST.auth === "taken") return;
+  log("the runner gives this run's work to another plugin window — close this one");
+  GO.hidden = true;
+  SCOPEROW.hidden = true;
+  PAIRROW.hidden = true;
+  state({ link: "up", auth: "taken" });
 }
 function needPairing() {
   if (ST.auth !== "ok") return;
@@ -211,6 +234,7 @@ CODE.onkeydown = (e) => { if (e && e.key === "Enter") PAIRGO.onclick(); };
 async function api(path, opts, ms) {
   const r = await fetchT(HOST + path, withKey(opts), ms);
   if (r.status === 409) { staleBuild(); throw new Error("409: the runner wrote another plugin build than this window runs"); }
+  if (r.status === 423) { otherWindow(); throw new Error("423: the runner gives this run's work to another plugin window"); }
   if (r.status === 401) { needPairing(); throw new Error("401: the runner does not know this window's key"); }
   if (!r.ok) throw new Error("HTTP " + r.status + " " + path);
   return r;
