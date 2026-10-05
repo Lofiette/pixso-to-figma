@@ -12,6 +12,7 @@ import * as schema from "./ir/schema.mjs";
 import * as props from "./ir/props.mjs";
 import * as taskMod from "./ir/task.mjs";
 import { validateTask } from "./ir/validate.mjs";
+import { judgeTask } from "./ir/judge.mjs";
 import { makeDouble, loadVerdicts, DOUBLE_FEATURES } from "./double/index.mjs";
 import { loadPluginBundle, defaultHost } from "./ir/plugin-vm.mjs";
 import { irBundle, IR_SRC_DIR } from "./build-plugin.mjs";
@@ -452,6 +453,29 @@ const mixedNodes = () => [
   E.IR.dropScratch(ctx);
   check(R.textWidened.length === 0 && !R.codes.TEXT_WIDENED_TO_SOURCE_LINES && near(n.width, 80, 0.5) && m.lines === 1,
     "a truncated one-line label in a fixed box is not widened, and countLines counts the one line it draws", JSON.stringify([n.width, R.textWidened, m]));
+}
+{
+  // Review figma F3: a 24 x 1 divider turned a quarter in a row stays in the flow, built 1 x 24
+  // unturned (pack4's leaf bake), so its siblings keep their places; the judge holds it to the swap.
+  const nodes = [frame(0, -1, [T6(0, 0), 200, 24], { layoutMode: "HORIZONTAL", primaryAxisSizingMode: "FIXED", counterAxisSizingMode: "FIXED", itemSpacing: 8 }),
+    rect(1, 0, [T6(0, 0), 40, 24]), rect(2, 0, [ROT90(49, 0), 24, 1]), rect(3, 0, [T6(57, 0), 40, 24]), rect(4, 0, [T6(105, 0), 40, 24]),
+    rect(5, 0, [ROT90(170, 0), 24, 1], { effects: [{ type: "DROP_SHADOW", color: { r: 0, g: 0, b: 0, a: 0.5 }, offset: { x: 0, y: 2 }, radius: 2, spread: 0, visible: true, blendMode: "NORMAL" }] })];
+  const task = mkTask({ nodes });
+  const E = env();
+  const { R, ctx } = await build(E, task);
+  const n2 = nodeOf(E, ctx, 2), n5 = nodeOf(E, ctx, 5);
+  const flows = [1, 2, 3, 4].every((i) => nodeOf(E, ctx, i).layoutPositioning !== "ABSOLUTE");
+  check(flows && R.detail.quarterTurnsBaked === 1 && R.counters.rotPinned === 1 && R.counters.flowGroups === 0 && same(n2.relativeTransform, [[1, 0, 48], [0, 1, 0]]) &&
+    n2.width === 1 && n2.height === 24 && near(nodeOf(E, ctx, 3).relativeTransform[0][2], 57, 1e-9) && n5.layoutPositioning === "ABSOLUTE",
+    "a turned flow leaf is built unturned with its size swapped and stays in the flow; one with a shadow keeps its turn and leaves the flow alone",
+    JSON.stringify([n2.relativeTransform, n2.width, n2.height, R.counters.rotPinned, R.counters.flowGroups, R.detail.quarterTurnsBaked]));
+  const vt = Object.assign({}, task, { op: "verify" });
+  const V = await E.IR.ops.verify(E.IR.makeCtx(E.figma, vt, { id: "v" }), vt);
+  const values = []; for (const k of Object.keys(task.values)) values[Number(k)] = task.values[k];
+  const ir = { nodes: task.nodes.map((t) => ({ parent: t.parent, guid: t.guid, type: t.type, name: t.name, props: t.props })), values, notes: [] };
+  const J = judgeTask({ ir, task, build: R, verify: JSON.parse(JSON.stringify(V)) });
+  check(J.geometry.visibleOver05 === 0 && J.geometry.sizeVisibleOver05 === 0 && J.geometry.classified.quarterTurnBaked === 1 && J.count.ok,
+    "the judge holds the baked leaf to its swapped size in the same box: no finding", JSON.stringify([J.geometry, J.count]));
 }
 {
   // Review figma F4: a 32 px child saying STRETCH in a 36 px row hugging its counter axis, which

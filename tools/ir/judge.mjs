@@ -56,6 +56,10 @@
 //                      flow links to a widened text gets nothing
 //     insideHalfPixel  0.5 < dp <= 1 under an auto-layout ancestor whose INSIDE stroke has unequal
 //                      sides and stays out of the layout (strokesIncludedInLayout false)
+//     quarterTurnBaked (part F) a leaf in an auto-layout flow turned a quarter, which the builder
+//                      builds unturned with width and height swapped (the same box; pack4's bake):
+//                      its size is held to the swap. Counted in classified once per record, even
+//                      with no delta left
 //     vectorBox        (part F) a record built as a VECTOR or BOOLEAN_OPERATION, whose box Figma takes
 //                      from its drawing (the builder never resizes one, docs/M1.md §6 B): the row's box
 //                      equals the IR drawing's box within 1 px, position and size. The IR drawing is
@@ -412,10 +416,12 @@ export function judgeTask(args) {
   // One box judged: record i expected at m (its own space's matrix) with the IR size, measured at
   // (ax, ay) with size (rw, rh). sized false judges the position only (a split root's place in its
   // parent; its size is judged by its row). counted false: the visible count is booked elsewhere.
-  const judgeBox = (i, m, ax, ay, rw, rh, builtType, sized, counted) => {
+  const judgeBox = (i, m, ax, ay, rw, rh, builtType, sized, counted, swapped) => {
     const p = P(i);
     const box = boxOf(m, p.width, p.height);
-    const dx = ax - box.x0, dy = ay - box.y0, dw = sized ? rw - p.width : 0, dh = sized ? rh - p.height : 0;
+    const sw = swapped ? p.height : p.width, sh = swapped ? p.width : p.height;
+    const dx = ax - box.x0, dy = ay - box.y0, dw = sized ? rw - sw : 0, dh = sized ? rh - sh : 0;
+    if (swapped) add(G.classified, "quarterTurnBaked");
     const dp = Math.hypot(dx, dy), ds = Math.max(Math.abs(dw), Math.abs(dh));
     const vis = shown(i);
     if (vis && counted) G.visible++;
@@ -464,10 +470,22 @@ export function judgeTask(args) {
       if (ds > POS) G.sizeVisibleOver1++;
     }
   };
+  // A flow leaf turned a quarter that the builder built unturned with its size swapped (build-create.js
+  // bakeQuarterTurn): same box, so its position is judged as is and its size against the swap.
+  const quarter = (rt) => Math.abs(rt[0]) < 1e-3 && Math.abs(rt[4]) < 1e-3 && Math.abs(Math.abs(rt[1]) - 1) < 1e-3 && Math.abs(Math.abs(rt[3]) - 1) < 1e-3;
+  const hasKids = new Set(recs.filter((t) => rec.has(t.parent)).map((t) => t.parent));
+  const baked = (t, w) => {
+    const p = P(t.i), par = ir.nodes[t.parent];
+    if (hasKids.has(t.i) || !par || !quarter(p.relativeTransform) || p.layoutPositioning === "ABSOLUTE") return false;
+    const lm = (par.props || {}).layoutMode;
+    if (!(lm === "HORIZONTAL" || lm === "VERTICAL")) return false;
+    const asIs = Math.abs(w[ROW.w] - p.width) <= HALF && Math.abs(w[ROW.h] - p.height) <= HALF;
+    return !asIs && Math.abs(w[ROW.w] - p.height) <= HALF && Math.abs(w[ROW.h] - p.width) <= HALF;
+  };
   for (const t of recs) {
     const w = row.get(t.i);
     if (!w) continue;
-    judgeBox(t.i, exp.get(t.i), w[ROW.absX], w[ROW.absY], w[ROW.w], w[ROW.h], w[ROW.builtType], true, true);
+    judgeBox(t.i, exp.get(t.i), w[ROW.absX], w[ROW.absY], w[ROW.w], w[ROW.h], w[ROW.builtType], true, true, baked(t, w));
   }
   // A split root's place in the parent an earlier task built (VERIFY's roots[].inParent): held to
   // its IR relativeTransform, as a child inside one task is. One found without that measurement

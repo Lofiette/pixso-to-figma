@@ -98,7 +98,7 @@ B.newBuild = function (ctx, task) {
     rootKs: [], pinned: {}, rotPinned: {}, flowAbs: {}, textPinned: [], textWidened: [], fontSubs: {}, fontSubOrder: [],
     placeholders: 0, builtCount: 0, counters: {}, images: null,
     detail: { imagesRemapped: 0, typeFallbacks: 0, vectorOriginShifted: 0, flowSiblingGuard: 0, flowSiblingWorst: 0,
-      flowGroupNodes: 0, flowGroupsRejected: 0, textTrimSkipped: 0 } };
+      flowGroupNodes: 0, flowGroupsRejected: 0, textTrimSkipped: 0, quarterTurnsBaked: 0 } };
   for (var c = 0; c < B.COUNTER_KEYS.length; c++) st.counters[B.COUNTER_KEYS[c]] = 0;
   for (var k = 0; k < n; k++) st.pos[recs[k].i] = k;
   for (var k2 = 0; k2 < n; k2++) {
@@ -121,9 +121,47 @@ B.newBuild = function (ctx, task) {
     if (Array.isArray(roots[j].place)) { st.want[rk].rt[2] = roots[j].place[0]; st.want[rk].rt[5] = roots[j].place[1]; }
   }
   st.rootKs.sort(function (a, b) { return a - b; });
+  for (var q = 0; q < n; q++) if (B.bakesQuarterTurn(st, q)) bakeQuarterTurn(st, q);
   if (GUIDS.run !== task.runId) GUIDS = { run: task.runId, map: {} };
   return st;
 };
+
+// pack4's leaf bake (pack4.mjs:299-320, docs/FINDINGS.md "Leaves keep the bake"; part F, review figma
+// F3): Figma drops a turn on a flow child, and a turned child leaving the flow takes its siblings'
+// places with it. A LEAF turned a quarter whose drawing does not change with the turn is the same
+// thing unturned with its width and height swapped, so it is built that way and stays in the flow:
+// a RECTANGLE, an ELLIPSE (a full one) or a childless FRAME, in an auto-layout parent of this task,
+// not ABSOLUTE, with uniform sides and corners, no effects, and only solid paints. Anything else
+// keeps its turn and leaves the flow (placePass). The judge recognises the swap (judge.mjs).
+var QUARTER = 1e-3;
+B.quarterTurn = function (rt) {
+  return Math.abs(rt[0]) < QUARTER && Math.abs(rt[4]) < QUARTER && Math.abs(Math.abs(rt[1]) - 1) < QUARTER && Math.abs(Math.abs(rt[3]) - 1) < QUARTER;
+};
+B.bakesQuarterTurn = function (st, k) {
+  var rec = st.recs[k], ctx = st.ctx, pr = rec.props, pk = st.parentK[k];
+  if (pk < 0 || st.kids[k].length || ["RECTANGLE", "ELLIPSE", "FRAME"].indexOf(rec.type) < 0) return false;
+  if (!B.isAL(B.modeOf(st, pk)) || ctx.prop(rec, "layoutPositioning") === "ABSOLUTE" || !B.quarterTurn(pr.relativeTransform)) return false;
+  if (pr.strokeWeights !== undefined || pr.cornerRadii !== undefined) return false;
+  var eff = ctx.prop(rec, "effects");
+  if (Array.isArray(eff) && eff.length) return false;
+  var paints = [].concat(ctx.prop(rec, "fills") || [], ctx.prop(rec, "strokes") || []);
+  for (var p = 0; p < paints.length; p++) if (paints[p] && paints[p].type !== "SOLID") return false;
+  if (rec.type === "ELLIPSE") {
+    var a = ctx.prop(rec, "arcData");
+    if (a && Math.abs(a.endingAngle - a.startingAngle - 2 * Math.PI) >= 1e-5) return false;
+  }
+  return true;
+};
+function bakeQuarterTurn(st, k) {
+  var w = st.want[k], rt = w.rt, mx = Infinity, my = Infinity, c = [[0, 0], [w.w, 0], [w.w, w.h], [0, w.h]];
+  for (var j = 0; j < 4; j++) {
+    var px = rt[0] * c[j][0] + rt[1] * c[j][1] + rt[2], py = rt[3] * c[j][0] + rt[4] * c[j][1] + rt[5];
+    if (px < mx) mx = px;
+    if (py < my) my = py;
+  }
+  st.want[k] = { rt: [1, 0, mx, 0, 1, my], w: w.h, h: w.w };
+  st.detail.quarterTurnsBaked++;
+}
 
 B.stampRoot = function (st, k, state) {
   var ctx = st.ctx, node = st.node[k], rec = st.recs[k];
