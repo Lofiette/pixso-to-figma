@@ -5,22 +5,23 @@
 //
 // Every task here is synthetic and passes tools/ir/validate.mjs validateTask first (the refusal cases
 // apart), so the builder is tested on what the planner may hand it. Image hashes are computed at run
-// time (tools/test-hygiene.mjs). A check that needs the double's layout engine or text model (part E)
-// detects it and prints "pending: E" while the P0 double has none; part F re-runs them after E merges.
+// time (tools/test-hygiene.mjs). The checks that needed part E's layout engine and text model printed
+// "pending: E" on the P0 double; part F made them plain checks after E merged (docs/M1.md §15).
 import { createHash } from "node:crypto";
 import * as schema from "./ir/schema.mjs";
 import * as props from "./ir/props.mjs";
 import * as taskMod from "./ir/task.mjs";
 import { validateTask } from "./ir/validate.mjs";
-import { makeDouble, loadVerdicts } from "./double/index.mjs";
+import { makeDouble, loadVerdicts, DOUBLE_FEATURES } from "./double/index.mjs";
 import { loadPluginBundle, defaultHost } from "./ir/plugin-vm.mjs";
-import { irBundle } from "./build-plugin.mjs";
+import { irBundle, IR_SRC_DIR } from "./build-plugin.mjs";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
-let failed = 0, pending = 0;
+let failed = 0;
 const ok = (m) => console.log("ok   " + m);
 const fail = (m) => { failed++; console.log("FAIL " + m); };
 const check = (cond, m, why) => (cond ? ok(m) : fail(m + (why !== undefined ? " — " + String(why).slice(0, 400) : "")));
-const pend = (m) => { pending++; console.log("pending: E — " + m); };
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
 const clone = (v) => JSON.parse(JSON.stringify(v));
@@ -105,7 +106,7 @@ function env(o = {}) {
   if (o.imageErrors) host.imageErrors = () => o.imageErrors;
   if (o.measure) host.measure = o.measure;
   const figma = o.wrap ? o.wrap(D.figma) : D.figma;
-  const bundle = loadPluginBundle({ figma, host });
+  const bundle = loadPluginBundle({ figma, host, sources: o.irFiles ? { irFiles: o.irFiles } : undefined });
   return { D, host, IR: bundle.PXF_IR, context: bundle.context, figma };
 }
 async function build(E, task, jobId) {
@@ -406,12 +407,25 @@ const mixedNodes = () => [
   const { ctx: cr } = await build(Er, tr);
   const nr = Er.D.node(cr.S.nodes["1"]), dwr = nr.width - W0;
   check(near(nr.relativeTransform[0][2], 100, 1e-9) && near(nr.relativeTransform[1][2], 20 - dwr, 1e-9), "decision 9 on a turned text moves it along its own x axis", JSON.stringify(nr.relativeTransform));
-  // countLines not in the build (part C's stub) is a failure entry, not a crash.
-  const Ec = env();
-  if (Ec.IR.countLines && Ec.IR.countLines.notInThisBuild) {
-    const { R: Rc } = await build(Ec, mk("LEFT"));
-    check(Rc.failures.some((f) => f.prop === "lines" && /countLines/.test(f.msg)), "a text that cannot be measured is a failure entry (lines), and the build goes on");
-  } else ok("countLines is part C's real one in this build; the stub case stands aside");
+  // countLines missing from the build (a bundle without part C's measure.js) is a failure entry, not a crash.
+  const files = Object.fromEntries(readdirSync(IR_SRC_DIR).filter((f) => f.endsWith(".js") && !/^measure/.test(f)).map((f) => [f, readFileSync(join(IR_SRC_DIR, f), "utf8")]));
+  const Ec = env({ irFiles: files });
+  const { R: Rc } = await build(Ec, mk("LEFT"));
+  check(typeof Ec.IR.countLines !== "function" && Rc.failures.some((f) => f.prop === "lines" && /countLines/.test(f.msg)),
+    "a text that cannot be measured is a failure entry (lines), and the build goes on");
+}
+{
+  // Part F: the build measures through part C's countLines on part E's text model (no host.measure),
+  // and leaves no scratch node and no service page of its own behind (IR.prepareMeasure, IR.dropScratch).
+  const nodes = [frame(0, -1, [T6(0, 0), 300, 100]), text(1, 0, [T6(10, 10), 30, 14], "One line that Figma wraps", { lines: 1 })];
+  const E = env();
+  const pagesBefore = E.D.tree().children.length;
+  const { R, ctx } = await build(E, mkTask({ nodes }));
+  const made = E.D.writes.filter((w) => w.prop === "setSharedPluginData()" && w.value[1] === "pxScratch");
+  const tree = JSON.stringify(E.D.tree());
+  check(made.length === 1 && E.D.node(made[0].id) === null && tree.indexOf("pxScratch") < 0 && E.D.tree().children.length === pagesBefore + 1 &&
+    ctx.S.scratchTextId === null && same(R.textWidened, [1]) && R.failures.length === 0,
+    "a build that measures (decision 9 through countLines) removes its scratch node and the service page it made", JSON.stringify([made.length, R.textWidened, R.failures, E.D.tree().children.length - pagesBefore]));
 }
 {
   // The text box pin and P6's in-loop read: measure pins after the settle, inLoop during creation.
@@ -653,20 +667,10 @@ for (const [verdict, expectCode, detail] of [["throw", 1, /refused/], ["drop", 1
 }
 
 // ============================================================================================
-// 12. layout-dependent cases: they need part E's layout engine in the double
+// 12. layout-dependent cases, on part E's layout engine (pending on the P0 double; plain checks since F)
 // ============================================================================================
-const hasLayout = (() => {
-  const D = makeDouble();
-  const f = D.figma.createFrame();
-  f.layoutMode = "HORIZONTAL"; f.primaryAxisSizingMode = "AUTO"; f.counterAxisSizingMode = "AUTO"; f.paddingLeft = 7;
-  const r = D.figma.createRectangle(); r.resize(10, 10); f.appendChild(r);
-  return Math.abs(f.width - 17) < 0.01;
-})();
-if (!hasLayout) {
-  pend("repair: a hugging flow frame whose source box is larger is fixed at the source size (sizeRepaired)");
-  pend("repair: a childless flow frame smaller than its padding gives up the flow, not the size (layoutDroppedForSize)");
-  pend("flow: a hidden child Pixso keeps in a row moves its visible siblings; the flow passes put them back at the source position");
-} else {
+check(DOUBLE_FEATURES.layout === true && DOUBLE_FEATURES.text === true, "the double has part E's layout engine and text model");
+{
   {
     const task = mkTask({ nodes: [frame(0, -1, [T6(0, 0), 300, 100]), frame(1, 0, [T6(10, 10), 120, 40], { layoutMode: "HORIZONTAL", primaryAxisSizingMode: "AUTO", counterAxisSizingMode: "AUTO" }),
       rect(2, 1, [T6(0, 0), 10, 10])] });
@@ -696,5 +700,5 @@ if (!hasLayout) {
 }
 
 console.log("");
-if (failed) { console.log(failed + " IR builder check" + (failed === 1 ? "" : "s") + " failed" + (pending ? " (" + pending + " pending: E)" : "")); process.exit(1); }
-console.log("all IR builder checks pass" + (pending ? " (" + pending + " pending: E)" : ""));
+if (failed) { console.log(failed + " IR builder check" + (failed === 1 ? "" : "s") + " failed"); process.exit(1); }
+console.log("all IR builder checks pass");

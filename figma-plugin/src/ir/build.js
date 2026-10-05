@@ -27,6 +27,9 @@
 //     booleans and layout write and never read layout (layout under deepestFirst too; under
 //     creation the auto layout is written at creation, as builder4 does), settle once, measure,
 //     the ported passes, constraints, stamp (roots pxState "built", components pxDef).
+//     MEASURE (part F): when a text will be measured (textFit widen and a one-line TEXT), part C's
+//     IR.prepareMeasure loads the service page and makes the scratch node first, and IR.dropScratch
+//     removes it when the phase ends, thrown or not, so a build leaves no scratch behind.
 //     Records ctx.S.nodes[i] for every record and ctx.S.pages[index] (the service page under
 //     "m1-service").
 //     A task error refuses (e.refused): not a build task, no page, no root, a type M1 does not
@@ -167,6 +170,13 @@ function report(st, t0) {
   return R;
 }
 
+// Whether MEASURE will count a text's lines (B.measurePhase's own condition).
+function willMeasure(st) {
+  if (st.settings.textFit !== "widen") return false;
+  for (var k = 0; k < st.n; k++) if (st.recs[k].type === "TEXT" && st.builtType[k] === "TEXT" && st.recs[k].props.lines === 1) return true;
+  return false;
+}
+
 IR.ops.build = async function (ctx, task) {
   checkTask(ctx, task);
   var t0 = Date.now();
@@ -180,7 +190,10 @@ IR.ops.build = async function (ctx, task) {
   ctx.phase("booleans"); await B.booleansPhase(st);
   ctx.phase("layout"); await B.layoutPhase(st);
   ctx.phase("settle"); await ctx.settle(root0());
-  ctx.phase("measure"); await B.measurePhase(st);
+  ctx.phase("measure");
+  if (willMeasure(st) && typeof IR.prepareMeasure === "function") await IR.prepareMeasure(ctx);
+  try { await B.measurePhase(st); }
+  finally { if (typeof IR.dropScratch === "function") IR.dropScratch(ctx); }
   ctx.phase("repair1"); await B.repairPass(st, false);
   ctx.phase("place1"); await B.placePass(st);
   ctx.phase("repair2"); await B.repairPass(st, true);
