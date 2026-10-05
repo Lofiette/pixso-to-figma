@@ -487,7 +487,8 @@ function hreq(port, method, path, headers, body) {
 
   // The ceiling fails a job that keeps advancing.
   const p4 = outcome(srv.post({ kind: "ir" }, "{}", new Map(), 30000, { liveness: { warnMs: 200, failMs: 400 }, ceilingMs: 500 }));
-  const id4 = (await job()).id;
+  const j4 = await job(), id4 = j4.id;
+  check(j4.ceilingMs === 500, "the job the plugin window takes carries the runner's ceiling, so its watchdog can wait longer (review S10)", JSON.stringify(j4));
   for (let k = 1; k <= 10; k++) { await sleep(80); await alive(id4, k); }
   const r4 = await p4;
   check(r4.err && r4.err.code === CODE.PLUGIN_STALLED && r4.err.stall === "ceiling", "the per-task ceiling fails a job however it advances", r4.err ? r4.err.message : JSON.stringify(r4));

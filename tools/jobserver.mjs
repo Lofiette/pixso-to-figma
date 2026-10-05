@@ -475,7 +475,10 @@ export function startJobServer(port = 3778, opts = {}) {
       }
       pending = { id, kind: job.kind, rootNodeId: job.rootNodeId || null,
                   cleanupRootId: job.cleanupRootId || null, page: job.page || null,
-                  pageBg: job.pageBg || null, images: [...images.keys()], imageTransport: job.imageTransport || transport };
+                  pageBg: job.pageBg || null, images: [...images.keys()], imageTransport: job.imageTransport || transport,
+                  // The plugin window sets its own watchdog above this, so the runner's PLUGIN_STALLED
+                  // (resumable) always fires before the window gives the job up as a failed build.
+                  ceilingMs: opts && opts.ceilingMs > 0 ? opts.ceilingMs : null };
       payload = payloadText;
       blobs = images;
       // Wake anything that is holding a /job request rather than making it wait out its own timeout.

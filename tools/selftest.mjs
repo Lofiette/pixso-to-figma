@@ -77,6 +77,14 @@ try {
   line("runner never started", { sawDone: false, phase: "idle" }, "Раннер не запущен", "wait");
   line("stopped by an error", { link: "up", phase: "stopped" }, "остановлен", "off");
 
+  // ---------- the watchdog waits past the runner's ceiling ----------
+  // A K-sized task at 30 ms a node has a 542 s ceiling; the window's 8-minute floor would report it
+  // lost first, as a plain failed build, while the sandbox is still working (review S10).
+  if (typeof ctx.watchdogMinutes !== "function") fail("the plugin window has no watchdogMinutes");
+  else if (ctx.watchdogMinutes(0) !== 8 || ctx.watchdogMinutes(542000) !== 12 || ctx.watchdogMinutes(401540) !== 9) {
+    fail("the watchdog: " + [ctx.watchdogMinutes(0), ctx.watchdogMinutes(542000), ctx.watchdogMinutes(401540)].join(", ") + " minutes");
+  } else ok("the window's watchdog is 8 minutes, or the job's ceiling plus 2 minutes when that is longer");
+
   // ---------- the scope the button carries ----------
   // The runner cannot ask what to migrate after the press — by then it is already busy in Pixso —
   // so the choice has to travel with the press or it is lost.
