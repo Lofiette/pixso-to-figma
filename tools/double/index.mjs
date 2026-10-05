@@ -22,7 +22,8 @@
 //   D.images           Map(hash -> byte length) of the images created
 //   D.loadedFonts()    ["family|style"] loaded so far
 //   D.assumed          ["P19B.offsetNetwork", …]: the probe cases this double follows by assumption,
-//                      because verdicts.json still says pending (behaviour.mjs)
+//                      because its verdicts say pending (behaviour.mjs; none in verdicts.json since
+//                      2026-10-05, so only a test that plants a case pending sees one)
 //   D.layoutPasses     how many layout passes ran (a test of laziness)
 //
 // Options:
@@ -56,13 +57,14 @@
 //     A until a live check);
 //   - vectors: a network's regions give fillGeometry (lines and cubics); per verdicts, the region-less
 //     cases, vertex radii and region fills, an open subpath in vectorPaths, and where the node's origin
-//     goes when the network's bounds do not start at (0, 0) (P19B offsetNetwork: assumed, Figma moves
+//     goes when the network's bounds do not start at (0, 0) (P19B offsetNetwork: recorded ok, Figma moves
 //     the origin to the bounds and keeps the drawing in place, and the node's size becomes the bounds);
 //     RIGHT_ANGLE mirroring rejected; resize scales the drawing;
 //   - polygons, stars, ellipses, rectangles and frames have their fill geometry; strokeGeometry is
 //     the stroked box only (BOX MODEL: Figma's outline is not computed);
-//   - booleans: a node over its operands with the operation of their fill areas (geom.mjs, approximate,
-//     operand strokes ignored unless the verdicts say otherwise), its box the result's bounds;
+//   - booleans: a node over its operands with the operation of their fill areas (geom.mjs, approximate),
+//     each result path labelled NONZERO; a stroked operand's box and a LINE's own path count as P19B
+//     recorded (lineOperand, strokedOperand differs); its box the result's bounds;
 //   - images: createImage with SHA-1, size from the PNG, JPEG, GIF or WebP header, and P8's refusals;
 //     an IMAGE paint whose hash no image has, per P8 unknownHash; frame masks per P19B;
 //   - figma.ui.postMessage recorded and handed to the test.
@@ -328,8 +330,9 @@ export function makeDouble(opts = {}) {
       case "VECTOR": return vectorFill(st);
       case "FRAME": case "COMPONENT": case "RECTANGLE": return [{ windingRule: "NONZERO", data: rectPath(st.w, st.h) }];
       case "ELLIPSE": {
-        // A sweep short of Figma's 32-bit 2π is an arc (P19B arcFullSweep "arc", assumed); under "ok"
-        // Figma closes any sweep within 1e-5 of a full turn.
+        // Under P19B arcFullSweep "ok" (recorded 2026-10-05) Figma closes any sweep within 1e-5 of a
+        // full turn with no hole; under "arc" (the pre-session assumption) a sweep short of Figma's
+        // 32-bit 2π is an arc.
         const a = st.props.arcData;
         const closed = V("P19B", "arcFullSweep") === "ok" && a && Math.abs(a.endingAngle - a.startingAngle - 2 * Math.PI) < 1e-5 && !(a.innerRadius > 0);
         return [{ windingRule: "NONZERO", data: (!closed && arcPath(st.w, st.h, a)) || ellipsePath(st.w, st.h) }];
@@ -360,21 +363,34 @@ export function makeDouble(opts = {}) {
     return [{ windingRule: "NONZERO", data: "M " + r4(b.x0) + " " + r4(b.y0) + " L " + r4(b.x1) + " " + r4(b.y0) + " L " + r4(b.x1) + " " + r4(b.y1) + " L " + r4(b.x0) + " " + r4(b.y1) + " L " + r4(b.x0) + " " + r4(b.y0) + " Z" }];
   }
   // A boolean: its box is its result's bounds in its own frame; the operands keep where they are.
+  // Strokes, per P19B (2026-10-05, behaviour.mjs): under strokedOperand differs an operand with a
+  // visible stroke counts with its stroked box; under lineOperand differs a LINE's own path (no area,
+  // its stroke not counted) joins a UNION's result, so the result's bounds reach the line (measured on
+  // a UNION only: the other operations get nothing from a LINE, which has no area to keep or remove).
   function refreshBoolean(st) {
     const op = st.props.booleanOperation || "UNION";
     const kids = (st.children || []).filter((c) => c.props.visible !== false);
+    const lines = [];
     const operands = kids.map((c) => {
       const paths = fillGeometry(c).map((p) => ({ windingRule: p.windingRule, data: mapPath(p.data, c.rt) }));
-      const extra = [];
-      if ((c.type === "LINE" && V("P19B", "lineOperand") === "differs") || (c.type !== "LINE" && V("P19B", "strokedOperand") === "differs")) {
+      if (c.type === "LINE") {
+        if (V("P19B", "lineOperand") === "differs" && op === "UNION") lines.push(mapPath("M 0 0 L " + r4(c.w) + " 0", c.rt));
+      } else if (V("P19B", "strokedOperand") === "differs") {
         const b = strokeBox(c);
-        if (b) extra.push({ windingRule: "NONZERO", data: mapPath("M " + r4(b.x0) + " " + r4(b.y0) + " L " + r4(b.x1) + " " + r4(b.y0) + " L " + r4(b.x1) + " " + r4(b.y1) + " L " + r4(b.x0) + " " + r4(b.y1) + " Z", c.rt) });
+        if (b) paths.push({ windingRule: "NONZERO", data: mapPath("M " + r4(b.x0) + " " + r4(b.y0) + " L " + r4(b.x1) + " " + r4(b.y0) + " L " + r4(b.x1) + " " + r4(b.y1) + " L " + r4(b.x0) + " " + r4(b.y1) + " Z", c.rt) });
       }
-      return { paths: paths.concat(extra) };
+      return { paths };
     });
     if (boolKeyOf(st) === st.boolKey) return;
     const emptyVerdict = { UNION: "booleanUnion", SUBTRACT: "booleanSubtract", INTERSECT: "booleanIntersect", EXCLUDE: "booleanExclude" }[op];
     const res = operands.length ? booleanResult(op, operands) : { paths: [], box: null };
+    if (lines.length) {
+      // One result path, as Figma's: the traced area, then each line as an open piece.
+      const data = (res.paths.length ? res.paths[0].data + " " : "") + lines.join(" ");
+      const lb = pathsBox(lines.map((d) => ({ data: d })));
+      res.paths = [{ windingRule: "NONZERO", data }];
+      res.box = !res.box ? lb : { x0: Math.min(res.box.x0, lb.x0), y0: Math.min(res.box.y0, lb.y0), x1: Math.max(res.box.x1, lb.x1), y1: Math.max(res.box.y1, lb.y1) };
+    }
     const box = res.box;
     if (box && (box.x0 || box.y0)) {
       const [dx, dy] = [st.rt[0][0] * box.x0 + st.rt[0][1] * box.y0, st.rt[1][0] * box.x0 + st.rt[1][1] * box.y0];

@@ -220,12 +220,18 @@ const mixedNodes = () => [
     const { ctx: c2 } = await build(E2, mkTask({ nodes: [frame(0, -1, [T6(0, 0), 100, 100]), rec(1, 0, "ELLIPSE", [T6(0, 0), 20, 20], painted()),
       rec(2, 0, "ELLIPSE", [T6(30, 0), 20, 20], painted({ arcData: { startingAngle: 0, endingAngle: 6.283185, innerRadius: 0.5 } }))] }));
     const full = E2.D.node(c2.S.nodes["1"]), donut = E2.D.node(c2.S.nodes["2"]);
-    const raw = E2.D.figma.createEllipse(); raw.resize(20, 20); raw.arcData = { startingAngle: 0, endingAngle: 6.283185, innerRadius: 0 };
-    // A pie starts at the centre and draws a line out ("M10 10L…", in Figma's glued read-back form).
+    // 6.283185 written as is: Figma closes it (P19B arcFullSweep ok, recorded 2026-10-05), so the
+    // default double draws the whole ellipse; with P19B planted pending, the pre-session assumption
+    // ("arc") draws a pie, which starts at the centre and draws a line out ("M10 10L…", glued).
+    const sweep = (D) => { const e = D.figma.createEllipse(); e.resize(20, 20); e.arcData = { startingAngle: 0, endingAngle: 6.283185, innerRadius: 0 }; return e.fillGeometry[0].data; };
+    const vPend = loadVerdicts();
+    vPend.probes.P19B.status = "pending";
+    for (const k of Object.keys(vPend.probes.P19B.verdicts)) vPend.probes.P19B.verdicts[k] = "pending";
+    const raw = sweep(E2.D), rawPending = sweep(makeDouble({ verdicts: vPend }));
     check(full.arcData.endingAngle === 2 * Math.PI && donut.arcData.endingAngle === 2 * Math.PI && donut.arcData.innerRadius === 0.5 &&
-      !/^M10 10L/.test(full.fillGeometry[0].data) && /^M10 10L/.test(raw.fillGeometry[0].data),
-      "a full sweep is written as exactly 2π, so the ellipse stays closed (6.283185 written as is draws a pie in the double, as it would in Figma)",
-      JSON.stringify([full.arcData, donut.arcData, full.fillGeometry[0].data.slice(0, 24), raw.fillGeometry[0].data.slice(0, 24)]));
+      !/^M10 10L/.test(full.fillGeometry[0].data) && raw === full.fillGeometry[0].data && /^M10 10L/.test(rawPending),
+      "a full sweep is written as exactly 2π, so the ellipse stays closed whatever Figma makes of 6.283185 (closed, as P19B recorded; a pie under the assumption, planted pending)",
+      JSON.stringify([full.arcData, donut.arcData, full.fillGeometry[0].data.slice(0, 24), raw.slice(0, 24), rawPending.slice(0, 24)]));
   }
   const cmp = findTree(tr, ctx.S.nodes["12"]);
   check(cmp.type === "COMPONENT" && (cmp.sharedPluginData.pix2fig || {}).pxDef === "1:112", "a COMPONENT record is a component stamped pxDef (its guid)");
@@ -360,7 +366,8 @@ const mixedNodes = () => [
 
   // The same for a vector built from its stored geometry: the builder finds the shift from the first
   // point it wrote (the IR's spaced form) and the first point Figma reads back (glued, "M0 0L…", P19B
-  // 2026-10-05). A double planted with P19B offsetNetwork ok moves the origin as Figma does.
+  // 2026-10-05). A double with P19B offsetNetwork ok (recorded 2026-10-05, and planted here so the
+  // check does not lean on the record) moves the origin as Figma does.
   const vOk = loadVerdicts(); vOk.probes.P19B.verdicts.offsetNetwork = "ok";
   const t5 = mkTask({ nodes: [frame(0, -1, [T6(100, 100), 50, 50]), vector(1, 0, [ROT90(30, 5), 10, 8], { fillGeometry: [{ windingRule: "EVENODD", data: "M 3 2 L 13 2 L 8 10 Z" }] })],
     notes: [{ code: "VECTOR_FROM_GEOMETRY", i: 1, detail: null }] });
@@ -504,6 +511,37 @@ const mixedNodes = () => [
   const J = judgeTask({ ir, task, build: R, verify: JSON.parse(JSON.stringify(V)) });
   check(J.geometry.visibleOver05 === 0 && J.geometry.sizeVisibleOver05 === 0 && J.geometry.classified.quarterTurnBaked === 1 && J.count.ok,
     "the judge holds the baked leaf to its swapped size in the same box: no finding", JSON.stringify([J.geometry, J.count]));
+}
+{
+  // P19B regionlessFill ok (2026-10-05): Figma fills a closed loop with no region, so a stroke-only
+  // square built from its network reads one fill path where Pixso stored none, and draws nothing under
+  // no visible fill: the judge counts it unfilled. Under a visible fill it would draw one, a count
+  // finding (the reader writes fills [] there, tools/pix/ir/vector.mjs). An open chain with no region
+  // draws no fill (P19) and matches its 0 paths. With P19B planted pending, the assumption draws none.
+  const sq = { vertices: NET_SQUARE.vertices, segments: NET_SQUARE.segments, regions: [] };
+  const chain = { vertices: NET_SQUARE.vertices, segments: NET_SQUARE.segments.slice(0, 3), regions: [] };
+  const judged = async (fills, verdicts) => {
+    const nodes = [frame(0, -1, [T6(0, 0), 100, 100]), vector(1, 0, [T6(10, 10), 10, 10], { fills, strokes: [SOLID(0, 0, 0)], vectorNetwork: sq }),
+      vector(2, 0, [T6(30, 10), 10, 10], { fills, strokes: [SOLID(0, 0, 0)], vectorNetwork: chain })];
+    const task = mkTask({ nodes });
+    valid("region-less loop", task);
+    const E = env(verdicts ? { double: { verdicts } } : {});
+    const { R, ctx } = await build(E, task);
+    const vt = Object.assign({}, task, { op: "verify" });
+    const V = await E.IR.ops.verify(E.IR.makeCtx(E.figma, vt, { id: "v" }), vt);
+    const values = []; for (const k of Object.keys(task.values)) values[Number(k)] = task.values[k];
+    const ir = { nodes: task.nodes.map((t) => ({ parent: t.parent, guid: t.guid, type: t.type, name: t.name, props: t.props })), values, notes: [] };
+    return { J: judgeTask({ ir, task, build: R, verify: JSON.parse(JSON.stringify(V)) }), loop: nodeOf(E, ctx, 1), open: nodeOf(E, ctx, 2) };
+  };
+  const vPend = loadVerdicts();
+  vPend.probes.P19B.status = "pending";
+  for (const k of Object.keys(vPend.probes.P19B.verdicts)) vPend.probes.P19B.verdicts[k] = "pending";
+  const none = await judged([]), painted = await judged([SOLID(0.5, 0.5, 0.5)]), assumed = await judged([], vPend);
+  check(none.loop.fillGeometry.length === 1 && none.open.fillGeometry.length === 0 && none.J.vectors.checked === 2 && none.J.vectors.unfilled === 1 &&
+    none.J.vectors.match === 1 && !none.J.vectors.differs.length && same(painted.J.vectors.differs, [{ i: 1, kind: "count" }]) &&
+    assumed.loop.fillGeometry.length === 0 && assumed.J.vectors.match === 2,
+    "a closed loop with no region reads one fill path in Figma (P19B regionlessFill ok): unfilled under no visible fill, a count finding under a visible one; an open chain matches; planted pending, none",
+    JSON.stringify([none.J.vectors, painted.J.vectors.differs, assumed.J.vectors]));
 }
 {
   // Review figma F4: a 32 px child saying STRETCH in a 36 px row hugging its counter axis, which

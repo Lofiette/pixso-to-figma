@@ -30,21 +30,33 @@
 //                      node's origin to the bounds and keeps the drawing in place); drop (the offset
 //                      is dropped: the drawing moves to the origin); throw (rejects)
 //        regionlessFill   a closed loop with no region: empty (no fill, as P19's open network); ok
-//                      (the loop is filled)
+//                      (the loop is filled: each closed run of the network, every vertex on it met by
+//                      two segments, is a NONZERO fill path, whatever the node's fills, as a region's
+//                      is; a run through a vertex of three or more segments is not filled, unmeasured)
 //        fillGeometryAgainstNetwork   ok (fillGeometry is the regions' paths); empty (none)
 //        booleanUnion booleanSubtract booleanIntersect booleanExclude   ok (the operation of the
 //                      operands' fill areas); throw (figma.<op> throws); empty (the result has no paths)
+//                      Whatever the verdict, a result path is labelled NONZERO: P19B's m.winding read
+//                      NONZERO for all four operations, EXCLUDE included (geom.mjs booleanResult)
 //        nestedBoolean    ok; throw (a boolean operand refused)
 //        singleOperandUnion   ok; throw (one operand refused)
-//        lineOperand      ok (a LINE adds no area); differs (it adds its stroke's box); throw
-//        strokedOperand   ok (operand strokes ignored); differs (an operand's stroke widens its
-//                      area by its weight); throw
+//        lineOperand      ok (a LINE adds nothing); differs (the LINE's own path joins the result as a
+//                      piece with no area: the result's bounds reach the line's ends, its stroke not
+//                      counted; P19B measured a 30 px line at y 25 under a 4 px stroke reaching
+//                      0..30 x 0..25, where its stroke's box would reach -2..32 x 23..27); throw
+//        strokedOperand   ok (operand strokes ignored); differs (an operand with a visible stroke counts
+//                      with its stroked box, its area grown by the part of the stroke outside it: half
+//                      the weight for CENTER; P19B measured an unfilled 10 x 10 at x 30 under a 4 px
+//                      CENTER stroke widening the union to 0..42 x -2..20. Only those bounds were
+//                      measured: the double fills the whole stroked box, so a ring's hole, if Figma
+//                      keeps one, is not modelled, nor a filled stroked operand); throw
 //        frameMask        ok (kept); drop (ignored: isMask reads false); throw
 //        maskInGroupAsFrame   isMask on a shape inside a FRAME: ok; drop; throw
 //        flattenedWithStroke  a vector built from vectorPaths with a stroke: ok (its strokeGeometry is
 //                      drawn); empty (none)
 //        arcFullSweep  an ellipse whose arcData sweep is 6.283185 (one 32-bit step below Figma's 2π):
-//                      arc (drawn as a pie short of a turn, the assumption); ok (Figma closes it)
+//                      arc (drawn as a pie short of a turn, the assumption); ok (Figma closes it: any
+//                      sweep within 1e-5 of a full turn with no hole draws the whole ellipse)
 //   P4   transport and sameHash: sameHash "differs" makes createImage's hash differ from the bytes'
 //        SHA-1 (a re-encoding Figma); transport is the runner's choice, not a double behaviour
 //   P2   recorded: the IR layer has no performance.now and no timer (tools/ir/plugin-vm.mjs gives it
@@ -57,10 +69,14 @@
 // JPEG and GIF), an unknown hash kept. P19B: Figma fills an open subpath, moves a vector's origin to its
 // drawing's bounds and keeps the drawing in place (docs/M1.md §11 "Vector origin"), does not fill a
 // closed loop without a region (as P19 measured for an open one), and computes booleans on fill areas
-// with operand strokes ignored (docs/M1.md D5); frame masks are kept. All were A until docs/M1.md §10
-// step 1. P4 and P8 were recorded on 2026-10-05 (P8: over 4 096 px and long strips throw, against the
-// assumption; the rest as assumed), so the double follows the record and assumes only a case still
-// pending, or planted pending by a test.
+// with operand strokes ignored (docs/M1.md D5); frame masks are kept; a sweep of 6.283185 is an arc.
+// All were A until docs/M1.md §10 step 1. P4, P8 and P19B were recorded on 2026-10-05. P8: over 4 096 px
+// and long strips throw, against the assumption; the rest as assumed. P19B: as assumed, except that
+// Figma fills a closed loop with no region (regionlessFill ok), closes a 6.283185 sweep (arcFullSweep
+// ok), keeps a LINE operand's path and widens a stroked operand by its stroke (lineOperand and
+// strokedOperand differs, the meanings above). So no case the double models is pending: it follows
+// the record, and assumes a case only when a test plants it pending. MODEL's assumed values stay the
+// pre-session assumptions, so a test can still reach that path.
 export const MODEL = {
   P4: { transport: { assumed: "base64", values: ["base64", "binary"] }, sameHash: { assumed: "ok", values: ["ok", "differs"] } },
   P8: {

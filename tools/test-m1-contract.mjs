@@ -334,8 +334,19 @@ check(/props is tools\/ir\/props\.mjs/.test(threw(() => taskMod.validateTask(bui
   // Figma reads paths back glued ("M0 0L10 0Z", P19B 2026-10-05); pathBounds reads them as Figma writes them.
   check(g.length === 1 && g[0].windingRule === "EVENODD" && g[0].data === "M0 0L10 0C10 4 7 8 5 8L0 0Z" && pathgeom.pathBounds(g[0].data).length === 1,
     "a network's region gives its fillGeometry, lines and cubics, as a Figma path string", JSON.stringify(g));
+  // P19 (recorded): an open chain with no region draws no fill. P19B (recorded 2026-10-05): a closed
+  // loop with no region is filled (regionlessFill ok); with P19B planted pending, the double's
+  // assumption (empty) leaves it unfilled.
+  await v.setVectorNetworkAsync({ vertices: net.vertices, segments: net.segments.slice(0, 2), regions: [] });
+  const openNone = v.fillGeometry.length === 0;
   await v.setVectorNetworkAsync({ vertices: net.vertices, segments: net.segments, regions: [] });
-  check(v.fillGeometry.length === 0, "an open region-less network has no fill geometry");
+  const closedOne = v.fillGeometry.length === 1 && v.fillGeometry[0].windingRule === "NONZERO";
+  const Dp = makeDouble({ verdicts: { probes: { P19B: { status: "pending", verdicts: {} } } } });
+  const vp = Dp.figma.createVector();
+  await vp.setVectorNetworkAsync({ vertices: net.vertices, segments: net.segments, regions: [] });
+  check(openNone && closedOne && vp.fillGeometry.length === 0,
+    "an open region-less network has no fill geometry (P19); a closed one has its loop (P19B regionlessFill ok), none with P19B planted pending",
+    JSON.stringify([openNone, v.fillGeometry, vp.fillGeometry]));
   const ra = await rejects(v.setVectorNetworkAsync({ vertices: [{ x: 0, y: 0, handleMirroring: "RIGHT_ANGLE" }, { x: 1, y: 1 }], segments: [{ start: 0, end: 1 }], regions: [] }));
   check(/RIGHT_ANGLE/.test(ra), "setVectorNetworkAsync rejects RIGHT_ANGLE mirroring");
   v.vectorPaths = [{ windingRule: "NONZERO", data: "M 0 0 L 4 0 L 4 4 Z" }, { windingRule: "NONE", data: "M 0 0 L 1 1" }];

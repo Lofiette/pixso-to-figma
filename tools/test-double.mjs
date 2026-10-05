@@ -7,9 +7,9 @@
 // tools/test-m1-contract.mjs; this file covers what part E adds:
 //
 //   1. conformance: the probe functions of figma-plugin/src/ir/probes-*.js, run against the double,
-//      reproduce tools/double/verdicts.json — the recorded results (P2, P19; P4 and P8 since
-//      2026-10-05), the double's stated assumptions for the cases still pending (P19B), and, with
-//      the cases planted pending, the assumptions for P4 and P8 too; and every value the double models
+//      reproduce tools/double/verdicts.json — the recorded results (P2, P19; P4, P8 and P19B since
+//      2026-10-05, P19B's measured boxes and boolean winding too), and, with the cases planted
+//      pending, the double's stated assumptions for P4, P8 and P19B; and every value the double models
 //      for every case, one double per value; a recorded value the double cannot model refuses to build it
 //   2. auto layout with expected boxes: hug, fixed, padding, spacing, MIN / CENTER / MAX /
 //      SPACE_BETWEEN, grow, stretch, a child's own alignment, hidden and absolute children, the padding
@@ -19,7 +19,8 @@
 //      wrap, the countLines formula, paragraphs, maxLines, leading trim, the resize reset semantics,
 //      ranges and figma.mixed, UTF-16 range bounds
 //   4. vectors and booleans: where a network off the origin lands, resize scaling, region-less loops,
-//      polygons and stars, booleans following their operands, a hidden operand, a refused operation
+//      a 6.283185 sweep, polygons and stars, booleans following their operands, a hidden operand, a
+//      refused operation, stroked and LINE operands, the NONZERO label of every result
 //   5. images: formats and sizes from the bytes, P8 refusals and drops, P4 re-encoding
 //   6. the probes' own argument checks, and P4 through a simulated window
 //   7. liveness in tools/jobserver.mjs: no advance fails the post with PLUGIN_STALLED, an advance keeps
@@ -112,6 +113,16 @@ check(DOUBLE_FEATURES.layout && DOUBLE_FEATURES.text && DOUBLE_FEATURES.booleans
   check(same(res.verdicts, followed("P19B", VERDICTS)),
     "P19B: the probe against the double gives the recorded verdict for each recorded case and the double's stated assumption for each pending one",
     JSON.stringify(res.verdicts));
+  // P19B, recorded on 2026-10-05: every case as Figma said, and what the double takes from the
+  // measurements (verdicts.json P19B.measured, container coordinates; the probe's container sits at
+  // 1000, 1000): the LINE and stroked operands' boxes, and NONZERO on every boolean result path.
+  const M19 = VERDICTS.probes.P19B.measured, at = (b) => [b[0] + 1000, b[1] + 1000, b[2] + 1000, b[3] + 1000];
+  const bools = ["booleanUnion", "booleanSubtract", "booleanIntersect", "booleanExclude"];
+  check(RECORDED_ON.test(VERDICTS.probes.P19B.status) && pendingCases(VERDICTS).every((k) => k.indexOf("P19B.") !== 0) && same(res.verdicts, VERDICTS.probes.P19B.verdicts) &&
+    same(res.cases.lineOperand.box, at(M19.lineOperandBox)) && same(res.cases.strokedOperand.box, at(M19.strokedOperandBox)) &&
+    bools.every((k) => same(res.cases[k].winding, [M19.booleanResultWinding])) && res.cases.offsetNetwork.originMoved === true,
+    "P19B (recorded): the probe against the double gives the recorded verdict for every case, the measured LINE and stroked-operand boxes, and NONZERO on every boolean result",
+    JSON.stringify([res.verdicts, res.cases.lineOperand, res.cases.strokedOperand, bools.map((k) => res.cases[k].winding)]));
   check(D.tree().children[0].children.length === 0, "P19B leaves nothing behind in the file");
   // P8, recorded on 2026-10-05: the probe against the double gives back exactly what Figma said.
   const r8 = await IR.probes.P8.run(IR.probes.P8.args({}));
@@ -135,7 +146,7 @@ check(DOUBLE_FEATURES.layout && DOUBLE_FEATURES.text && DOUBLE_FEATURES.booleans
   const allOf = (p) => Object.keys(MODEL[p]).map((k) => p + "." + k);
   check(same(D.assumed, pendingCases(VERDICTS)) && !D.assumed.some((k) => /^(P4|P8|P19)\./.test(k)) &&
     same(DP.assumed, allOf("P4").concat(allOf("P8"), allOf("P19B"))) && DP.assumed.indexOf("P19.openRegionlessNetworkFilled") < 0,
-    "the double lists the cases it follows by assumption (the pending ones: P19B until recorded; P4 and P8 too when planted pending), and none it follows from a recorded verdict",
+    "the double lists the cases it follows by assumption (none since P19B was recorded; every case of P4, P8 and P19B when planted pending), and none it follows from a recorded verdict",
     JSON.stringify([D.assumed, DP.assumed]));
   console.log("skip P13 (recorded): instance sublayer overrides are not modelled in M1; the double has no instances (M2b)");
 }
@@ -169,9 +180,11 @@ check(DOUBLE_FEATURES.layout && DOUBLE_FEATURES.text && DOUBLE_FEATURES.booleans
   check(compareLine("P19", "openRegionlessNetworkFilled", "empty", VERDICTS) === "as recorded" && compareLine("P19", "perRegionFills", "drop", VERDICTS) === "RECORDED ok" &&
     compareLine("P8", "webpAsPng", "throw", VERDICTS) === "as recorded" && compareLine("P8", "png4097", "ok", VERDICTS) === "RECORDED throw" &&
     compareLine("P4", "transport", "base64", VERDICTS) === "RECORDED binary" &&
+    compareLine("P19B", "regionlessFill", "ok", VERDICTS) === "as recorded" && compareLine("P19B", "lineOperand", "ok", VERDICTS) === "RECORDED differs" &&
+    compareLine("P19B", "regionlessFill", "ok", PEND) === "THE DOUBLE ASSUMES empty" &&
     compareLine("P8", "webpAsPng", "throw", PEND) === "as the double assumes" && compareLine("P8", "png4097", "throw", PEND) === "THE DOUBLE ASSUMES ok" &&
     compareLine("P4", "transport", "binary", PEND) === "THE DOUBLE ASSUMES base64" && compareLine("P19B", "offsetNetwork", "drop", PEND) === "THE DOUBLE ASSUMES ok",
-    "plugin-probe prints each live verdict against the recorded one (P4, P8, P19), or the double's assumption while pending (planted)");
+    "plugin-probe prints each live verdict against the recorded one (P4, P8, P19, P19B), or the double's assumption while pending (planted)");
 }
 
 // ============================================================================================
@@ -371,7 +384,7 @@ function rect(f, parent, w, h, opts) {
   await v.setVectorNetworkAsync(net);
   // fillGeometry reads back in Figma's glued form ("M0 0L…", P19B 2026-10-05), starting at the new origin.
   check(same(v.relativeTransform, [[1, 0, 15], [0, 1, 27]]) && v.width === 20 && v.height === 20 && same(drawnBox(v), [15, 27, 35, 47]) && v.fillGeometry[0].data === "M0 0L20 0L20 20L0 0Z",
-    "a network off the origin (assumed P19B offsetNetwork ok): the origin moves to its bounds, the size becomes them, the drawing stays", JSON.stringify([v.relativeTransform, drawnBox(v), v.fillGeometry[0].data]));
+    "a network off the origin (P19B offsetNetwork ok, recorded): the origin moves to its bounds, the size becomes them, the drawing stays", JSON.stringify([v.relativeTransform, drawnBox(v), v.fillGeometry[0].data]));
   v.resize(40, 10);
   check(same(drawnBox(v), [15, 27, 55, 37]), "resizing a vector scales its drawing", JSON.stringify(drawnBox(v)));
   const Dd = makeDouble({ verdicts: withVerdict("P19B", "offsetNetwork", "drop") });
@@ -380,10 +393,26 @@ function rect(f, parent, w, h, opts) {
   check(same(vd.relativeTransform, [[1, 0, 5], [0, 1, 7]]) && same(drawnBox(vd), [5, 7, 25, 27]), "with offsetNetwork drop the offset is lost: the drawing moves to the origin");
   const loop = { vertices: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
     segments: [{ start: 0, end: 1 }, { start: 1, end: 2 }, { start: 2, end: 3 }, { start: 3, end: 0 }], regions: [] };
-  const lv = f.createVector(); await lv.setVectorNetworkAsync(loop);
-  const Do = makeDouble({ verdicts: withVerdict("P19B", "regionlessFill", "ok") });
-  const lo = Do.figma.createVector(); await lo.setVectorNetworkAsync(loop);
-  check(lv.fillGeometry.length === 0 && lo.fillGeometry.length === 1 && same(drawnBox(lo), [0, 0, 10, 10]), "a closed loop without a region: no fill by assumption, filled when the verdict says ok");
+  // A closed loop with no region is filled, as P19B recorded (regionlessFill ok, 2026-10-05): one
+  // NONZERO path, whatever the node's fills (fillGeometry is geometry, as a region's is). With P19B
+  // planted pending, the double's assumption (empty) leaves it unfilled; an open chain with no region
+  // is never filled (P19 openRegionlessNetworkFilled empty).
+  const lv = f.createVector(); lv.fills = []; await lv.setVectorNetworkAsync(loop);
+  const lc = f.createVector(); await lc.setVectorNetworkAsync({ vertices: loop.vertices, segments: loop.segments.slice(0, 3), regions: [] });
+  const Dp = makeDouble({ verdicts: pendingFor(["P19B"]) });
+  const lp = Dp.figma.createVector(); await lp.setVectorNetworkAsync(loop);
+  const De = makeDouble({ verdicts: withVerdict("P19B", "regionlessFill", "empty") });
+  const le = De.figma.createVector(); await le.setVectorNetworkAsync(loop);
+  check(VERDICTS.probes.P19B.verdicts.regionlessFill === "ok" && lv.fillGeometry.length === 1 && lv.fillGeometry[0].windingRule === "NONZERO" &&
+    same(drawnBox(lv), [0, 0, 10, 10]) && lc.fillGeometry.length === 0 && lp.fillGeometry.length === 0 && le.fillGeometry.length === 0,
+    "a closed loop without a region is filled (P19B regionlessFill ok, recorded), fills [] or not; unfilled when planted pending or empty; an open chain never",
+    JSON.stringify([lv.fillGeometry, lc.fillGeometry.length, lp.fillGeometry.length, le.fillGeometry.length]));
+  // An ellipse whose sweep is 6.283185 (one 32-bit step below Figma's 2π) draws the whole ellipse, as
+  // P19B recorded (arcFullSweep ok); planted pending, the assumption draws a pie short of a turn.
+  const sweep = (F) => { const e = F.createEllipse(); e.resize(20, 20); e.arcData = { startingAngle: 0, endingAngle: 6.283185, innerRadius: 0 }; return e.fillGeometry[0].data; };
+  const whole = f.createEllipse(); whole.resize(20, 20);
+  check(VERDICTS.probes.P19B.verdicts.arcFullSweep === "ok" && sweep(f) === whole.fillGeometry[0].data && sweep(Dp.figma) !== whole.fillGeometry[0].data &&
+    /L/.test(sweep(Dp.figma)), "a 6.283185 sweep draws the whole ellipse (P19B arcFullSweep ok, recorded); planted pending, a pie", JSON.stringify([sweep(f).slice(0, 30), sweep(Dp.figma).slice(0, 30)]));
   const pg = f.createPolygon(); pg.resize(30, 20); const sr = f.createStar(); sr.resize(40, 40);
   check(same(drawnBox(pg), [0, 0, 30, 20]) && same(drawnBox(sr), [0, 0, 40, 40]) && pg.fillGeometry[0].data.split("L").length === 3,
     "polygons and stars have their fill geometry, stretched to the node's box");
@@ -409,10 +438,35 @@ function rect(f, parent, w, h, opts) {
   check(/synthetic refusal/.test(threw(() => Df.figma.subtract([Df.figma.createRectangle()], Df.figma.currentPage))) &&
     /nestedBoolean/.test(threw(() => Dn.figma.union([inner, Dn.figma.createRectangle()], Dn.figma.currentPage))),
     "a boolean Figma refuses: by fault (BOOLEAN_FALLBACK tests) or by verdict");
-  const Ds = makeDouble({ verdicts: withVerdict("P19B", "strokedOperand", "differs") });
-  const so = Ds.figma.createRectangle(); so.resize(10, 10); so.strokes = [BLACK]; so.strokeWeight = 4; so.strokeAlign = "CENTER";
-  const su = Ds.figma.union([so], Ds.figma.currentPage);
-  check(same(drawnBox(su), [-2, -2, 12, 12]), "strokedOperand differs: the operand's stroke widens its area", JSON.stringify(drawnBox(su)));
+  // Strokes in a boolean, as P19B recorded (2026-10-05). strokedOperand differs: an unfilled 10 x 10
+  // under a 4 px CENTER stroke counts with its stroked box, -2..12. lineOperand differs: a 30 px LINE at
+  // y 25 under a 4 px stroke joins a UNION with its own path, no area and no stroke: 0..30 x 0..25 with
+  // a 20 x 20 square (the probe's measurement), one path. Planted pending, the assumptions: strokes
+  // ignored, a LINE adds nothing.
+  const stroked = (F) => { const so = F.createRectangle(); so.resize(10, 10); so.fills = []; so.strokes = [BLACK]; so.strokeWeight = 4; so.strokeAlign = "CENTER"; return F.union([so], F.currentPage); };
+  const lined = (F) => {
+    const sq = F.createRectangle(); sq.resize(20, 20);
+    const l = F.createLine(); l.resize(30, 0); l.relativeTransform = [[1, 0, 0], [0, 1, 25]]; l.strokes = [BLACK]; l.strokeWeight = 4;
+    return F.union([sq, l], F.currentPage);
+  };
+  const su = stroked(f), sp = stroked(Dp.figma), lu = lined(f), lp2 = lined(Dp.figma);
+  check(VERDICTS.probes.P19B.verdicts.strokedOperand === "differs" && same(drawnBox(su), [-2, -2, 12, 12]) && same(drawnBox(sp), [0, 0, 10, 10]),
+    "strokedOperand differs (recorded): an operand's stroke widens its area by the part outside it; planted pending, strokes are ignored", JSON.stringify([drawnBox(su), drawnBox(sp)]));
+  check(VERDICTS.probes.P19B.verdicts.lineOperand === "differs" && same(drawnBox(lu), [0, 0, 30, 25]) && lu.fillGeometry.length === 1 && lu.width === 30 && lu.height === 25 &&
+    same(drawnBox(lp2), [0, 0, 20, 20]),
+    "lineOperand differs (recorded): a LINE's own path joins a union, its bounds the line's ends and not its stroke's; planted pending, a LINE adds nothing",
+    JSON.stringify([drawnBox(lu), lu.fillGeometry.length, drawnBox(lp2)]));
+  // Every boolean result path is labelled NONZERO, EXCLUDE included (P19B's m.winding, 2026-10-05),
+  // and an EXCLUDE's traced loops still draw its parity under that rule: the overlap is a hole.
+  const e1 = rect(f, P, 20, 20), e2 = rect(f, P, 20, 20); e2.x = 10;
+  const ex = f.exclude([e1, e2], P);
+  const s1 = rect(f, P, 20, 20), s2 = rect(f, P, 20, 20); s2.x = 10;
+  const sb = f.subtract([s1, s2], P);
+  const subs = (ex.fillGeometry[0].data.match(/M/g) || []).length;
+  check([u, x, sb, ex].every((n) => n.fillGeometry.length === 1 && n.fillGeometry[0].windingRule === "NONZERO") && same(drawnBox(ex), [100, 100, 130, 120]) && subs === 2 &&
+    same(drawnBox(sb), [100, 100, 110, 120]),
+    "every boolean result reads NONZERO (UNION, INTERSECT, SUBTRACT, EXCLUDE), as P19B measured; an EXCLUDE is two loops, its overlap left out",
+    JSON.stringify([[u, x, sb, ex].map((n) => n.fillGeometry.map((g) => g.windingRule)), drawnBox(ex), subs]));
 }
 
 // ============================================================================================
