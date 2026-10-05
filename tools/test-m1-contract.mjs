@@ -93,8 +93,12 @@ taskOk("a fonts task (settings and fonts only) passes", fontsTask());
 taskOk("a clean task carrying its root records only passes", tmut(buildTask, (t) => { t.op = "clean"; t.nodes = [t.nodes[0]]; t.notes = []; t.values = { "0": t.values["0"], "1": [] }; t.images = []; t.expect = null; t.page = null; }));
 taskOk("a split root attached to its built parent passes", tmut(buildTask, (t) => {
   t.nodes.push({ i: 9, parent: 7, guid: "1:9", type: "FRAME", name: "Split", props: Object.assign({ relativeTransform: T6(0, 60), width: 10, height: 10, clipsContent: false, layoutMode: "NONE", primaryAxisSizingMode: "FIXED", counterAxisSizingMode: "FIXED" }, painted) });
-  t.roots.push({ i: 9, attachTo: { i: 7 }, place: null }); t.expect = { count: 6, nonInstance: 5, placeholders: 1 };
+  t.roots.push({ i: 9, attachTo: { i: 7, guid: "1:7" }, place: null }); t.expect = { count: 6, nonInstance: 5, placeholders: 1 };
 }));
+taskErr("a split root whose attachTo does not name its parent's guid", tmut(buildTask, (t) => {
+  t.nodes.push({ i: 9, parent: 7, guid: "1:9", type: "FRAME", name: "Split", props: Object.assign({ relativeTransform: T6(0, 60), width: 10, height: 10, clipsContent: false, layoutMode: "NONE", primaryAxisSizingMode: "FIXED", counterAxisSizingMode: "FIXED" }, painted) });
+  t.roots.push({ i: 9, attachTo: { i: 7 }, place: null }); t.expect = { count: 6, nonInstance: 5, placeholders: 1 };
+}), "roots[1].attachTo.guid");
 taskOk("an S2 master on the service page, attached to the page at its grid place, passes", tmut(buildTask, (t) => {
   t.page = { index: null, guid: taskMod.SERVICE_PAGE_GUID, name: "pix2fig service", service: true, background: null };
   t.nodes[0].parent = 12; t.roots[0].place = [0, 400];
@@ -116,10 +120,10 @@ taskErr("a font the task does not list", tmut(buildTask, (t) => { t.fonts = []; 
 taskErr("an expected count that is not the records'", tmut(buildTask, (t) => { t.expect.count = 4; }), "expect.count");
 taskErr("an expected placeholder count that is not the INSTANCE records'", tmut(buildTask, (t) => { t.expect.placeholders = 0; t.expect.nonInstance = 5; }), "expect.placeholders");
 taskErr("a top-level record that is not a root", tmut(buildTask, (t) => { t.roots = []; }), "nodes[0]");
-taskErr("a root whose parent is in the task", tmut(buildTask, (t) => { t.roots.push({ i: 1, attachTo: { i: 0 }, place: null }); }), "roots[1].attachTo.i");
+taskErr("a root whose parent is in the task", tmut(buildTask, (t) => { t.roots.push({ i: 1, attachTo: { i: 0, guid: "1:0" }, place: null }); }), "roots[1].attachTo.i");
 taskErr("a split root attached to a parent that is not its own", tmut(buildTask, (t) => {
   t.nodes.push({ i: 9, parent: 7, guid: "1:9", type: "FRAME", name: "Split", props: Object.assign({ relativeTransform: T6(0, 60), width: 10, height: 10, clipsContent: false, layoutMode: "NONE", primaryAxisSizingMode: "FIXED", counterAxisSizingMode: "FIXED" }, painted) });
-  t.roots.push({ i: 9, attachTo: { i: 8 }, place: null }); t.expect = { count: 6, nonInstance: 5, placeholders: 1 };
+  t.roots.push({ i: 9, attachTo: { i: 8, guid: "1:8" }, place: null }); t.expect = { count: 6, nonInstance: 5, placeholders: 1 };
 }), "roots[1].attachTo.i");
 taskErr("a grid place on an ordinary page", tmut(buildTask, (t) => { t.roots[0].place = [0, 0]; }), "roots[0].place");
 taskErr("a type M1 does not build", tmut(buildTask, (t) => { t.nodes[0].type = "COMPONENT_SET"; }), "nodes[0].type");

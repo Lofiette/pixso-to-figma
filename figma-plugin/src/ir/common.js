@@ -65,9 +65,10 @@
 //   ctx.stamp(node, key, val)   shared plugin data in namespace "pix2fig"; key one of STAMP_KEYS, or it
 //                               throws. pxScratch is written as private plugin data too
 //   ctx.stampOf(node, key)      the shared stamp, or "" (also when the node cannot be read)
-//   ctx.findRoot(i)             -> Promise<node|null>: S.nodes[i] if that node still carries pxIdx = i,
+//   ctx.findRoot(i, guid?)      -> Promise<node|null>: S.nodes[i] if that node still carries pxIdx = i,
 //                               pxSnap = task.snapshot, pxIr = the IR version and, when record i is in the
-//                               task, pxSrc = its guid; else a node on any page carrying those (pages are
+//                               task, pxSrc = its guid (else the guid given: a split root's parent, which
+//                               the later task names in attachTo; review S8); else a node on any page carrying those (pages are
 //                               loaded first), one stamped pxRun = task.runId preferred, else the last
 //                               found; else null. The guid check matters because IR indices depend on
 //                               the reader's settings and scope, which the snapshot does not hold
@@ -224,10 +225,11 @@ var PXF_IR = (function () {
         if (key === "pxScratch") node.setPluginData("pxScratch", String(val));
       },
       stampOf: stampOf,
-      findRoot: async function (i) {
+      findRoot: async function (i, guidOf) {
         var want = String(i), snap = String(task.snapshot), irv = String(PXF_SCHEMA.VERSION), guid = null;
         var recs = Array.isArray(task.nodes) ? task.nodes : [];
         for (var r = 0; r < recs.length; r++) if (recs[r] && recs[r].i === i) guid = String(recs[r].guid);
+        if (guid === null && typeof guidOf === "string" && guidOf) guid = guidOf;
         var is = function (n) {
           return !!n && !n.removed && stampOf(n, "pxIdx") === want && stampOf(n, "pxSnap") === snap && stampOf(n, "pxIr") === irv &&
             (guid === null || stampOf(n, "pxSrc") === guid);

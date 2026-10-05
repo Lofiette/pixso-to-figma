@@ -97,17 +97,19 @@ async function findPage(ctx, key, regKey) {
 }
 
 // A split root's parent, built by an earlier task of this run (the session's registry) or found by
-// its stamps (ctx.findRoot), and stamped as a task-boundary parent so a later task, or a plugin
-// restarted mid-run, finds it the same way.
-async function boundaryParent(st, i) {
-  var ctx = st.ctx, F = ctx.figma, node = null;
+// its stamps (ctx.findRoot, with the guid attachTo names, since the parent is not a record of this
+// task), and stamped as a task-boundary parent so a later task, or a plugin restarted mid-run, finds
+// it the same way. A remembered node stamped with another guid is not taken.
+async function boundaryParent(st, to) {
+  var ctx = st.ctx, F = ctx.figma, node = null, i = to.i, want = typeof to.guid === "string" ? to.guid : null;
   if (own(ctx.S.nodes, String(i))) {
     var known = await F.getNodeByIdAsync(String(ctx.S.nodes[String(i)]));
-    if (known && !known.removed) node = known;
+    var src = known && !known.removed ? ctx.stampOf(known, "pxSrc") : "";
+    if (known && !known.removed && (!src || want === null || src === want)) node = known;
   }
-  if (!node) node = await ctx.findRoot(i);
+  if (!node) node = await ctx.findRoot(i, want);
   if (!node) refuse("the built parent " + i + " of a split root is not found: its task has not been built in this run, and nothing carries its stamps");
-  var guid = B.guidOf(st.task.runId, i);
+  var guid = want !== null ? want : B.guidOf(st.task.runId, i);
   if (guid !== null) ctx.stamp(node, "pxSrc", guid);
   ctx.stamp(node, "pxIdx", i);
   ctx.stamp(node, "pxRun", st.task.runId);
@@ -141,7 +143,7 @@ async function pagesPhase(st) {
   for (var r = 0; r < st.rootKs.length; r++) {
     var k = st.rootKs[r], to = st.attachTo[k];
     if (to === "page") { st.attach[k] = page; st.attachMode[k] = "NONE"; continue; }
-    var parent = await boundaryParent(st, to.i);
+    var parent = await boundaryParent(st, to);
     st.attach[k] = parent;
     var mode = "NONE";
     if (parent.type === "FRAME" || parent.type === "COMPONENT") { try { mode = parent.layoutMode || "NONE"; } catch (e2) { mode = "NONE"; } }

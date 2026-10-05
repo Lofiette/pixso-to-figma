@@ -36,7 +36,7 @@
 // stats.populations (part A; internal ones taken on internal pages only), or derivePopulations.
 // Built records whose parent is not built are roots: on a user page they are top-level records; on
 // the service page they attach to the page at a grid place. A root whose subtree is over the size
-// cap is split at child boundaries: the later pieces attach to their built parent ({ i }).
+// cap is split at child boundaries: the later pieces attach to their built parent ({ i, guid }).
 import { randomBytes } from "node:crypto";
 import { CODE, INTERNED_PROPS, ORACLE_PROPS, snapshotId } from "./schema.mjs";
 import { BUILT_TYPE, SERVICE_PAGE_GUID, TASK_FORMAT, TASK_IR_VERSION, TASK_SETTING_DEFAULTS,
@@ -59,8 +59,8 @@ export const PLAN_DEFAULTS = Object.freeze({ textFit: TASK_SETTING_DEFAULTS.text
 export const CEILING_BASE_MS = 120000;
 export const SERVICE_PAGE_NAME = "pix2fig service: S2 masters";
 export const GRID = Object.freeze({ gap: 200, rowWidth: 20000 });
-// An upper bound of one roots[] entry ({ i, attachTo: { i }, place: [x, y] }) in characters.
-const ROOT_ENTRY = 96;
+// An upper bound of one roots[] entry ({ i, attachTo: { i, guid }, place: [x, y] }) in characters.
+const ROOT_ENTRY = 128;
 
 const own = (o, k) => o !== null && o !== undefined && Object.prototype.hasOwnProperty.call(o, k);
 
@@ -272,7 +272,7 @@ export function planM1(ir, stats, opts) {
       const p = N[i].parent;
       if (!inT.has(p)) {
         const toPage = p < 0 || !B[p];
-        roots.push({ i, attachTo: toPage ? "page" : { i: p }, place: toPage && b.group.service ? place.get(i) || [0, 0] : null });
+        roots.push({ i, attachTo: toPage ? "page" : { i: p, guid: N[p].guid }, place: toPage && b.group.service ? place.get(i) || [0, 0] : null });
       }
     }
     if (b.group.page.background !== null) vals.add(b.group.page.background);

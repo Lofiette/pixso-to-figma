@@ -26,7 +26,7 @@
 //                 textRead: "measure"|"inLoop", fallbackFont: { family, style } },
 //     page: { index: IR page index | null, guid: page guid | "m1-service", name, service: bool,
 //             background: values key | null } | null,
-//     roots: [{ i, attachTo: "page" | { i }, place: [x, y] | null }],
+//     roots: [{ i, attachTo: "page" | { i, guid }, place: [x, y] | null }],
 //     nodes: [{ i, parent, guid, type, name, props, instance? }],
 //     notes: [{ code, i, detail: string | null }],
 //     values: { "<IR values index>": value },
@@ -41,7 +41,9 @@
 //   type is the IR type; BUILT_TYPE says what Figma node it becomes.
 // - roots: where each subtree of this task attaches. A node whose parent is not in the task is a root.
 //   attachTo "page": a top-level record (parent -1), or any S2 master on the service page.
-//   attachTo { i }: a split root whose IR parent i was built by an earlier task; i is its parent.
+//   attachTo { i, guid }: a split root whose IR parent i was built by an earlier task; i is its
+//   parent and guid that parent's guid, so the plugin never takes a node an earlier run of other
+//   reader settings stamped with the same index (indices depend on settings and scope).
 //   place: the S2 grid position on the service page, or null. It never enters a comparison.
 // - notes: the IR notes of these records (read-stage codes). A VECTOR built from fillGeometry must
 //   have one of schema.GEOMETRY_SOURCE_CODES among them (docs/M1.md §5.2).
@@ -51,7 +53,7 @@
 //   "none" means the builder draws IMAGE_PLACEHOLDER.
 // - expect: what VERIFY should find, for build and verify; count = nodes, placeholders = INSTANCE
 //   records, nonInstance = the rest.
-//   attachTo { i } names an IR index (>= 0); a top-level record attaches to the page.
+//   attachTo { i, guid } names an IR index (>= 0) and its guid; a top-level record attaches to the page.
 // Per op: fonts carries only settings and fonts (page null, everything else empty); clean carries the
 // root records only (no expect) and either their page or page null; build and verify carry a page,
 // roots, nodes and expect. A clean task with page null does not say where its roots are, so attachTo
@@ -253,11 +255,13 @@ export function validateTask(task, deps) {
     if (r.attachTo === "page") {
       const anyPage = op === "clean" && page === null;
       if (n.parent !== -1 && !anyPage && !(isObj(page) && page.service === true)) err(P + ".attachTo", "only a top-level record, or an S2 master on the service page, attaches to the page");
-    } else if (isObj(r.attachTo) && Object.keys(r.attachTo).length === 1 && isInt(r.attachTo.i)) {
+    } else if (isObj(r.attachTo) && isInt(r.attachTo.i)) {
+      closed(r.attachTo, ["i", "guid"], P + ".attachTo");
+      if (!(typeof r.attachTo.guid === "string" && r.attachTo.guid.length > 0)) err(P + ".attachTo.guid", "the parent's guid, a string; got " + show(r.attachTo.guid));
       if (r.attachTo.i < 0) err(P + ".attachTo.i", "an IR index; a top-level record attaches to \"page\"");
       else if (r.attachTo.i !== n.parent) err(P + ".attachTo.i", "a split root attaches to its IR parent " + show(n.parent) + "; got " + r.attachTo.i);
       else if (at.has(r.attachTo.i)) err(P + ".attachTo.i", "the parent is in this task, so the record is not a root");
-    } else err(P + ".attachTo", "\"page\" or { i }; got " + show(r.attachTo));
+    } else err(P + ".attachTo", "\"page\" or { i, guid }; got " + show(r.attachTo));
     if (r.place !== null) {
       if (!(Array.isArray(r.place) && r.place.length === 2 && r.place.every(isNum))) err(P + ".place", "[x, y] or null; got " + show(r.place));
       else if (!(isObj(page) && page.service === true)) err(P + ".place", "a grid position is given only on the service page");

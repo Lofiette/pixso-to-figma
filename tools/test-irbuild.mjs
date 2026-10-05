@@ -84,7 +84,7 @@ function mkTask(o) {
   const page = o.page === undefined ? { index: 0, guid: "0:1", name: "Page A", service: false, background: null } : clone(o.page);
   if (page && page.background !== null && typeof page.background !== "number") page.background = intern(page.background);
   const inTask = new Set(nodes.map((n) => n.i));
-  const roots = o.roots || nodes.filter((n) => !inTask.has(n.parent)).map((n) => ({ i: n.i, attachTo: n.parent === -1 || (page && page.service) ? "page" : { i: n.parent }, place: null }));
+  const roots = o.roots || nodes.filter((n) => !inTask.has(n.parent)).map((n) => ({ i: n.i, attachTo: n.parent === -1 || (page && page.service) ? "page" : { i: n.parent, guid: "1:" + (G + n.parent) }, place: null }));
   const placeholders = nodes.filter((n) => n.type === "INSTANCE").length;
   const op = o.op || "build";
   return { format: "pix2fig.task", version: 1, op, runId: o.runId || RUN, taskNo: o.taskNo || 1, of: o.of || 9, snapshot: o.snapshot || SNAP, irVersion: 2,
@@ -579,13 +579,25 @@ for (const [verdict, expectCode, detail] of [["throw", 1, /refused/], ["drop", 1
   const { ctx: c3 } = await build(E3, t1);
   const fresh = loadPluginBundle({ figma: E3.D.figma, host: Object.assign(defaultHost(), { phase: E3.D.setPhase }) }).PXF_IR;
   const parent1 = E3.D.node(c3.S.nodes["1"]);
-  for (const [k, v] of [["pxIdx", "1"], ["pxSnap", SNAP], ["pxIr", "2"], ["pxRun", RUN]]) parent1.setSharedPluginData("pix2fig", k, v);
+  for (const [k, v] of [["pxIdx", "1"], ["pxSnap", SNAP], ["pxIr", "2"], ["pxRun", RUN], ["pxSrc", "1:" + (G + 1)]]) parent1.setSharedPluginData("pix2fig", k, v);
   const c4 = fresh.makeCtx(E3.D.figma, t2, { id: "r" });
   await fresh.ops.build(c4, t2);
   check(E3.D.node(c4.S.nodes["2"]).parent.id === parent1.id, "after a restart, the split root's parent is found by its stamps");
   const lost = mkTask({ taskNo: 3, runId: RUN2, nodes: [rect(9, 77, [T6(0, 0), 5, 5])] });
   const e = await rejects(build(env(), lost));
   check(e && e.refused && /built parent 77 of a split root is not found/.test(e.message), "a split root whose parent cannot be found refuses the task", e && e.message);
+  // Review S8: after a restart, a node stamped with the parent's index by another run of other reader
+  // settings (another record's guid) is not the parent: the task refuses rather than attach inside it.
+  const E4 = env();
+  const { ctx: c5 } = await build(E4, t1);
+  const wrong = E4.D.node(c5.S.nodes["1"]);
+  for (const [k, v] of [["pxIdx", "1"], ["pxSnap", SNAP], ["pxIr", "2"], ["pxRun", RUN], ["pxSrc", "9:999"]]) wrong.setSharedPluginData("pix2fig", k, v);
+  const fresh2 = loadPluginBundle({ figma: E4.D.figma, host: Object.assign(defaultHost(), { phase: E4.D.setPhase }) }).PXF_IR;
+  const e2 = await fresh2.ops.build(fresh2.makeCtx(E4.D.figma, t2, { id: "s8" }), t2).then(() => null, (x) => x);
+  check(t2.roots[0].attachTo.guid === "1:" + (G + 1) && e2 && e2.refused && /built parent 1 of a split root is not found/.test(e2.message) && wrong.children.length === 0,
+    "a node carrying the parent's index but another guid is not taken as the split root's parent", e2 && e2.message);
+  const e3 = await rejects(build(env(), Object.assign(clone(t2), { roots: [{ i: 2, attachTo: { i: 1 }, place: null }] })));
+  check(!validateTask(Object.assign(clone(t2), { roots: [{ i: 2, attachTo: { i: 1 }, place: null }] })).ok, "a split root's attachTo without the parent's guid is not a valid task", e3 && e3.message);
 }
 
 // ============================================================================================

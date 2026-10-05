@@ -452,7 +452,7 @@ const widenScene = (by) => {
   // A split root: the task's root is record 6's child 7 only; its parent was built by another task.
   const s = scene();
   s.task.nodes = s.task.nodes.filter((t) => t.i === 7);
-  s.task.roots = [{ i: 7, attachTo: { i: 6 }, place: null }];
+  s.task.roots = [{ i: 7, attachTo: { i: 6, guid: "5:7" }, place: null }];
   s.task.notes = []; s.task.expect = { count: 1, nonInstance: 1, placeholders: 0 };
   s.verify = { op: "verify", taskNo: 2, roots: [{ i: 7, id: "9:7", found: true, inParent: [2, 2] }], count: 1, rows: [[7, "RECTANGLE", 0, false, 0, 0, 5, 5, null, null, null]] };
   s.build = { op: "build", codes: {}, coded: [], failures: [], textWidened: [] };
@@ -462,7 +462,7 @@ const widenScene = (by) => {
   // Review S1: a split root's place in its parent is held to its IR relativeTransform.
   const v = scene();
   v.task.nodes = v.task.nodes.filter((t) => t.i === 16);
-  v.task.roots = [{ i: 16, attachTo: { i: 15 }, place: null }];
+  v.task.roots = [{ i: 16, attachTo: { i: 15, guid: "5:16" }, place: null }];
   v.task.notes = []; v.task.expect = { count: 1, nonInstance: 1, placeholders: 0 };
   v.build = { op: "build", codes: {}, coded: [], failures: [], textWidened: [] };
   const row16 = [16, "RECTANGLE", 0, true, 0, 0, 40, 20, null, null, null];
