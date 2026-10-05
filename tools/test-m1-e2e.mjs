@@ -166,6 +166,11 @@ const GOOD = await runOnce("built");
     GOOD.accepted.lines.some((l) => /^build time: .* per 1 000/.test(l)) && GOOD.accepted.lines.some((l) => /^reader: unzip \d+ ms, zstd \d+ ms, kiwi \d+ ms, ir \d+ ms/.test(l)),
     "time per phase is present: every build books all " + BUILD_PHASES.length + " phases, and m1-accept prints them per 1 000 records with the reader's times");
 
+  // The auto layout the builds gave up to hold positions is printed beside the gates (review figma F3).
+  check(S.tasks.filter((t) => t.op === "build").every((t) => t.flow && Number.isFinite(t.flow.groupNodes) && Number.isFinite(t.flow.quarterTurnsBaked)) &&
+    GOOD.accepted.lines.some((l) => /^flow: [0-9]+ children taken out of auto layout to hold their place .*[0-9]+ turned leaves kept in it/.test(l)),
+    "each build records the auto layout it gave up, and m1-accept prints it", show(S.tasks.filter((t) => t.op === "build").map((t) => t.flow)));
+
   // The balance, in the acceptance report.
   check(S.balance.ok && GOOD.accepted.lines.some((l) => l === "BALANCE (adds up)"), "m1-accept prints the balance, and it adds up");
 

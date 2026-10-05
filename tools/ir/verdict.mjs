@@ -179,6 +179,10 @@ export function m1Verdict(totals, states, opts) {
   const lines = ["gate                    result  measured"];
   for (const x of g.gates) lines.push((x.id + " " + x.name).padEnd(24) + (x.fail ? "FAIL    " : "ok      ") + x.detail);
   if (g.auditLine) lines.push(g.auditLine);
+  const fl = { groupNodes: 0, absolute: 0, rotPinned: 0, quarterTurnsBaked: 0 };
+  for (const t of states.tasks || []) if (t.op === "build" && t.flow) for (const k of Object.keys(fl)) fl[k] += Number(t.flow[k]) || 0;
+  lines.push("flow: " + (fl.groupNodes + fl.absolute + fl.rotPinned) + " children taken out of auto layout to hold their place (flow groups " + fl.groupNodes +
+    ", one by one " + fl.absolute + ", turned " + fl.rotPinned + "); " + fl.quarterTurnsBaked + " turned leaves kept in it, their quarter turn baked");
   lines.push("settings: " + JSON.stringify(states.settings || {}));
   lines.push("probes: " + Object.keys(states.probes || {}).map((k) => k + " " + states.probes[k]).join(", "));
   lines.push("VERDICT: " + g.verdict + (g.pending.length ? "; creation order not frozen (pending: " + g.pending.join(", ") + ")" : ""));

@@ -8,7 +8,9 @@
 //     pixso: { used, identity, q5 }, fonts: { missing: [{ family, style }] }, balance: {…},
 //     tasks: [{ taskNo, op, roots: [IR index], nodes, ceilingMs, state, codes, ms, error, failures, build? }] }
 //   state: pending | built | built-with-fallbacks | failed | skipped. `failures` (the build report's
-//   failures[] count, gate G5) is a key this file adds to docs/M1.md §6 D's task record; `build`, on a
+//   failures[] count, gate G5) is a key this file adds to docs/M1.md §6 D's task record, and so is
+//   `flow` on a build ({ groupNodes, absolute, rotPinned, quarterTurnsBaked }: the auto layout the
+//   build gave up to hold positions, printed by the verdict); `build`, on a
 //   verify task, names the build task it verifies (the plan's ledger; a split chain's verifies come
 //   after all its builds, so a verify is not always the task after its build). A record without it
 //   (states.json written before) pairs a verify with the task before it (buildNoOf).
@@ -158,7 +160,7 @@ export function transition(states, taskNo, to, rec) {
   if (TASK_STATES.indexOf(to) < 0) throw new RangeError("unknown state " + JSON.stringify(to));
   if (TRANSITIONS[t.state].indexOf(to) < 0) throw new Error("task " + taskNo + ": " + t.state + " cannot become " + to);
   t.state = to;
-  if (rec) for (const k of ["codes", "ms", "error", "failures"]) if (rec[k] !== undefined) t[k] = rec[k];
+  if (rec) for (const k of ["codes", "ms", "error", "failures", "flow"]) if (rec[k] !== undefined) t[k] = rec[k];
   return t;
 }
 
@@ -180,7 +182,13 @@ export function buildOutcome(report) {
   for (const k of Object.keys((report && report.codes) || {})) count(codes, k, report.codes[k]);
   const failures = Array.isArray(report && report.failures) ? report.failures.length : 0;
   const fallback = failures > 0 || FALLBACK_CODES.some((c) => codes[c] > 0);
-  return { state: fallback ? "built-with-fallbacks" : "built", codes, ms: (report && report.ms) || {}, failures };
+  // How much auto layout the build gave up to hold positions (no gate: the structure the judge
+  // cannot see): children the flow-group pass and the per-child pass lifted out of the flow, turned
+  // children pinned out, and quarter turns baked so they stay in it (review figma F3).
+  const C = (report && report.counters) || {}, D = (report && report.detail) || {};
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+  const flow = { groupNodes: n(D.flowGroupNodes), absolute: n(C.flowAbsolute), rotPinned: n(C.rotPinned), quarterTurnsBaked: n(D.quarterTurnsBaked) };
+  return { state: fallback ? "built-with-fallbacks" : "built", codes, ms: (report && report.ms) || {}, failures, flow };
 }
 
 const errText = (e) => String((e && (e.stack || e.message)) || e);
@@ -289,7 +297,7 @@ export async function runTasks(o) {
     }
     if (task.op === "build") {
       const out = buildOutcome(report);
-      transition(states, task.taskNo, out.state, { codes: out.codes, ms: out.ms, failures: out.failures });
+      transition(states, task.taskNo, out.state, { codes: out.codes, ms: out.ms, failures: out.failures, flow: out.flow });
       builds.set(task.taskNo, report);
       save(states);
       continue;
