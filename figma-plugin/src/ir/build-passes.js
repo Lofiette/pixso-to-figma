@@ -115,7 +115,7 @@ B.measurePhase = async function (st) {
 
 // ---------- repair (builder4.js:282-331) ----------
 B.repairPass = async function (st, countIt) {
-  var ctx = st.ctx, C = st.counters;
+  var ctx = st.ctx, C = st.counters, D = st.detail;
   await ctx.settle(firstRoot(st));
   for (var k = 0; k < st.n; k++) {
     await B.tick(st, k);
@@ -133,11 +133,19 @@ B.repairPass = async function (st, countIt) {
       if (ns.layoutGrow) { B.set(st, ns, i, "layoutGrow", 0); st.pinned[k] = 1; }
     }
     // Figma will not make a flow frame smaller than its own padding on the flow axis, and Pixso
-    // will. A childless frame gives up the flow (which lays nothing out) rather than its size.
-    if (!kidsOf(st, k).length && B.isAL(mode)) {
+    // will. The frame gives up the flow rather than its size. builder4 did so only on a childless
+    // frame, since dropping the flow there would move children; here the frame's children are then
+    // placed by matrix (B.modeOf reads the dropped flow as NONE, so the place passes write each
+    // child's wanted matrix and the flow passes leave them), where Pixso put them under its padding
+    // (the test kit K, first live build 2026-10-05: five frames with children, 4 to 24 px too wide).
+    if (B.isAL(mode)) {
       var padSum = mode === "HORIZONTAL" ? (ns.paddingLeft || 0) + (ns.paddingRight || 0) : (ns.paddingTop || 0) + (ns.paddingBottom || 0);
       var wanted = mode === "HORIZONTAL" ? w.w : w.h;
-      if (padSum > wanted + 0.5) { B.set(st, ns, i, "layoutMode", "NONE"); C.layoutDroppedForSize++; }
+      if (padSum > wanted + 0.5) {
+        B.set(st, ns, i, "layoutMode", "NONE"); C.layoutDroppedForSize++;
+        st.flowDropped[k] = 1;
+        if (kidsOf(st, k).length) D.layoutDroppedWithChildren = (D.layoutDroppedWithChildren || 0) + 1;
+      }
     }
     // Re-read before acting: a stale size would pin an axis at the wrong value.
     if (sizeOk(st, k)) { C.sizeRejected++; continue; }
@@ -262,6 +270,71 @@ async function splitRootsFix(st) {
   }
 }
 
+// The parent's own counter alignment, where no per-child one holds (Figma ignores a child's MIN /
+// CENTER / MAX, docs/FINDINGS.md). Pixso can place one flow child off its parent's alignment (a child
+// that says it fills the counter axis but hugs its content there: centred in a hugging parent, at the
+// start of a fixed one; the first live build of P, 2026-10-05). Another alignment of the parent may
+// put it right while no sibling moves: tried on a flow that does not wrap, kept only then, otherwise
+// put back (detail.flowParentAligned).
+function parentAlign(st, g, pi, horiz, baseX, baseY) {
+  var ng = st.node[g], png = st.node[pi], cur, wrap;
+  try { cur = png.counterAxisAlignItems; wrap = png.layoutWrap; } catch (e) { return false; }
+  if (wrap === "WRAP" || cur === "BASELINE") return false;
+  var sibs = [], sibXY = [], kids = kidsOf(st, pi);
+  for (var s = 0; s < kids.length; s++) if (kids[s].id !== ng.id) { sibs.push(kids[s]); sibXY.push([kids[s].x, kids[s].y]); }
+  var opts = ["MIN", "CENTER", "MAX"];
+  for (var o = 0; o < opts.length; o++) {
+    if (opts[o] === cur) continue;
+    try { png.counterAxisAlignItems = opts[o]; } catch (e1) { break; }
+    var err = Math.abs(horiz ? (ng.y - baseY) : (ng.x - baseX)), moved = false;
+    for (var q = 0; q < sibs.length && !moved; q++) moved = Math.max(Math.abs(sibs[q].x - sibXY[q][0]), Math.abs(sibs[q].y - sibXY[q][1])) > 0.5;
+    if (err <= 0.5 && !moved) { st.detail.flowParentAligned = (st.detail.flowParentAligned || 0) + 1; return true; }
+  }
+  try { png.counterAxisAlignItems = cur; } catch (e2) {}
+  return false;
+}
+
+// A child that cannot leave the flow alone (one that grows along the flow takes its siblings' places
+// with it; P, 2026-10-05) leaves with them: every visible flow child of the parent goes onto its
+// wanted matrix, the parent frozen at its size, as the group pass does. Kept when the child lands
+// within half a pixel and the group ends nearer by more than half a pixel; otherwise put back. Not
+// tried where a visible flow sibling cannot be moved by matrix (a native boolean).
+async function leaveWithSiblings(st, g, pi, dp, EXP) {
+  var ctx = st.ctx, C = st.counters, D = st.detail, png = st.node[pi], movable = [], before = 0, undo = [];
+  var kids = st.kids[pi];
+  for (var a = 0; a < kids.length; a++) {
+    var k = kids[a];
+    if (ctx.prop(st.recs[k], "visible") === false || ctx.prop(st.recs[k], "layoutPositioning") === "ABSOLUTE") continue;
+    if (st.native[k] || st.fixed[k]) return false;
+    movable.push(k);
+    before += deltaOf(st, k, EXP[k]).d;
+  }
+  if (movable.length < 2) return false;
+  var pw = png.width, ph = png.height;
+  try {
+    for (var w = 0; w < movable.length; w++) {
+      var n = st.node[movable[w]];
+      undo.push([n, n.layoutPositioning]);
+      n.layoutPositioning = "ABSOLUTE";
+      n.relativeTransform = U.matrix(st.want[movable[w]].rt);
+    }
+    if (Math.abs(png.width - pw) > 0.01 || Math.abs(png.height - ph) > 0.01) {
+      try { B.resize(png, st.builtType[pi], pw, ph); } catch (e) { ctx.failure(st.recs[pi].i, "resize", msgOf(e)); }
+    }
+    var after = 0;
+    for (var v = 0; v < movable.length; v++) after += deltaOf(st, movable[v], EXP[movable[v]]).d;
+    if (after < before - 0.5 && deltaOf(st, g, EXP[g]).d <= 0.5) {
+      C.flowGroups++; D.flowGroupNodes += movable.length;
+      D.flowGroupsForOne = (D.flowGroupsForOne || 0) + 1;
+      for (var u = 0; u < movable.length; u++) { dp[movable[u]] = { dx: 0, dy: 0, d: 0, vis: true }; st.flowAbs[movable[u]] = 1; }
+      return true;
+    }
+  } catch (eG) {}
+  for (var r = 0; r < undo.length; r++) { try { undo[r][0].layoutPositioning = undo[r][1] || "AUTO"; } catch (e2) {} }
+  D.flowGroupsRejected++;
+  return false;
+}
+
 B.flowFixPass = async function (st, last) {
   var ctx = st.ctx, C = st.counters, D = st.detail;
   await ctx.settle(firstRoot(st));
@@ -294,6 +367,7 @@ B.flowFixPass = async function (st, last) {
       // Pinned, so place3 does not write the IR's layoutAlign back over it (part F, review figma F4).
       if (best !== null && bestErr <= 0.5) { try { ng.layoutAlign = best; st.pinned[g] = 1; C.flowAligned++; continue; } catch (e2) {} }
       try { ng.layoutAlign = before; } catch (e3) {}
+      if (parentAlign(st, g, pi, horiz, baseX, baseY)) continue;
     }
     // Last resort: out of the flow, on the wanted matrix. The parent is frozen first, and every
     // sibling's place is kept: if any moves, or the node is not nearer, everything is put back.
@@ -321,8 +395,10 @@ B.flowFixPass = async function (st, last) {
       var after = deltaOf(st, g, EXP[g]);
       if (moved || after.d > now.d - 0.01) {
         try { ng.layoutPositioning = "AUTO"; } catch (e5) {}
-        if (moved) { D.flowSiblingGuard++; if (worstSib > D.flowSiblingWorst) D.flowSiblingWorst = r2(worstSib); }
-        else C.flowReverted++;
+        if (moved) {
+          D.flowSiblingGuard++; if (worstSib > D.flowSiblingWorst) D.flowSiblingWorst = r2(worstSib);
+          await leaveWithSiblings(st, g, pi, dp, EXP);
+        } else C.flowReverted++;
       } else { C.flowAbsolute++; st.flowAbs[g] = 1; }
     } catch (e6) { if (last) C.flowStillOff++; }
   }

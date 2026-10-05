@@ -70,6 +70,9 @@ B.isRotated = function (rt) {
 B.modeOf = function (st, k) {
   var rec = st.recs[k];
   if (rec.type !== "FRAME" && rec.type !== "COMPONENT") return "NONE";
+  // A flow the repair pass gave up (a frame Figma cannot make as small as the source under its
+  // padding): its children are placed by matrix from then on.
+  if (st.flowDropped && st.flowDropped[k]) return "NONE";
   var m = st.ctx.prop(rec, "layoutMode");
   return m || "NONE";
 };
@@ -95,7 +98,7 @@ B.newBuild = function (ctx, task) {
   var recs = task.nodes, n = recs.length;
   var st = { ctx: ctx, task: task, recs: recs, n: n, settings: task.settings, pos: {}, parentK: [], kids: [], depth: [],
     node: [], builtType: [], want: [], native: [], fixed: [], isRoot: [], attachTo: [], attach: [], attachMode: [],
-    rootKs: [], pinned: {}, rotPinned: {}, flowAbs: {}, textPinned: [], textWidened: [], fontSubs: {}, fontSubOrder: [],
+    rootKs: [], pinned: {}, rotPinned: {}, flowAbs: {}, flowDropped: {}, textPinned: [], textWidened: [], fontSubs: {}, fontSubOrder: [],
     placeholders: 0, builtCount: 0, counters: {}, images: null,
     detail: { imagesRemapped: 0, typeFallbacks: 0, vectorOriginShifted: 0, flowSiblingGuard: 0, flowSiblingWorst: 0,
       flowGroupNodes: 0, flowGroupsRejected: 0, textTrimSkipped: 0, quarterTurnsBaked: 0 } };
@@ -370,6 +373,10 @@ function createOne(st, k) {
   } else {
     B.writeProps(st, k, node);
     if (creation) B.writeAutoLayout(st, k, node);
+    // Figma makes a section with a stroke list of its own (weight 1: every section of the first live
+    // builds of P and K, 2026-10-05, read one), which the IR's SECTION never carries (Pixso's section
+    // strokes are SOURCE_FEATURE_UNSUPPORTED): the creation default is written away, as the IR says.
+    if (bt === "SECTION" && "strokes" in node) B.set(st, node, i, "strokes", []);
     st.builtCount++;
   }
   // A root is stamped at once, as partial: a task that dies leaves a root a later clean can find.

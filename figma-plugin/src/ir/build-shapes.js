@@ -68,6 +68,23 @@ B.vectorsPhase = async function (st) {
           return g.fills ? { windingRule: g.windingRule, loops: g.loops, fills: IR.mapPaints(ctx, g.fills, rec.i) } : g;
         }) };
       }
+      // The node's cornerRadius rounds every vertex without its own (Pixso draws it so). Figma keeps a
+      // vector's radius per vertex: the node's, written at creation, does not survive the network,
+      // whose vertices come back sharp (the first live build of P, 2026-10-05: four vectors drawn
+      // with sharp corners, and a boolean over one of them boxed to the sharp drawing). So the node's
+      // radius goes onto each vertex that has none (detail.vertexRadiusFromNode).
+      var nodeR = ctx.prop(rec, "cornerRadius");
+      if (net && Array.isArray(net.vertices) && typeof nodeR === "number" && nodeR > 0 &&
+        net.vertices.some(function (v) { return v && typeof v.cornerRadius !== "number"; })) {
+        net = { vertices: net.vertices.map(function (v) {
+          if (!v || typeof v.cornerRadius === "number") return v;
+          var o = {};
+          for (var key in v) if (Object.prototype.hasOwnProperty.call(v, key)) o[key] = v[key];
+          o.cornerRadius = nodeR;
+          return o;
+        }), segments: net.segments, regions: net.regions };
+        st.detail.vertexRadiusFromNode = (st.detail.vertexRadiusFromNode || 0) + 1;
+      }
       ctx.progress();
       try { await node.setVectorNetworkAsync(net); }
       catch (e) { ok = false; ctx.code(CODE.VECTOR_NETWORK_REFUSED, rec.i, msgOf(e)); }

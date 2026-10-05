@@ -114,7 +114,9 @@ const FRAME_DEFAULTS = { strokeAlign: "INSIDE", layoutMode: "NONE", layoutWrap: 
 const TYPE_DEFAULTS = {
   FRAME: Object.assign({ fills: [SOLID(1, 1, 1)], clipsContent: true, size: [100, 100] }, FRAME_DEFAULTS),
   COMPONENT: Object.assign({ fills: [SOLID(1, 1, 1)], clipsContent: false, size: [100, 100] }, FRAME_DEFAULTS),
-  SECTION: { fills: [SOLID(1, 1, 1)], size: [100, 100] },
+  // createSection gives a section a stroke list that is not empty, weight 1 (C: the first live builds of
+  // P and K, 2026-10-05); the paint itself was not read (I: a black solid here).
+  SECTION: { fills: [SOLID(1, 1, 1)], strokes: [SOLID(0, 0, 0)], size: [100, 100] },
   RECTANGLE: { fills: [SOLID(0.85, 0.85, 0.85)], strokeAlign: "INSIDE", size: [100, 100] },
   ELLIPSE: { fills: [SOLID(0.85, 0.85, 0.85)], strokeAlign: "INSIDE", arcData: { startingAngle: 0, endingAngle: 6.283185307179586, innerRadius: 0 }, size: [100, 100] },
   POLYGON: { fills: [SOLID(0.85, 0.85, 0.85)], strokeAlign: "INSIDE", pointCount: 3, size: [100, 100] },

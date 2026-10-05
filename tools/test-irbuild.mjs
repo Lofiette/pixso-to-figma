@@ -545,15 +545,19 @@ const mixedNodes = () => [
 }
 {
   // Review figma F4: a 32 px child saying STRETCH in a 36 px row hugging its counter axis, which
-  // Pixso centres (y = 2). Figma ignores a child's MIN / CENTER / MAX (docs/FINDINGS.md: 0 aligned),
-  // so the flow pass takes it out of the flow onto its place, and it stays there.
+  // Pixso centres (y = 2). Figma ignores a child's MIN / CENTER / MAX (docs/FINDINGS.md: 0 aligned).
+  // Since the first live build of P (2026-10-05) the flow pass tries the row's own counter alignment
+  // before taking the child out of the flow: CENTER puts it at its place and the 36 px sibling stays,
+  // so it stays in the flow.
   const nodes = [frame(0, -1, [T6(0, 0), 200, 36], { layoutMode: "HORIZONTAL", primaryAxisSizingMode: "FIXED", counterAxisSizingMode: "AUTO", itemSpacing: 8 }),
     rect(1, 0, [T6(0, 0), 40, 36]), rect(2, 0, [T6(48, 2), 32, 32], { layoutAlign: "STRETCH" })];
   const E = env();
   const { R, ctx } = await build(E, mkTask({ nodes }));
   const n = nodeOf(E, ctx, 2);
-  check(near(n.relativeTransform[1][2], 2, 0.5) && near(n.relativeTransform[0][2], 48, 0.5) && R.counters.flowAligned === 0 && R.counters.flowAbsolute === 1,
-    "a child Pixso centres in a hugging row ends at its place out of the flow; no per-child alignment is counted as done", JSON.stringify([n.relativeTransform, R.counters.flowAligned, R.counters.flowAbsolute]));
+  check(near(n.relativeTransform[1][2], 2, 0.5) && near(n.relativeTransform[0][2], 48, 0.5) && R.counters.flowAligned === 0 && R.counters.flowAbsolute === 0 &&
+    R.detail.flowParentAligned === 1 && nodeOf(E, ctx, 0).counterAxisAlignItems === "CENTER" && n.layoutPositioning === "AUTO",
+    "a child Pixso centres in a hugging row ends at its place in the flow, by the row's counter alignment; no per-child alignment is counted as done",
+    JSON.stringify([n.relativeTransform, R.counters.flowAligned, R.counters.flowAbsolute, R.detail.flowParentAligned]));
 }
 {
   // Review figma F7 and F9: native booleans in an auto-layout flow. One ABSOLUTE at (250, 40), one
@@ -919,6 +923,95 @@ check(DOUBLE_FEATURES.layout === true && DOUBLE_FEATURES.text === true, "the dou
     const { ctx } = await build(E, task);
     const x4 = E.D.node(ctx.S.nodes["4"]).absoluteBoundingBox.x;
     check(near(x4, 40, 0.5), "flow: the visible sibling of a hidden flow child is put back at its source position", x4);
+  }
+}
+
+// ============================================================================================
+// 13. the first live builds of P and K (2026-10-05): each case built, verified and judged on the double
+// ============================================================================================
+{
+  const judged = async (nodes) => {
+    const task = mkTask({ nodes });
+    valid("live-build case", task);
+    const E = env();
+    const { R, ctx } = await build(E, task);
+    const vt = Object.assign({}, task, { op: "verify" });
+    const V = await E.IR.ops.verify(E.IR.makeCtx(E.figma, vt, { id: "v" }), vt);
+    const values = []; for (const k of Object.keys(task.values)) values[Number(k)] = task.values[k];
+    const ir = { nodes: task.nodes.map((t) => ({ parent: t.parent, guid: t.guid, type: t.type, name: t.name, props: t.props })), values, notes: [] };
+    return { E, R, ctx, J: judgeTask({ ir, task, build: R, verify: JSON.parse(JSON.stringify(V)) }) };
+  };
+  const row = (p) => frameProps(Object.assign({ layoutMode: "HORIZONTAL", primaryAxisSizingMode: "FIXED", paddingTop: 6, paddingBottom: 6, itemSpacing: 6, clipsContent: false }, p));
+  const filler = (i, parent, box) => frame(i, parent, box, { layoutGrow: 1, layoutMode: "HORIZONTAL", primaryAxisSizingMode: "FIXED", counterAxisSizingMode: "AUTO", clipsContent: false });
+  {
+    // P: a flow child that fills the row but sits where the row's alignment does not put it (Pixso
+    // centres it in a hugging MIN row). Figma ignores the child's own alignment, and the child cannot
+    // leave the flow alone (it grows along it, so its sibling would take its place): the row's own
+    // counter alignment that puts it right, with every sibling staying, is taken.
+    const nodes = [frame(0, -1, [T6(0, 0), 700, 100]),
+      rec(1, 0, "FRAME", [T6(0, 0), 588, 36], row({ counterAxisSizingMode: "AUTO" })),
+      rect(2, 1, [T6(0, 6), 20, 24], { visible: false }),
+      filler(3, 1, [T6(0, 8), 562, 20]),
+      rect(4, 3, [T6(0, 0), 140, 20]),
+      rect(5, 1, [T6(568, 6), 20, 24])];
+    const { E, R, ctx, J } = await judged(nodes);
+    const p = nodeOf(E, ctx, 1), c = nodeOf(E, ctx, 3);
+    check(J.geometry.visibleOver05 === 0 && R.detail.flowParentAligned === 1 && p.counterAxisAlignItems === "CENTER" && c.layoutPositioning === "AUTO" &&
+      nodeOf(E, ctx, 5).layoutPositioning === "AUTO" && R.counters.flowGroups === 0,
+      "flow: a fill child off its row's alignment is put right by the row's own counter alignment, everything kept in the flow",
+      JSON.stringify([J.geometry.visibleOver05, J.geometry.worst.slice(0, 3), R.detail, p.counterAxisAlignItems]));
+  }
+  {
+    // P: the same child at the start of a fixed CENTER row whose other child is centred: no alignment
+    // of the row puts both right, so the visible flow children leave the flow together, the row
+    // frozen at its size.
+    const nodes = [frame(0, -1, [T6(0, 0), 700, 100]),
+      rec(1, 0, "FRAME", [T6(0, 0), 588, 43], row({ counterAxisSizingMode: "FIXED", counterAxisAlignItems: "CENTER" })),
+      rect(2, 1, [T6(0, 6), 20, 24], { visible: false }),
+      filler(3, 1, [T6(0, 6), 562, 20]),
+      rect(4, 3, [T6(0, 0), 140, 20]),
+      rect(5, 1, [T6(568, 9.5), 20, 24])];
+    const { E, R, ctx, J } = await judged(nodes);
+    const p = nodeOf(E, ctx, 1);
+    check(J.geometry.visibleOver05 === 0 && R.detail.flowGroupsForOne === 1 && R.counters.flowGroups === 1 && nodeOf(E, ctx, 3).layoutPositioning === "ABSOLUTE" &&
+      nodeOf(E, ctx, 5).layoutPositioning === "ABSOLUTE" && p.counterAxisAlignItems === "CENTER" && near(p.width, 588, 0.01) && near(p.height, 43, 0.01),
+      "flow: a fill child no row alignment puts right leaves the flow with its visible siblings, the row frozen",
+      JSON.stringify([J.geometry.visibleOver05, J.geometry.worst.slice(0, 3), R.detail, R.counters.flowGroups]));
+  }
+  {
+    // K: a flow frame with a child, narrower than its own padding on the flow axis. Figma will not make
+    // it that small; it gives up the flow, and its child is placed by matrix where Pixso put it.
+    const nodes = [frame(0, -1, [T6(0, 0), 200, 100]),
+      component(1, 0, [T6(20, 20), 28, 28], { layoutMode: "HORIZONTAL", primaryAxisAlignItems: "CENTER", counterAxisAlignItems: "CENTER", paddingLeft: 16, paddingRight: 16, paddingTop: 4, paddingBottom: 4, itemSpacing: 8, clipsContent: false }),
+      rect(2, 1, [T6(6, 6), 16, 16])];
+    const { E, R, ctx, J } = await judged(nodes);
+    const n = nodeOf(E, ctx, 1), r = nodeOf(E, ctx, 2);
+    check(J.geometry.sizeVisibleOver05 === 0 && J.geometry.visibleOver05 === 0 && near(n.width, 28, 0.01) && n.layoutMode === "NONE" && n.paddingLeft === 16 &&
+      R.counters.layoutDroppedForSize === 1 && R.detail.layoutDroppedWithChildren === 1 && near(r.relativeTransform[0][2], 6, 1e-9),
+      "repair: a flow frame with a child, under its padding, keeps its size and padding values, gives up the flow, and its child keeps its place",
+      JSON.stringify([n.width, n.layoutMode, r.relativeTransform, R.counters.layoutDroppedForSize, J.geometry.worst]));
+  }
+  {
+    // P: a vector whose node carries a corner radius. Figma keeps a vector's radius per vertex, so the
+    // node's radius goes onto each vertex without its own; a vertex's own radius stays.
+    const net = { vertices: [{ x: 0, y: 0 }, { x: 10, y: 0, cornerRadius: 3 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
+      segments: NET_SQUARE.segments, regions: NET_SQUARE.regions };
+    const nodes = [frame(0, -1, [T6(0, 0), 100, 100]), vector(1, 0, [T6(10, 10), 10, 10], { vectorNetwork: net, cornerRadius: 2, fills: [SOLID(0, 0, 0)] }),
+      vector(2, 0, [T6(30, 10), 10, 10], { vectorNetwork: NET_SQUARE, fills: [SOLID(0, 0, 0)] })];
+    const { E, R, ctx } = await judged(nodes);
+    const sent = (i) => (E.D.writes.find((w) => w.id === nodeOf(E, ctx, i).id && w.prop === "setVectorNetworkAsync()") || {}).value;
+    const r1 = (sent(1) || { vertices: [] }).vertices.map((v) => v.cornerRadius), r2 = (sent(2) || { vertices: [] }).vertices.map((v) => v.cornerRadius === undefined ? null : v.cornerRadius);
+    check(same(r1, [2, 3, 2, 2]) && same(r2, [null, null, null, null]) && R.detail.vertexRadiusFromNode === 1,
+      "vectors: the node's corner radius goes onto every vertex without its own; a vector with none is written as it is", JSON.stringify([r1, r2, R.detail.vertexRadiusFromNode]));
+  }
+  {
+    // P and K: Figma's createSection gives the section a stroke the IR's SECTION never carries; the
+    // builder writes it away, so the section's sides are the IR's (none).
+    const nodes = [rec(0, -1, "SECTION", [T6(0, 0), 300, 200], { fills: [SOLID(1, 1, 1)] }), frame(1, 0, [T6(10, 10), 50, 50])];
+    const { E, ctx, J } = await judged(nodes);
+    const s = nodeOf(E, ctx, 0);
+    check(Array.isArray(s.strokes) && s.strokes.length === 0 && J.sides.checked === 0 && J.sides.mismatchIR.length === 0 && J.count.ok,
+      "sections: Figma's default section stroke is written away, so G8 finds the IR's none", JSON.stringify([s.strokes, J.sides]));
   }
 }
 
