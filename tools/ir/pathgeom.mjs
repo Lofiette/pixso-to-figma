@@ -70,7 +70,7 @@ export function pathBounds(data, matrix) {
   // Figma writes its paths with each command glued to its first number ("M0 0L10 0Z", P19B on
   // 2026-10-05); Pixso and the double write them spaced. Anything else (commas included) is refused.
   const tok = [];
-  const TOKEN = /\s*,?\s*([MLQCZ]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)/y;
+  const TOKEN = /\s*([MLQCZ]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)/y;
   let at = 0;
   while (at < text.length) {
     TOKEN.lastIndex = at;
