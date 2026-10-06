@@ -402,6 +402,31 @@ check("rule C, assignment held inside a master (planted, P's shape): the instanc
   same([g6.status, g6.why], ["PASS", []]);
 });
 
+// Rule C on one hop, the same assignment applied on another (review of claude/m2a; the Сова UI kit's
+// shape): Row gets a second icon, Lead 2 (5:410), bound to Lead icon too, and Rule C's derived data
+// shows Lead 2 swapped to Square while Lead keeps Circle. The assignment is dropped (ignored), so Lead 2's
+// swap is pinned; and a path under Lead that resolves only under the ignored swap does not resolve.
+const plantRuleCPartial = (value) => {
+  const nodeOf = (local) => value.pixsoNodes.find((n) => n.guid.sessionID === 5 && n.guid.localID === local);
+  const lead = nodeOf(402), inst = nodeOf(513);
+  const lead2 = JSON.parse(JSON.stringify(lead));
+  Object.assign(lead2, { guid: { sessionID: 5, localID: 410 }, name: "Lead 2", parentIndex: Object.assign({}, lead.parentIndex, { position: "g" }) });
+  lead2.componentPropRef = [Object.assign({}, lead.componentPropRef[0], { defID: { sessionID: 5, localID: 921 } })];
+  value.pixsoNodes.push(lead2);
+  const P2 = (...ls) => ({ guidPath: { guids: ls.map((l) => ({ sessionID: 5, localID: l })) }, size: { x: 10, y: 10 }, transform: { m00: 1, m01: 0, m02: 0, m10: 0, m11: 1, m12: 0 } });
+  inst.derivedSymbolData.push(P2(421, 410), P2(421, 410, 311), P2(421, 402, 311));
+};
+check("rule C on one hop, the same assignment applied on another: that hop is pinned; a path needing the ignored swap does not resolve", () => {
+  const p = read({}, plantRuleCPartial);
+  truth(validate(p.ir).ok, "invalid");
+  const o = ovAt(p.ir, M2A.iRuleC, P(M2A.cardRow, "5:410"));
+  truth(o, "Lead 2's swap Pixso drew is not pinned");
+  same([o.swap, ovAt(p.ir, M2A.iRuleC, P(M2A.cardRow, M2A.rowLead))], [{ guid: M2A.square }, undefined]);
+  truth(notesOf(p.ir, M2A.iRuleC, schema.CODE.STALE_ASSIGNMENT).some((x) => x.detail.startsWith("ignored")), "the ignored assignment is kept");
+  truth(!derAt(p.ir, M2A.iRuleC, P(M2A.cardRow, M2A.rowLead, M2A.squareShape)), "a path that needs the ignored swap is written");
+  same([p.stats.m2a.derived.unresolved, p.stats.m2a.overrides.swaps.pinned], [1, 1]);
+});
+
 // Removals (review of claude/m2a): Row's Bg gets the local fill style and per-side weights [2, 1, 1, 1];
 // Text styles' [Bg] entry detaches the style (0:0, no paints) and sets the top weight to 1, so the sides
 // become uniform with strokeWeight 1, the baseline's. Neither the detach nor the uniform sides is a

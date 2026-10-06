@@ -384,6 +384,18 @@ function valueOf(type, v, st) {
   return { symbol: valueGuid(v) };
 }
 
+// The declared root (its IR definition) that the id names, read from symbolGuid as a binding in that
+// symbol is (bindingOf, by identity), or null when the family declares none: what M2b can bind.
+export function declaredRoot(cx, symbolGuid, id) {
+  if (!symbolGuid || !id) return null;
+  state(cx);
+  const P = cx.props, scope = P.scopeOf(symbolGuid);
+  const c = scope ? P.chain(scope, id, symbolGuid) : null;
+  if (!c || !c.def) return null;
+  const decl = declarations(cx, cx.families ? cx.families.familyOf(symbolGuid) : symbolGuid).byId.get(c.def.id);
+  return decl && decl.def === c.def ? decl.ir : null;
+}
+
 // Whether assignments(cx, symbolGuid, [a]) would keep the raw assignment a (ignored and merged apart):
 // its id defined on the master symbol or its state group, reaching a root the family declares, and,
 // for an INSTANCE_SWAP root, a value the IR can reference. No counter moves. overrides.mjs asks it

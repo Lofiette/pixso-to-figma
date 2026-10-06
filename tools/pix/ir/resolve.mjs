@@ -278,6 +278,9 @@ export function makeResolver(cx) {
           r.ignored = items;
           return r;
         }
+        // The path runs through a hop rule C draws with its declared symbol, and resolves only under the
+        // swap rule C ignored: no layer the IR draws is there, so it does not resolve (review of claude/m2a).
+        return { ok: false, at: r.at, why: "it resolves only under a swap rule C ignored at an earlier hop" };
       }
     }
     return own;

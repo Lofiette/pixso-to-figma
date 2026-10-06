@@ -272,7 +272,7 @@ export function m2aGates(ir, stats, ctx) {
       g.need(ic.overrideFields === inIR, "the IR's overrides hold " + fmt(ic.overrideFields) + " fields, not carried " + fmt(F.carried) + (keep ? " + echo " + fmt(F.echo) + " (--echo keep writes the echoes)" : " (--echo drop writes no echo)"));
       g.line = "entries " + fmt(O.entries) + " = root " + fmt(O.root) + " + empty path " + fmt(O.emptyPath) + " + live " + fmt(O.live) + " + stale " + fmt(O.stale) +
         "; live = " + fmt(O.distinct) + " paths + " + fmt(O.mergedAway) + " merged away; paths = " + fmt(O.written) + " written + " + fmt(O.emptyAfter) +
-        " empty" + (O.pinned ? " (+ " + fmt(O.pinned) + " pinned by rule C)" : "") + "; Pixso fields " + fmt(PF.total) + " = " + fmt(PF.translated) + " + " + fmt(PF.consumed) + " + " + fmt(dropped) + "; Figma fields " + fmt(F.produced) +
+        " empty" + (O.pinned ? " (+ " + fmt(O.pinned) + " pinned swaps)" : "") + "; Pixso fields " + fmt(PF.total) + " = " + fmt(PF.translated) + " + " + fmt(PF.consumed) + " + " + fmt(dropped) + "; Figma fields " + fmt(F.produced) +
         " = " + fmt(F.carried) + " carried + " + fmt(F.echo) + " echo" + (keep ? " (kept)" : "");
     }
     gates.push(g);

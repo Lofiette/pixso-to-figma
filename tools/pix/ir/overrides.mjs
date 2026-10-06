@@ -90,7 +90,7 @@ import { frameLayoutProps, childLayoutProps, isAutoLayout } from "./layout.mjs";
 import { textProps } from "./text.mjs";
 import { drawnStyles } from "./styles.mjs";
 import { masterRef } from "./components.mjs";
-import { assignments, keeps } from "./properties.mjs";
+import { assignments, declaredRoot, keeps } from "./properties.mjs";
 import { derivedEntries } from "./derived.mjs";
 
 const T = (to, by) => Object.freeze({ fate: "translate", to: Object.freeze(to), by });
@@ -456,19 +456,22 @@ function boundOf(cx, X, guids, res) {
   return out;
 }
 
-// D7 rule 2 as M2b will see it: the symbol the first pool's last assignment that assignments() keeps
-// gives the nested instance node (element k of guids, in the symbol cur), or null when none does.
-function keptSwapGives(cx, X, guids, k, res, node, cur) {
+// D7 rule 2 as M2b will see it: the symbol the first pool's last assignment that the IR keeps gives the
+// nested instance node (element k of guids, in the symbol cur), through a binding the IR keeps, or null
+// when none does. dropped(pool, a): an assignment this instance's pass drops besides what assignments()
+// would (rule C's ignored ones).
+function keptSwapGives(cx, X, guids, k, res, node, cur, dropped) {
   const P = cx.props, scope = cur ? P.scopeOf(cur) : null;
   if (!scope) return null;
   const pools = cx.resolver.poolsFor(guids, k, res.holders.filter((h) => h.start <= k));
   for (const r of node.componentPropRef || []) {
     if (!r || !guidSet(r.defID) || X.fieldOf(r.componentPropNodeField) !== "OVERRIDDEN_SYMBOL_ID") continue;
     const root = P.rootOf(scope, guidStr(r.defID), cur);
-    if (!root) continue;
+    const bound = declaredRoot(cx, cur, guidStr(r.defID));
+    if (!root || !bound || bound.type !== "INSTANCE_SWAP") continue;
     for (const pool of pools) {
       let hit = null;
-      for (const a of pool.list) if (a && guidSet(a.defID) && P.rootOf(scope, guidStr(a.defID), cur) === root && keeps(cx, cur, a)) hit = a;
+      for (const a of pool.list) if (a && guidSet(a.defID) && P.rootOf(scope, guidStr(a.defID), cur) === root && keeps(cx, cur, a) && !dropped(pool, a)) hit = a;
       if (hit) return guidStr(hit.value.guidValue);
     }
   }
@@ -630,6 +633,15 @@ export function instanceData(cx, n, i, master, indexOf) {
   }
 
   // ---- 3b. swaps decided by an assignment the IR drops (D7 rule 2, docs/M2A.md §0.2) ----
+  // Rule C drops an ignored assignment this instance holds; where the same assignment decided another
+  // hop that Pixso did draw swapped, that hop is pinned too.
+  const droppedHere = (pool, a) => {
+    if (!pool.src || pool.src.instance !== g || !a || !guidSet(a.defID)) return false;
+    const id = guidStr(a.defID), p = pool.src.path;
+    if (!p || p.length === 0 || (p.length === 1 && p[0] === S0)) return ignoredOwn.has(id);
+    const s = ignoredAt.get(p.join("/"));
+    return !!s && s.has(id);
+  };
   // Rule 2 matches an assignment by its root anywhere in the definition scope, and the derived paths
   // below such a hop resolve only under the swap, so Pixso drew it; assignments() keeps only ids defined
   // on the owning symbol or its state group (§0.2's "reached", which REWRITE's counts follow) and a
@@ -645,7 +657,7 @@ export function instanceData(cx, n, i, master, indexOf) {
       const pk = gg.slice(0, k + 1).join("/");
       if (pins.has(pk)) return;
       const cur = k === 0 ? S0 : res.elements[k - 1].symbol;
-      if (keptSwapGives(cx, X, gg, k, res, x.n, cur) === x.symbol) return;
+      if (keptSwapGives(cx, X, gg, k, res, x.n, cur, droppedHere) === x.symbol) return;
       pins.set(pk, { hop: gg.slice(0, k + 1), symbol: x.symbol });
     });
   }
