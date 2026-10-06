@@ -213,7 +213,14 @@ four `border*Weight` and `borderStrokeWeightsIndependent`, `componentPropAssignm
 `textDecoration`, `textTruncation`, `toggledOffOTFeatures`, `toggledOnOTFeatures`, `variableConsumptionMap`,
 `variableModeBySetMap`, `vectorPaints`, `vectorStyles`, `visible`. P also: `variableConsumptionMap` 5 293,
 `overrideLevel` 5 186, `fontVariations` 4 482, `pluginData` 3 894 and `stackChildCounterSizing` 61 651. D8's
-translation table (§5.1) is built from this list, and a field outside it is never silently ignored.
+translation table (§5.1) is built from this list, and a field outside it is never silently ignored. **P0 (C):** the
+list is 98 fields on D, K, M and P together (the `stack*` fields are `stackCounterAlignContent`,
+`stackCounterAlignItems`, `stackCounterSizing`, `stackCounterSpacing`, the four `stackPadding*`,
+`stackPrimaryAlignItems`, `stackPrimarySizing`, `stackSpacing`; the `fontVariant*` ones `fontVariantNumericFigure`,
+`fontVariantNumericFraction`, `fontVariantNumericSpacing`, `fontVariantPosition`). The Сова UI kit (U, 181 344 entries)
+adds four: `exportNameByVariantProp`, `groupIncludeInvisible`, `showInSlice`, `textAlignVertical`;
+`OVERRIDE_SOURCE_FIELDS` gives them fates too, so U does not fail G6 with `unknown`. Derived paths are unique per
+instance in all five files (0 duplicates), so the IR keeps one derived entry per path.
 
 **Overrides on nested instances (C, review).** Non-root entries whose path is in `derivedSymbolData` and whose last
 element is a nested INSTANCE: 640 / 4 074 / 20 618 / 43 761; of them, carrying a look field (paints, a fill, stroke or
@@ -317,6 +324,11 @@ Owner decision: every policy is a setting with a stated default (REWRITE §11). 
 
 Not settings, because a measurement rules the alternative out: guidPaths in local guids (never `overrideKey`), outer
 swaps winning over inner ones, definitions keyed by (family, id) and never by name, type and default from the root.
+
+The header keys (P0, `schema.M2A_SETTINGS`, in this table's order) are the flags in camel case: `variantSets`,
+`variantGrammar`, `axisOrder`, `swapDangling`, `swapReset`, `swapFallback`, `swapDefault`, `rejectedProps`,
+`defaultAssignments`, `overrideMerge`, `echo`, `instanceOwn`, `derivedGeometry`. The reader takes each under the same
+name (`readerSettings`); `pix-to-ir` and `pix-run` flags are part D's.
 
 ## 4. Data flow
 
@@ -423,9 +435,11 @@ families.mjs   (A)  familyIndex(cx) -> { setOf(symbolGuid) -> stateGroupGuid|nul
                     rejected: Map(groupGuid -> class), recordType(n, planned) -> "COMPONENT_SET"|planned }
                     stub: no group accepted, none rejected, no notes (M1's D7, as `--variant-sets frames`)
 propindex.mjs  (P0, implemented) propIndex(cx) -> { scopeOf(symbolGuid) -> stateGroupGuid|symbolGuid,
-                    defsOf(ownerGuid), rootOf(scopeGuid, defId) -> def|null,
-                    why(scopeGuid, defId) -> "root"|"alias"|"no-definition"|"other-family"|"no-root",
-                    symbolKnown(guid) -> bool, refOf(guid) -> masterRef|null }   (D3, D5)
+                    defsOf(ownerGuid), rootOf(scopeGuid, defId, from?) -> def|null,
+                    why(scopeGuid, defId, from?) -> "root"|"alias"|"no-definition"|"other-family"|"no-root",
+                    symbolKnown(guid) -> bool, refOf(guid) -> masterRef|null,
+                    chain(scopeGuid, defId, from?) -> {def, why, hops}, owners }   (D3, D5; `from`, the
+                    symbol the id is read from, `chain` and `owners` added by P0, §13 P0-1)
 properties.mjs (B)  propertiesOf(cx, familyGuid) -> [definition]; bindingsOf(cx, n, i) -> componentPropertyReferences|null;
                     assignments(cx, symbolGuid, raw[], {nested, ignored: Set(defId)}) ->
                       {kept:[{family,id,value}], dropped:[{code, class, defId}]}   (every raw assignment in exactly one)
@@ -473,7 +487,8 @@ Pixso's names and real numbering kept different from the real files as today: `p
 - **entries**: a root entry `[symbolID]` and an empty-path one on the same instance, with a `size` equal to the
   record's and one different, and a fill; duplicate paths with a conflicting field and differing `overrideLevel`; echo
   fields (direct, and through a master's nested-instance override); dropped fields (`vectorPaints`, `pluginData`); a
-  field outside `OVERRIDE_SOURCE_FIELDS` (must fail G6); a fill override on a GROUP layer (`not-on-type`); a fill and
+  field outside `OVERRIDE_SOURCE_FIELDS` (must fail G6; a plant, `M2A_PLANTS.unknownOverrideField`, not a case of
+  the base fixture, which must pass every gate, §7, §13 P0-5); a fill override on a GROUP layer (`not-on-type`); a fill and
   a style override on a nested INSTANCE layer (carried); a `characters` override on a text bound to a TEXT property
   that is also assigned; a no-op swap (kept); a text override with a style table; a size override; a style reference
   in an override; an override on a folded boolean operand;
@@ -492,7 +507,11 @@ to run under `--variant-sets frames` (§9).
 
 `tools/selftest.mjs` gets section 10: `test-m2a-families.mjs` (A), `test-m2a-props.mjs` (B), `test-m2a-instances.mjs`
 (C), `test-m2a-run.mjs` (D) and `test-m2a-e2e.mjs` (E), each committed by P0 as a stub printing `pending: part X`
-with the checks it must hold listed in its header.
+with the checks it must hold listed in its header. Section 10 runs `test-m2a-contract.mjs` (P0's, kept: the seam,
+never a part's decisions) first. A stub never passes: it exits 2 while its part's code is still P0's stub (each stub
+module exports `STUB`; D's evidence is `tools/m2a-accept.mjs`, E's that A-D have all landed), which selftest prints as
+pending without failing, and it exits 1 once the part's code is in but the stub is still there, which fails selftest
+(§13 P0-6).
 
 **P0 is done when** selftest passes with the stubs, the reader on the fixture writes a valid v3 IR equal to M1's
 apart from the version and the header settings, M1's e2e (`test-m1-e2e.mjs`) passes unchanged on it, the tasks from
@@ -640,7 +659,9 @@ on a busy machine, against the 0.7 / 4.6 / 3.1 / about 11 s quoted before).
 |---|---|---|---|---|---|---|
 | tools/ir/schema.mjs, tools/ir/validate.mjs, tools/test-ir.mjs, docs/IR.md | ✎ | | | | | ✎ after merge |
 | tools/ir/props.mjs | ✎ first version | | | ✎ | | |
-| tools/ir/task.mjs, tools/ir/judge.mjs, tools/test-m1-contract.mjs, tools/selftest.mjs | ✎ (`taskType`, D13) | | | | | |
+| tools/ir/task.mjs, tools/ir/judge.mjs, tools/ir/identity.mjs, tools/test-m1-contract.mjs, tools/selftest.mjs | ✎ (`taskType`, D13; §13 P0-7) | | | | | |
+| tools/test-m2a-contract.mjs, tools/test/m2a-stub.mjs | ✎ | | | | | ✎ after merge |
+| M1's tests that wrote the IR version as a literal 2 (test-irbuild, test-irverify, test-m1-e2e, test-pixrun, test-plugin); test-pix (the fixture's node counts) | ✎ version and counts only | | | | | |
 | tools/ir/not-codes.json | ✎ | | | | | ✎ |
 | tools/pix/ir/index.mjs, tools/pix/ir/nodes.mjs, tools/test-irread.mjs | ✎ seam | | | | | ✎ after merge |
 | tools/pix/fixture.mjs | ✎ cases | | | | | ✎ after merge |
@@ -761,3 +782,21 @@ read-only probes of D, K, M and P (counts only; scripts outside the repository).
 | R20 | silent change of content | D5's finding (Pixso draws the bound layer, not `initialValue`) was not asked for TEXT and BOOLEAN roots, nor for INSTANCE_SWAP roots whose bound layers disagree; TEXT `stringValues` vanished | D5, §6 B: `swapDefaultLayersDisagree`, `boundLayerDiffers`, `stringValuesDropped`; render pair in §10 |
 | R21 | contradicts a measurement | the streamed-writer contingency and the quoted reader times | §11: v2 IR 4.3 / 32.5 / 15.9 / 32.2 MB; §8: times from the same run |
 | R22 | numbers vs order | §1.1's split by class came from another class order and has no `no-equals` | §1.1, §6 A: totals gate, split recorded under D2's order |
+
+### P0's findings (2026-10-06), folded into this edition
+
+Implementing §5 met these. Counts are D / K / M / P, then the Сова UI kit (**U**, 181 344 override entries, an extra
+check only) where it differs; scripts outside the repository, as for §1.
+
+| # | finding | resolution |
+|---|---|---|
+| P0-1 | One definition id sits on several owners of one scope: with the same parent 99 / 365 / 4 438 / 8 391 (the same-id model, harmless); with **different parents** 0 / 0 / 0 / 81 (U 250); as a root on one member and an alias on another 0 / 0 / 3 / 12 (U 6). Read without knowing which member it sits on, 0 / 0 / 3 / 16 bindings (U 35) reach another root, and P's `type-mismatch` is 92 instead of §1.2's 94 | `propindex.mjs` `rootOf`, `why` and `chain` take `from`, the symbol the id is read from (a bound layer's enclosing SYMBOL, an instance's master), and prefer its own definition, then the scope owner's, then one with no parent, then the first stored. With it P gives 94. The fixture holds such an id (Chip's 5:913) and the contract test pins both readings (§5.3) |
+| P0-2 | The override census of §1.3 is 98 fields on D, K, M and P; U adds four (`exportNameByVariantProp`, `groupIncludeInvisible`, `showInSlice`, `textAlignVertical`). Entries 9 185 / 63 936 / 68 984 / 148 848 confirm §1.3 | `OVERRIDE_SOURCE_FIELDS` gives all 102 and `guidPath` a fate (70 translated, 7 consumed, 26 dropped), so U does not fail G6 with `unknown`; the contract test holds the list |
+| P0-3 | Definitions are owned by SYMBOLs and state-group FRAMEs in D, K, M and P; U has 5 INSTANCE owners | `scopeOf`: any other owner is its own scope. Such definitions are no family's roots; B decides and counts them |
+| P0-4 | Derived paths are unique per instance in all five files (0 duplicates; derived entries 35 808 / 160 982 / 86 941 / 342 679, U 320 160) | the validator refuses a second derived entry for one path, as it does for overrides |
+| P0-5 | §5.4 asked for "a field outside `OVERRIDE_SOURCE_FIELDS` (must fail G6)" as a fixture case, while §7 wants `m2a-accept` on the fixture's run folder to pass every gate | it is a plant, `M2A_PLANTS.unknownOverrideField` (`makeFixture("valid", { mutate })`), as M1's damaged variants are; E's planted-fault test uses it |
+| P0-6 | §5.5's stubs "print pending", which alone would let a part merge its code with its test still a stub | each stub exits 2 (selftest prints it as pending and passes) while its part's code is P0's stub, and exits 1 (selftest fails) once that code has landed without the test (§5.5) |
+| P0-7 | M1's identity sample (`identity.mjs` `sampleGuids`) picks its candidates by `BUILT_TYPE` of the IR type, so a COMPONENT_SET record would leave the sample and shift every later pick; the file is not in §5.2's list | it uses `taskType` too, and its Pixso type check takes FRAME or COMPONENT_SET for either IR type; the contract test checks that the sample does not depend on `--variant-sets` (§9 row updated) |
+| P0-8 | D12 pulls in "the masters of nested instances along live paths", which only C's resolver can tell | the closure follows every override entry, live or stale, and every assignment and definition default: a superset, at worst one more top-level object. C may narrow it |
+| P0-9 | §5.1 leaves a few checks implicit | the validator also requires: a note with a `path` names an INSTANCE record; `exposed` only on an instance inside a COMPONENT record; VARIANT_SET_REJECTED names a FRAME record. An override's `properties` without a `swap` must name families in the IR; the effective family of the target is C's to apply (STALE_ASSIGNMENT `nested`), not the validator's. `props.mjs` exports `ROOT_OVERRIDE_FIELDS` (COMPONENT's props less INSTANCE's: the `path` [] look) |
+| P0-10 | P0's done-when, measured | on D, K, M, P and U, the P0 reader writes an IR equal to M1's apart from the header's version and settings, the tasks equal M1's apart from `irVersion`, and `pix-run --dry --no-pixso` prints M1's balances, identical; the four M2a phases take at most 92 ms (the definition index, on U) |
