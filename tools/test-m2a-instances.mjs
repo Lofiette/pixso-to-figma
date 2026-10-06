@@ -402,6 +402,29 @@ check("rule C, assignment held inside a master (planted, P's shape): the instanc
   same([g6.status, g6.why], ["PASS", []]);
 });
 
+// Removals (review of claude/m2a): Row's Bg gets the local fill style and per-side weights [2, 1, 1, 1];
+// Text styles' [Bg] entry detaches the style (0:0, no paints) and sets the top weight to 1, so the sides
+// become uniform with strokeWeight 1, the baseline's. Neither the detach nor the uniform sides is a
+// field value an override can hold: the sides are written through strokeWeight, and the detach, which
+// no written field carries, is dropped "no-equivalent" instead of counted translated with nothing to show.
+const plantRemovals = (value) => {
+  const nodeOf = (local) => value.pixsoNodes.find((n) => n.guid.sessionID === 5 && n.guid.localID === local);
+  const style = nodeOf(520).symbolData.symbolOverrides.find((o) => o.inheritFillStyleID).inheritFillStyleID;
+  Object.assign(nodeOf(404), { inheritFillStyleID: style, borderTopWeight: 2, borderRightWeight: 1, borderBottomWeight: 1, borderLeftWeight: 1 });
+  const e = nodeOf(521).symbolData.symbolOverrides.find((o) => o.guidPath.guids.length === 1 && o.guidPath.guids[0].localID === 404);
+  Object.assign(e, { inheritFillStyleID: { sessionID: 0, localID: 0 }, borderTopWeight: 1, borderRightWeight: 1, borderBottomWeight: 1, borderLeftWeight: 1 });
+};
+check("planted removals: uniform sides are written as strokeWeight; a style detach no field carries is dropped no-equivalent", () => {
+  const p = read({}, plantRemovals);
+  truth(validate(p.ir).ok, "invalid");
+  const bg = ovAt(p.ir, M2A.iTextStyles, P(M2A.rowBg)).fields;
+  same([bg.strokeWeight, bg.strokeWeights, bg.fillStyle], [1, undefined, undefined]);
+  const d = notesOf(p.ir, M2A.iTextStyles, schema.CODE.OVERRIDE_FIELD_DROPPED).map((x) => x.detail);
+  same(d, ["no-equivalent: inheritFillStyleID 1"]);
+  same(p.stats.m2a.overrides.pixsoFields.dropped["no-equivalent"].inheritFillStyleID, 1);
+  balances(p.stats, "planted removals");
+});
+
 // ---------- 4. the census (docs/M2A.md §1.3) ----------
 const CENSUS = ["arcData", "autoCornerRadius", "autoLayoutAbsolutePos", "autoLayoutIncludeBorders", "autoLayoutItemReverseDraw",
   "borderBottomWeight", "borderLeftWeight", "borderRightWeight", "borderStrokeWeightsIndependent", "borderTopWeight", "componentPropAssignment",

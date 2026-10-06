@@ -226,6 +226,12 @@ const OWN_FIGMA = ["fills", "fillStyle", "strokes", "strokeStyle", "effects", "e
 const OWN_SET = new Set(OWN_FIGMA);
 const STYLE_FIELDS = ["fillStyle", "strokeStyle", "effectStyle"];
 const STYLE_SOURCE = { fillStyle: ["inheritFillStyleID", "fillPaints"], strokeStyle: ["inheritStrokeStyleID", "strokePaints"], effectStyle: ["inheritEffectStyleID", "effects"] };
+// A removal an override cannot write as a field (translate below): per-side weights and radii that
+// became uniform are written through the uniform setter; a style is cleared in Figma by writing the
+// paints, effects or text fields it styles, and maxLines by textTruncation.
+const REMOVAL_SETTER = { strokeWeights: "strokeWeight", cornerRadii: "cornerRadius" };
+const REMOVAL_CARRIER = { fillStyle: ["fills"], strokeStyle: ["strokes"], effectStyle: ["effects"], maxLines: ["textTruncation"],
+  textStyle: ["fontName", "fontSize", "letterSpacing", "lineHeight", "paragraphIndent", "paragraphSpacing", "textCase", "textDecoration"] };
 
 // A stable key for a raw Pixso value (typed arrays, bigints and NaN included), for the merge's conflicts.
 function rawKey(v) {
@@ -601,7 +607,7 @@ export function instanceData(cx, n, i, master, indexOf) {
   // notCarried, bound, path }; returns { written: { figma field: raw value }, composed } after echo, and
   // counts Pixso and Figma fields.
   const translate = (spec) => {
-    const set = new Set(), lookKeys = [];
+    const set = new Set(), lookKeys = [], lost = new Set();
     for (const k of Object.keys(spec.fields)) {
       L.total++;
       const f = own(OVERRIDE_SOURCE_FIELDS, k) ? OVERRIDE_SOURCE_FIELDS[k] : null;
@@ -626,10 +632,10 @@ export function instanceData(cx, n, i, master, indexOf) {
     const fc = X.sink.features;
     X.sink.features = null;
     newFeatures(fb, fc, spec.isRoot ? [] : spec.path);
-    const vals = new Map();
+    const vals = new Map(), removed = [];
     for (const f of [...set].sort()) {
       const comp = f === "name" ? (typeof Cn.name === "string" ? Cn.name : undefined) : pv(Fc, f);
-      if (comp === undefined) continue;
+      if (comp === undefined) { if ((f === "name" ? B.name : pv(Fb, f)) !== undefined) removed.push(f); continue; }
       // Ranges are a by-product of characters: none on either side is no field at all.
       if (f === "textRanges" && !own(Fc, f) && !own(Fb, f)) continue;
       let base = f === "name" ? B.name : pv(Fb, f);
@@ -638,6 +644,23 @@ export function instanceData(cx, n, i, master, indexOf) {
       vals.set(f, { comp, differs: canon(comp) !== canon(base === undefined ? null : base), bound });
     }
     for (const group of SETTERS) if (group.some((f) => vals.has(f) && vals.get(f).differs)) for (const f of group) if (vals.has(f)) vals.get(f).differs = true;
+    // A Figma field the baseline has and the composed layer lacks: the entry removes it (a style
+    // detached or naming none, maxLines cleared, per-side weights made uniform), which no override
+    // field can say. Uniform weights and radii are written through their setter, which replaces the
+    // per-side values; a style or maxLines removal is carried only by a written companion field
+    // (REMOVAL_CARRIER). Otherwise the Pixso field is dropped "no-equivalent", never counted translated
+    // with nothing to show for it.
+    for (const f of removed) {
+      const setter = REMOVAL_SETTER[f];
+      if (setter && vals.has(setter)) { vals.get(setter).differs = true; continue; }
+      if ((REMOVAL_CARRIER[f] || []).some((c) => vals.has(c) && (vals.get(c).differs || st.echo === "keep"))) continue;
+      for (const k of lookKeys) {
+        if (lost.has(k) || OVERRIDE_SOURCE_FIELDS[k].to.indexOf(f) < 0) continue;
+        lost.add(k);
+        L.translated--;
+        drop("no-equivalent", k);
+      }
+    }
     for (const [f, v] of vals) {
       L.produced++;
       if (!v.differs) {
