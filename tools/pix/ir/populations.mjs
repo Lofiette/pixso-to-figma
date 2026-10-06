@@ -5,8 +5,11 @@
 //   userTop                       the top-level records of user pages (S1)
 //   mastersNoInstance             internal-canvas COMPONENT records with no INSTANCE record below (S2)
 //   mastersWithInstanceInternal   internal-canvas COMPONENT records with an INSTANCE record below
-//   stateGroupsInternal           internal-canvas state-group FRAME records (their masters are roots
-//                                 of the two populations above, so the population is the frame alone)
+//   stateGroupsInternal           internal-canvas state-group records: an accepted set's COMPONENT_SET
+//                                 record or a rejected group's FRAME (docs/M2A.md D2, D13; under
+//                                 --variant-sets frames every group is a FRAME, as in M1). Their masters
+//                                 are roots of the two populations above, so the population is the
+//                                 group's record alone
 //   internalLoose                 the other internal-canvas records: the topmost record of each run
 //                                 that is in no master and is no state group
 // Two cut across them, record by record:
@@ -14,6 +17,9 @@
 //   lostBorder                    non-instance FRAME, COMPONENT and RECTANGLE records with a visible
 //                                 stroke of weight above 0 and no border*Weight field (§0.5; SECTIONs,
 //                                 which Figma draws without strokes, are counted apart in the stats)
+// A state group is told by meta.stateGroup, which the seam (nodes.mjs emit) sets for a stored FRAME with
+// isStateGroup whatever its record type, and by the type COMPONENT_SET itself; a COMPONENT_SET is never a
+// master (only COMPONENT records are), so the populations do not depend on --variant-sets (D13).
 // counts(ir, pops) gives, per partition population, its records split into non-instance and INSTANCE.
 export function populations(recs, meta, pages) {
   const P = { userTop: [], userMasters: [], mastersNoInstance: [], mastersWithInstanceInternal: [], internalLoose: [],
@@ -40,7 +46,7 @@ export function populations(recs, meta, pages) {
     } else if (isMaster) {
       // A master inside a master would belong to the outer one; none is measured (0 / 0 / 0).
       if (!(r.parent >= 0 && inMaster[r.parent])) (below[i] ? P.mastersWithInstanceInternal : P.mastersNoInstance).push(i);
-    } else if (meta[i].stateGroup && !(r.parent >= 0 && inMaster[r.parent])) {
+    } else if ((meta[i].stateGroup || r.type === "COMPONENT_SET") && !(r.parent >= 0 && inMaster[r.parent])) {
       P.stateGroupsInternal.push(i);
     } else if (!inMaster[i]) {
       loose[i] = true;
