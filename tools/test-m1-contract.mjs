@@ -301,6 +301,31 @@ check(/props is tools\/ir\/props\.mjs/.test(threw(() => taskMod.validateTask(bui
     check((await cvx.findRoot(0)) === null, "a verify skips a remembered node of another run");
     old.remove();
   }
+  // findRoot looks on the task's own page when that page is there, and indexes it once per job: a
+  // root on another page is not this task's, and a node stamped after the index was made is not seen
+  // (the build remembers what it makes). Every page per root made a 50-page kit's verify stall (§15.12).
+  {
+    const snapP = "pix:" + "d".repeat(64);
+    const tp = Object.assign(buildTask(), { op: "verify", snapshot: snapP });
+    const pkey = tp.page.service ? taskMod.SERVICE_PAGE_GUID : String(tp.page.guid);
+    const cp = IR.makeCtx(D.figma, tp, { id: "p1" });
+    const mk = (pg, idx) => { const f = D.figma.createFrame(); pg.appendChild(f);
+      for (const [k, v] of [["pxIdx", String(idx)], ["pxSnap", snapP], ["pxIr", String(schema.VERSION)], ["pxSrc", "1:2"], ["pxRun", tp.runId]]) cp.stamp(f, k, v); return f; };
+    const own = D.figma.createPage(); cp.stamp(own, "pxPage", pkey); cp.stamp(own, "pxSnap", snapP);
+    const elsewhere = D.figma.createPage();
+    const away = mk(elsewhere, 0);
+    check((await cp.findRoot(0)) === null, "with the task's page there, a root on another page is not found");
+    const home = mk(own, 0);
+    check((await cp.findRoot(0)) === null, "the page is indexed once per job: a root stamped after the index is not seen");
+    const cp2 = IR.makeCtx(D.figma, tp, { id: "p2" });
+    check((await cp2.findRoot(0)) === home, "a new job indexes again and finds the root on the task's page");
+    const tq = Object.assign(buildTask(), { op: "verify", snapshot: "pix:" + "c".repeat(64) });
+    const cq = IR.makeCtx(D.figma, tq, { id: "p3" });
+    const lone = D.figma.createFrame(); D.figma.currentPage.appendChild(lone);
+    for (const [k, v] of [["pxIdx", "0"], ["pxSnap", tq.snapshot], ["pxIr", String(schema.VERSION)], ["pxSrc", "1:2"], ["pxRun", tq.runId]]) cq.stamp(lone, k, v);
+    check((await cq.findRoot(0)) === lone, "with the task's page not there, every page is searched, as before");
+    for (const n of [away, home, lone]) n.remove();
+  }
   if (IR.countLines.notInThisBuild) check(/IR\.countLines is not in this build: part C/.test(threw(() => ctx.measure(frame, task.nodes[3]))), "ctx.measure calls IR.countLines, which refuses until part C lands");
   host.measure = (c, node, rec) => ({ lines: 2, approx: false, rec: rec.i });
   check(same(ctx.measure(frame, task.nodes[3]), { lines: 2, approx: false, rec: 3 }), "a test's host.measure replaces IR.countLines");

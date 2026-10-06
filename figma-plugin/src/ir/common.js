@@ -158,6 +158,7 @@ var PXF_IR = (function () {
     var jobId = job && job.id !== undefined ? job.id : null;
     var report = { op: task.op, taskNo: task.taskNo, runId: task.runId, ms: {}, codes: {}, coded: [], failures: [] };
     var phaseName = null, phaseAt = 0, done = 0, lastPost = 0, lastBreath = Date.now();
+    var rootIndex = null;   // findRoot's index of stamped nodes, made once per job
     var values = isObj(task.values) ? task.values : {};
 
     function progress() {
@@ -247,19 +248,38 @@ var PXF_IR = (function () {
           var known = await figma.getNodeByIdAsync(String(session.nodes[want]));
           if (is(known) && mine(known)) return known;
         }
-        var found = null, other = null, pages = figma.root.children;
-        for (var p = 0; p < pages.length; p++) {
-          var page = pages[p];
-          if (typeof page.loadAsync === "function") await page.loadAsync();
-          var cands = typeof page.findAllWithCriteria === "function"
-            ? page.findAllWithCriteria({ sharedPluginData: { namespace: NS, keys: ["pxIdx"] } })
-            : page.children;
-          for (var c = 0; c < cands.length; c++) {
-            if (!is(cands[c])) continue;
-            if (!mine(cands[c])) { other = cands[c]; continue; }
-            // This run's build wins over an earlier run's; among equals the last found.
-            if (!found || stampOf(cands[c], "pxRun") === String(task.runId) || stampOf(found, "pxRun") !== String(task.runId)) found = cands[c];
+        // Where to look: the task's own page (a build or verify always names one; found as the builder
+        // finds it, by pxPage and pxSnap), every page only when the task names none or its page is not
+        // there. The stamped nodes of those pages are indexed once per job, not once per root: every
+        // page loaded per root made a 48-root verify of a 50-page kit load 2 400 pages, which Figma
+        // fetches from its servers (the live kit runs of 2026-10-05/06 stalled and lost the connection).
+        if (rootIndex === null) {
+          var all = figma.root.children, scope = [];
+          if (task.page && typeof task.page === "object") {
+            var pkey = task.page.service ? String(PXF_TASK.SERVICE_PAGE_GUID) : String(task.page.guid);
+            for (var q = 0; q < all.length; q++) if (stampOf(all[q], "pxPage") === pkey && stampOf(all[q], "pxSnap") === snap) scope.push(all[q]);
           }
+          if (!scope.length) scope = all.slice();
+          var index = {};
+          for (var p = 0; p < scope.length; p++) {
+            var page = scope[p];
+            if (typeof page.loadAsync === "function") await page.loadAsync();
+            var list = typeof page.findAllWithCriteria === "function"
+              ? page.findAllWithCriteria({ sharedPluginData: { namespace: NS, keys: ["pxIdx"] } })
+              : page.children;
+            for (var l = 0; l < list.length; l++) {
+              var ix = stampOf(list[l], "pxIdx");
+              if (ix) (own(index, ix) ? index[ix] : (index[ix] = [])).push(list[l]);
+            }
+          }
+          rootIndex = index;
+        }
+        var found = null, other = null, cands = own(rootIndex, want) ? rootIndex[want] : [];
+        for (var c = 0; c < cands.length; c++) {
+          if (!is(cands[c])) continue;
+          if (!mine(cands[c])) { other = cands[c]; continue; }
+          // This run's build wins over an earlier run's; among equals the last found.
+          if (!found || stampOf(cands[c], "pxRun") === String(task.runId) || stampOf(found, "pxRun") !== String(task.runId)) found = cands[c];
         }
         if (found) session.nodes[want] = found.id;
         else if (other && miss !== null && typeof miss === "object") { miss.otherRun = stampOf(other, "pxRun"); miss.otherId = other.id; }
