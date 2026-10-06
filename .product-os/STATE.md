@@ -25,6 +25,11 @@
   `node tools/ir-audit.mjs <runDir>` renders every built root in Figma and Pixso, compares them (opacity, section
   margin, placeholder masks, identity check) and writes the audit `m1-accept --audit` reads. Not yet run live; its
   thresholds are the M0 tool's and need the first pass on D, read root by root.
+- **2026-10-06: U's first live build (the Сова UI kit, 46 288 records) traced** on branch `claude/m1-ufix`
+  (`docs/M1.md` §15.13): five classes, two builder (ABSOLUTE booleans under deepestFirst, the counter-axis padding
+  floor), two reader (a vertex's own radius 0, sub-precision strokes) and one named judge class (a boolean whose
+  stored result is out of date, `boolean-operands`). Fixed and tested offline; not rebuilt live. Open (I): what Pixso
+  draws for the 4 stale unions (a render settles it).
 
 - **Task:** Pixso -> Figma migration, 1:1, whole files, no model in the loop.
 - **Status:** five files migrated. Day three went into the *instrument* rather than the algorithm:
