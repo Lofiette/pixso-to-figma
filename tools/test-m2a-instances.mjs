@@ -425,6 +425,25 @@ check("planted removals: uniform sides are written as strokeWeight; a style deta
   balances(p.stats, "planted removals");
 });
 
+// A bound field's baseline reads only assignments the IR keeps (review of claude/m2a): Chip
+// default-equal assigns Show icon through 5:913, an alias id its master Size=M does not define (only
+// the other members do), so assignments() drops it "other-family" and the instance shows the default,
+// true; its [Dot] override (visible false) must then be carried, not compared with the dropped value.
+const plantUnreached = (value) => {
+  const inst = value.pixsoNodes.find((n) => n.guid.sessionID === 5 && n.guid.localID === 501);
+  const pv = inst.componentPropAssignment[0].value;
+  inst.componentPropAssignment[0] = { defID: { sessionID: 5, localID: 913 }, value: Object.assign({}, pv, { boolValue: false }) };
+  inst.symbolData.symbolOverrides = [{ guidPath: { guids: [{ sessionID: 5, localID: 222 }] }, visible: false }];
+};
+check("a bound field's baseline ignores an assignment the IR drops (other-family): the override is carried", () => {
+  const p = read({}, plantUnreached);
+  truth(validate(p.ir).ok, "invalid");
+  truth(notesOf(p.ir, M2A.iDefaultEqual, schema.CODE.STALE_ASSIGNMENT).some((x) => x.detail.startsWith("other-family")), "the assignment is not dropped other-family");
+  const o = ovAt(p.ir, M2A.iDefaultEqual, P(M2A.chipMDot));
+  truth(o && o.fields && o.fields.visible === false, "the visible override is dropped as an echo of a value the IR does not keep");
+  balances(p.stats, "planted unreached");
+});
+
 // ---------- 4. the census (docs/M2A.md §1.3) ----------
 const CENSUS = ["arcData", "autoCornerRadius", "autoLayoutAbsolutePos", "autoLayoutIncludeBorders", "autoLayoutItemReverseDraw",
   "borderBottomWeight", "borderLeftWeight", "borderRightWeight", "borderStrokeWeightsIndependent", "borderTopWeight", "componentPropAssignment",

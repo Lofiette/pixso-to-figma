@@ -52,7 +52,8 @@
 //     COMPONENT (docs/M2A.md §5.1);
 //   - for `characters` or `visible` of a layer bound to a declared TEXT or BOOLEAN root
 //     (componentPropRef read through propindex): the property's effective value at that layer: an
-//     outer entry's assignment to the instance the layer sits in, else that instance's own, else the
+//     outer entry's assignment to the instance the layer sits in, else that instance's own (only an
+//     assignment the IR keeps: its id defined on that instance's symbol or its state group), else the
 //     root's default; an override that differs from it is counted overrides.boundConflicts;
 //   - the instance itself (path []): the master root's look; its box, child-layout, name, visibility
 //     and lock fields compare with the INSTANCE record instead (echo, or dropped "root-box").
@@ -426,6 +427,10 @@ function boundOf(cx, X, guids, res) {
   const scope = sym ? cx.props.scopeOf(sym) : null;
   if (!scope) return null;
   let out = null, pools = null;
+  // Only an assignment the IR keeps counts: one whose id is defined on the owning symbol or on its
+  // state group (docs/M2A.md §0.2, properties.mjs assignments()); another member's id is dropped there
+  // as other-family, so the instance shows the default.
+  const reach = new Set(cx.props.defsOf(sym).concat(scope !== sym ? cx.props.defsOf(scope) : []).map((d) => d.id));
   for (const r of T.componentPropRef) {
     if (!r || !guidSet(r.defID)) continue;
     const fname = X.fieldOf(r.componentPropNodeField);
@@ -439,7 +444,7 @@ function boundOf(cx, X, guids, res) {
     let v;
     for (const pool of pools) {
       let hit = null;
-      for (const a of pool.list) if (a && guidSet(a.defID) && cx.props.rootOf(scope, guidStr(a.defID), sym) === root) hit = a;
+      for (const a of pool.list) if (a && guidSet(a.defID) && reach.has(guidStr(a.defID)) && cx.props.rootOf(scope, guidStr(a.defID), sym) === root) hit = a;
       if (hit) { v = readValue(hit.value, f); break; }
     }
     if (v === undefined) v = readValue(root.initialValue, f);
