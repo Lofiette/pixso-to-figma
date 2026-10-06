@@ -16,15 +16,17 @@
 //     assignments() (properties.mjs) and derived.mjs, and fills cx.m2a.instances, .overrides and .derived:
 //       instances { instances, notCarried, noDerived, exposed, exposedOutside, scaled, ownDiffers }
 //       overrides { entries, root, emptyPath, nonRoot, live, stale: { class: n }, resolvedNotDerived,
-//                   inDerivedUnresolved, distinctLivePaths, mergedAway, written, emptyAfterTranslation,
+//                   inDerivedUnresolved, distinctLivePaths, mergedAway, written, emptyAfterTranslation, pinned,
 //                   merged: { paths, conflicts }, rootBox: { echo, differs }, boundConflicts,
 //                   pixsoFields: { total, translated, consumed, dropped: { class: { field: n } } },
 //                   fields: { produced, carried, echo: { field: n }, byClass: { applies, unprobed, refused } },
-//                   swaps: { override, property, sameSet, noOp, unresolved, dropped } }
+//                   swaps: { override, property, sameSet, noOp, unresolved, dropped, pinned } }
 //       derived   { entries, resolved, viaFallback, unresolved, written, empty, noAt, noTransform, noSize,
 //                   withLines, withOracleSides, geometry }
-//     with G6's balances (docs/M2A.md §8) holding when the stats are written. entries = root + emptyPath
-//     + nonRoot: root counts the [symbolID] paths only (docs/M2A.md §0.2), emptyPath the [] ones (D only).
+//     with G6's balances (docs/M2A.md §8) holding when the stats are written. pinned counts the overrides
+//     written only to pin a rule C hop (6b below), so the IR's non-root overrides are written + pinned.
+//     entries = root + emptyPath + nonRoot: root counts the [symbolID] paths only (docs/M2A.md §0.2),
+//     emptyPath the [] ones (D only).
 //   OVERRIDE_SOURCE_FIELDS: every Pixso field of an override entry (the census of docs/M2A.md §1.3, the
 //     Сова UI kit's four more, and guidPath) with exactly one fate:
 //       { fate: "translate", to: [Figma field], by: M1 translator module }   carried, as `to` (props.mjs
@@ -583,11 +585,12 @@ export function instanceData(cx, n, i, master, indexOf) {
   for (const lv of live.values()) for (const x of lv.res.ignored || []) ignoredItems.push(x);
   const seenIgnored = new Set();
   const ignoredOwn = new Set(), ignoredAt = new Map();
+  const pins = new Map();             // hop path key -> ignored item held by another instance (6b)
   for (const x of ignoredItems) {
     const k = x.instance + "|" + (x.path ? x.path.join("/") : "-") + "|" + x.defId;
     if (seenIgnored.has(k)) continue;
     seenIgnored.add(k);
-    if (x.instance !== g) continue;
+    if (x.instance !== g) { if (x.hop && !pins.has(x.hop.join("/"))) pins.set(x.hop.join("/"), x); continue; }
     const isOwn = !x.path || x.path.length === 0 || (x.path.length === 1 && x.path[0] === S0);
     if (isOwn) ignoredOwn.add(x.defId);
     else { const pk = x.path.join("/"); if (!ignoredAt.has(pk)) ignoredAt.set(pk, new Set()); ignoredAt.get(pk).add(x.defId); }
@@ -821,6 +824,33 @@ export function instanceData(cx, n, i, master, indexOf) {
     if (o.fields || o.swap || o.properties) { L.written++; overrides.push(o); }
     else L.empty++;
   }
+  // ---- 6b. rule C's hops whose ignored assignment another instance holds (D7 rule C) ----
+  // In P's shape the assignment sits on an entry of an instance inside a master: Pixso applied it there,
+  // so it stays in the IR on that instance, and every instance of the master would show the swap. Here
+  // Pixso drew the declared symbol, so a swap override to it pins the hop (overrides.swaps.pinned), merged
+  // into the live path's override when there is one; overrides.pinned counts the overrides written only
+  // for a pin. A hop that cannot be pinned (no master reference, or a path element with no record) is
+  // said in the SWAP_ASSIGNMENT_IGNORED note.
+  let pinned = 0, unpinned = 0;
+  for (const [pk, x] of pins) {
+    const res = R.resolve(n, x.hop);
+    const T = res.ok && !res.root ? res.elements[res.elements.length - 1] : null;
+    const recorded = !!T && res.elements.every((e) => e.i !== undefined);
+    const ref = T && cx.typeName(T.n) === "INSTANCE" && cx.props ? cx.props.refOf(R.declared(T.n)) : null;
+    if (!ref || (local && !recorded)) { unpinned++; continue; }
+    let o = overrides.find((q) => q.path.length && q.path.join("/") === pk);
+    if (o && o.swap) { unpinned++; continue; }
+    if (!o) {
+      o = { path: x.hop };
+      if (local) o.at = res.elements.map((e) => e.i);
+      overrides.push(o);
+      SO.pinned++;
+    }
+    o.swap = ref;
+    SO.swaps.pinned++;
+    pinned++;
+  }
+
   // Hops whose symbol a swap property decided, once per nested instance path (derived and live paths).
   const byProperty = new Set();
   const hops = (res, guids) => { if (res && res.ok && !res.root) res.elements.forEach((x, k) => { if (x.via === "property") byProperty.add(guids.slice(0, k + 1).join("/")); }); };
@@ -829,7 +859,9 @@ export function instanceData(cx, n, i, master, indexOf) {
   SO.swaps.property += byProperty.size;
 
   // ---- 7. the notes per instance (D15) ----
-  if (ignoredItems.length) cx.noteAt(CODE.SWAP_ASSIGNMENT_IGNORED, { node: i, detail: seenIgnored.size + " swap assignment" + (seenIgnored.size === 1 ? "" : "s") + " Pixso did not apply; the declared symbol is used" });
+  if (ignoredItems.length) cx.noteAt(CODE.SWAP_ASSIGNMENT_IGNORED, { node: i, detail: seenIgnored.size + " swap assignment" + (seenIgnored.size === 1 ? "" : "s") +
+    " Pixso did not apply; the declared symbol is used" + (pinned ? "; " + pinned + " held inside a master, pinned by a swap override" : "") +
+    (unpinned ? "; " + unpinned + " held inside a master and not pinned" : "") });
   if (mergedPaths) {
     SO.merged.paths += mergedPaths;
     SO.merged.conflicts += mergedConflicts;

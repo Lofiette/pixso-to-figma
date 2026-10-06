@@ -97,11 +97,11 @@ export function newM2aStats() {
         stale: zeros(NOTE_CLASSES.STALE_ASSIGNMENT) } },
     instances: { instances: 0, notCarried: 0, noDerived: 0, exposed: 0, exposedOutside: 0, scaled: 0, ownDiffers: 0 },
     overrides: { entries: 0, root: 0, emptyPath: 0, nonRoot: 0, live: 0, stale: zeros(NOTE_CLASSES.OVERRIDE_STALE), resolvedNotDerived: 0,
-      inDerivedUnresolved: 0, distinctLivePaths: 0, mergedAway: 0, written: 0, emptyAfterTranslation: 0, merged: { paths: 0, conflicts: 0 },
+      inDerivedUnresolved: 0, distinctLivePaths: 0, mergedAway: 0, written: 0, emptyAfterTranslation: 0, pinned: 0, merged: { paths: 0, conflicts: 0 },
       rootBox: { echo: 0, differs: 0 }, boundConflicts: 0,
       pixsoFields: { total: 0, translated: 0, consumed: 0, dropped: fieldsByClass() },
       fields: { produced: 0, carried: 0, echo: {}, byClass: { applies: 0, unprobed: 0, refused: 0 } },
-      swaps: { override: 0, property: 0, sameSet: 0, noOp: 0, unresolved: 0, dropped: 0 } },
+      swaps: { override: 0, property: 0, sameSet: 0, noOp: 0, unresolved: 0, dropped: 0, pinned: 0 } },
     derived: { entries: 0, resolved: 0, viaFallback: 0, unresolved: 0, written: 0, empty: 0, noAt: 0, noTransform: 0, noSize: 0,
       withLines: 0, withOracleSides: 0, geometry: 0 },
   };

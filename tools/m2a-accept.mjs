@@ -28,7 +28,8 @@
 //   overrides.entries  = root ([symbolID] paths) + emptyPath ([] paths, D only) + nonRoot   (§1.3's row)
 //   overrides.nonRoot  = live + Σ stale[class]
 //   overrides.live     = distinctLivePaths + mergedAway
-//   distinctLivePaths  = written (non-root overrides in the IR) + emptyAfterTranslation
+//   distinctLivePaths  = written + emptyAfterTranslation; the IR's non-root overrides = written + pinned
+//                        (pinned: overrides written only to pin a hop rule C forced, D7)
 //   pixsoFields.total  = translated + consumed + Σ dropped[class][field]; dropped.unknown is empty
 //   fields.produced    = carried + Σ echo[field] (carried: the fields that differ from the baseline);
 //                        the IR's override fields = carried, plus the echoes under --echo keep (D9)
@@ -246,7 +247,7 @@ export function m2aGates(ir, stats, ctx) {
     if (!noStats(g)) {
       const O = { entries: s("overrides.entries"), root: s("overrides.root"), emptyPath: s("overrides.emptyPath"), nonRoot: s("overrides.nonRoot"),
         live: s("overrides.live"), stale: sum(s("overrides.stale")), distinct: s("overrides.distinctLivePaths"), mergedAway: s("overrides.mergedAway"),
-        written: s("overrides.written"), emptyAfter: s("overrides.emptyAfterTranslation") };
+        written: s("overrides.written"), emptyAfter: s("overrides.emptyAfterTranslation"), pinned: s("overrides.pinned") };
       const PF = { total: s("overrides.pixsoFields.total"), translated: s("overrides.pixsoFields.translated"), consumed: s("overrides.pixsoFields.consumed"),
         dropped: s("overrides.pixsoFields.dropped") };
       const F = { produced: s("overrides.fields.produced"), carried: s("overrides.fields.carried"), echo: sum(s("overrides.fields.echo")) };
@@ -261,7 +262,7 @@ export function m2aGates(ir, stats, ctx) {
       g.need(O.nonRoot === O.live + O.stale, "non-root " + fmt(O.nonRoot) + " ≠ live " + fmt(O.live) + " + stale " + fmt(O.stale));
       g.need(O.live === O.distinct + O.mergedAway, "live " + fmt(O.live) + " ≠ distinct live paths " + fmt(O.distinct) + " + merged away " + fmt(O.mergedAway));
       g.need(O.distinct === O.written + O.emptyAfter, "distinct live paths " + fmt(O.distinct) + " ≠ written " + fmt(O.written) + " + empty after translation and echo " + fmt(O.emptyAfter));
-      g.need(O.written === ic.overridesNonRoot, "written " + fmt(O.written) + " ≠ the IR's non-root overrides " + fmt(ic.overridesNonRoot));
+      g.need(O.written + O.pinned === ic.overridesNonRoot, "written " + fmt(O.written) + " + pinned " + fmt(O.pinned) + " ≠ the IR's non-root overrides " + fmt(ic.overridesNonRoot));
       const dropped = sum2(PF.dropped);
       g.need(PF.total === PF.translated + PF.consumed + dropped, "Pixso fields " + fmt(PF.total) + " ≠ translated " + fmt(PF.translated) + " + consumed " + fmt(PF.consumed) + " + dropped " + fmt(dropped));
       g.need(!sum(unknown), "fields outside OVERRIDE_SOURCE_FIELDS (unknown): " + list(unknown));
@@ -271,7 +272,7 @@ export function m2aGates(ir, stats, ctx) {
       g.need(ic.overrideFields === inIR, "the IR's overrides hold " + fmt(ic.overrideFields) + " fields, not carried " + fmt(F.carried) + (keep ? " + echo " + fmt(F.echo) + " (--echo keep writes the echoes)" : " (--echo drop writes no echo)"));
       g.line = "entries " + fmt(O.entries) + " = root " + fmt(O.root) + " + empty path " + fmt(O.emptyPath) + " + live " + fmt(O.live) + " + stale " + fmt(O.stale) +
         "; live = " + fmt(O.distinct) + " paths + " + fmt(O.mergedAway) + " merged away; paths = " + fmt(O.written) + " written + " + fmt(O.emptyAfter) +
-        " empty; Pixso fields " + fmt(PF.total) + " = " + fmt(PF.translated) + " + " + fmt(PF.consumed) + " + " + fmt(dropped) + "; Figma fields " + fmt(F.produced) +
+        " empty" + (O.pinned ? " (+ " + fmt(O.pinned) + " pinned by rule C)" : "") + "; Pixso fields " + fmt(PF.total) + " = " + fmt(PF.translated) + " + " + fmt(PF.consumed) + " + " + fmt(dropped) + "; Figma fields " + fmt(F.produced) +
         " = " + fmt(F.carried) + " carried + " + fmt(F.echo) + " echo" + (keep ? " (kept)" : "");
     }
     gates.push(g);

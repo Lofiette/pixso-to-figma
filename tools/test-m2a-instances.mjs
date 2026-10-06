@@ -64,6 +64,9 @@ const { propIndex } = await imp("pix/ir/propindex.mjs");
 const { makeResolver } = await imp("pix/ir/resolve.mjs");
 const overrides = await imp("pix/ir/overrides.mjs");
 const properties = await imp("pix/ir/properties.mjs");
+const { m2aGates } = await imp("m2a-accept.mjs");
+const { planM1 } = await imp("ir/plan.mjs");
+const acceptGates = (r) => m2aGates(r.ir, r.stats, { balance: planM1(r.ir, r.stats, {}).balance });
 if (properties.STUB !== undefined) { console.log("FAIL tools/pix/ir/properties.mjs is still P0's stub; M2a is merged (docs/M2A.md §7)"); process.exit(1); }
 
 const FX = makeFixture();
@@ -373,8 +376,30 @@ check("stats.m2a.instances, .overrides and .derived on the fixture", () => {
   same([O.entries, O.root, O.emptyPath, O.nonRoot, O.live, O.stale, O.distinctLivePaths, O.mergedAway, O.written, O.emptyAfterTranslation, O.merged],
     [28, 1, 1, 26, 23, { "not-derived": 3, unresolved: 0 }, 22, 1, 17, 5, { paths: 2, conflicts: 2 }]);
   same(O.pixsoFields.dropped, { "no-equivalent": { vectorPaints: 1, pluginData: 1 }, "not-on-type": { fillPaints: 1 }, "layer-not-carried": { fillPaints: 1 }, "root-box": { size: 1 }, unknown: {} });
-  same(O.swaps, { override: 6, property: 3, sameSet: 0, noOp: 2, unresolved: 0, dropped: 0 });
+  same(O.swaps, { override: 6, property: 3, sameSet: 0, noOp: 2, unresolved: 0, dropped: 0, pinned: 0 });
+  same(O.pinned, 0);
   same(O.fields.echo, { opacity: 1, fills: 1 });
+});
+
+// P's real shape of rule C (review of claude/m2a): the ignored assignment sits on an instance inside a
+// master, where Pixso applied it, so it stays in the IR there and every instance of that master would
+// show the swap; the instance whose derived data shows the declared symbol pins the hop.
+check("rule C, assignment held inside a master (planted, P's shape): the instance pins the hop to the declared symbol", () => {
+  const p = read({}, M2A_PLANTS.ruleCInMaster);
+  truth(validate(p.ir).ok, "invalid: " + JSON.stringify(validate(p.ir).errors.slice(0, 2)));
+  const hop = P("5:601", M2A.cardRow, M2A.rowLead);
+  const o = ovAt(p.ir, "5:602", hop);
+  truth(o, "no override pins " + show(hop) + " on the instance of Outer");
+  same([o.swap, o.at, o.fields, o.properties], [{ guid: M2A.circle }, hop.map((g) => recOf(p.ir, g)), undefined, undefined]);
+  same((ovAt(p.ir, "5:601", P(M2A.cardRow)).properties || []).map((a) => [a.id, a.value]), [[M2A.dRowLead, { guid: M2A.square }]], "the master's instance keeps its assignment:");
+  same(derAt(p.ir, "5:602", P("5:601", M2A.cardRow, M2A.rowLead, M2A.circleShape)).at.length, 4);
+  same(notesOf(p.ir, "5:602", schema.CODE.SWAP_ASSIGNMENT_IGNORED).map((x) => x.detail),
+    ["1 swap assignment Pixso did not apply; the declared symbol is used; 1 held inside a master, pinned by a swap override"]);
+  const O = p.stats.m2a.overrides;
+  same([O.swaps.pinned, O.pinned, p.stats.m2a.derived.viaFallback - BASE.stats.m2a.derived.viaFallback], [1, 1, 1]);
+  balances(p.stats, "planted rule C");
+  const g6 = acceptGates(p).find((x) => x.id === "G6");
+  same([g6.status, g6.why], ["PASS", []]);
 });
 
 // ---------- 4. the census (docs/M2A.md §1.3) ----------

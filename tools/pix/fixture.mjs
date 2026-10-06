@@ -796,12 +796,35 @@ export const fixtureKey = (label) => createHash("sha1").update("pix2fig fixture 
 //                          (scrollDirection, on iEntries' [rowBg] entry): dropped with class "unknown",
 //                          and gate G6 fails (docs/M2A.md D8). It is a plant, not a case: the base
 //                          fixture passes every gate (docs/M2A.md §7).
+//   ruleCInMaster          P's real shape of rule C (docs/M2A.md D7), kept out of the base fixture so
+//                          the parts' counts stand: a master Outer (5:600) holds an instance of Card2
+//                          (5:601) whose entry on its Row assigns Lead icon -> Square, which Pixso applied
+//                          there (5:601's derived holds Square's shape); an instance of Outer on the M2a
+//                          page (5:602) shows the declared Circle (its derived holds [5:601, 5:421, 5:402,
+//                          5:310]). The assignment stays in the IR on 5:601, where Pixso applied it, so
+//                          5:602 pins the hop with a swap override to Circle (overrides.swaps.pinned).
 export const M2A_PLANTS = {
   unknownOverrideField(value, defs) {
     const E = enumsOf(defs);
     const inst = value.pixsoNodes.find((n) => n.guid.sessionID === 5 && n.guid.localID === 520);
     const e = inst.symbolData.symbolOverrides.find((o) => o.guidPath.guids.length === 1 && o.guidPath.guids[0].localID === 404);
     e.scrollDirection = E.ScrollDirection.BOTH;
+  },
+  ruleCInMaster(value, defs) {
+    const T = enumsOf(defs).NodeType;
+    const nodeOf = (s) => value.pixsoNodes.find((n) => n.guid.sessionID === G(s).sessionID && n.guid.localID === G(s).localID);
+    const card = nodeOf(M2A.card);
+    const D = (...gs) => ({ guidPath: path(...gs.map(G)), size: box(10, 10), transform: at(0, 0) });
+    const rowPaths = (pre, lead) => [D(...pre, M2A.cardRow), D(...pre, M2A.cardRow, M2A.rowTitle), D(...pre, M2A.cardRow, M2A.rowLead),
+      D(...pre, M2A.cardRow, M2A.rowLead, lead), D(...pre, M2A.cardRow, M2A.rowTrail), D(...pre, M2A.cardRow, M2A.rowTrail, M2A.squareShape)];
+    value.pixsoNodes.push(
+      { guid: G("5:600"), parentIndex: under(card.parentIndex.guid, "v"), type: T.SYMBOL, name: "Outer", size: box(240, 90), transform: at(0, 860) },
+      { guid: G("5:601"), parentIndex: under(G("5:600"), "a"), type: T.INSTANCE, name: "Card", size: box(220, 70), transform: at(10, 10),
+        symbolData: { symbolID: G(M2A.card), symbolOverrides: [{ guidPath: path(G(M2A.cardRow)),
+          componentPropAssignment: [{ defID: G(M2A.dRowLead), value: { textValue: { characters: "" }, guidValue: G(M2A.square), boolValue: false } }] }] },
+        derivedSymbolData: rowPaths([], M2A.squareShape) },
+      { guid: G("5:602"), parentIndex: under(G(M2A.page), "o"), type: T.INSTANCE, name: "Rule C in a master", size: box(240, 90), transform: at(480, 200),
+        symbolData: { symbolID: G("5:600") }, derivedSymbolData: [D("5:601"), ...rowPaths(["5:601"], M2A.circleShape)] });
   },
 };
 
@@ -1070,7 +1093,8 @@ function m2aNodes({ E, T, solid, geom, B, INTERNAL, DIR, STYLE }) {
       { guidPath: path(S(M2A.cardRow)), overriddenSymbolID: S(M2A.row) },
       { guidPath: path(S(M2A.cardRow), S(M2A.rowBg)), fillPaints: red() }] },
     derivedSymbolData: cardDerived({}) }));
-  // Rule C (P's shape): an entry on the nested Row assigns Lead icon -> 5:301, which Pixso ignored: derived
+  // Rule C, the assignment on the instance's own entry (P holds it on an instance inside a master instead:
+  // M2A_PLANTS.ruleCInMaster): an entry on the nested Row assigns Lead icon -> 5:301, which Pixso ignored: derived
   // holds [5:421, 5:402, 5:310] (Circle's shape). The walk fails at hop 2 under the assignment, the path is
   // in derived, so the declared symbol is used: SWAP_ASSIGNMENT_IGNORED (1), the assignment dropped as
   // STALE_ASSIGNMENT "ignored", and the entry, left with nothing, is not written

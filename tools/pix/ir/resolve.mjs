@@ -33,7 +33,9 @@
 //     holders[0] is the instance itself); each element also carries reset (an INSTANCE element's own
 //     overrides were reset) and src (where a swap came from: { instance, path, defId? }).
 //   ignored items carry path too: the entry of `instance` (relative to it) that holds the assignment,
-//     or null for the instance's own componentPropAssignment.
+//     or null for the instance's own componentPropAssignment; target, the guid of the hop rule C forced;
+//     and hop, the path of that hop relative to the instance resolved (overrides.mjs pins it when the
+//     assignment sits on another instance, inside a master).
 //   R.entriesOf(node) -> Map(path key -> [entry]): a stored instance's own symbolOverrides by guidPath
 //     ("/"-joined local guids, "" for the empty path), memoised.
 //   R.subtree(symbolGuid) -> Map(local guid -> stored node); R.declared(node) -> symbol guid | null;
@@ -272,7 +274,7 @@ export function makeResolver(cx) {
       const hop = r.elements[r.at - 1];
       if (!hop || hop.via !== "property") break;
       forced.add(r.at - 1);
-      const item = { instance: hop.src.instance, path: hop.src.path, defId: hop.src.defId, target: guidStr(hop.n.guid) };
+      const item = { instance: hop.src.instance, path: hop.src.path, defId: hop.src.defId, target: guidStr(hop.n.guid), hop: guids.slice(0, r.at) };
       ignored.push(item);
       hops.push([r.at - 1, item]);
       r = walk(I, guids, forced);
