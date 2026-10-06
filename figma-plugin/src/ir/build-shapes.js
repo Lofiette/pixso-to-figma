@@ -20,7 +20,9 @@
 //     the wanted matrix composed onto its own (want · boolean; never the holder's read back, which in
 //     a flow is the flow's place with the turn dropped, and a layout read in a write-only phase), so
 //     every operand keeps the absolute matrix the IR composes for it, and the holder is removed. In
-//     a flow, an ABSOLUTE boolean leaves the flow before its matrix is written; the composed matrix
+//     a flow that already exists (layoutOrder creation, or a split root's built parent), an ABSOLUTE
+//     boolean leaves the flow before its matrix is written; under deepestFirst the flow is written
+//     later and the place passes take it out. The composed matrix
 //     is kept (st.boolRt) for the place passes to write again where the boolean is ABSOLUTE or pinned. Then the boolean's own
 //     paints and props. Its box is Figma's, from its operands: the passes never resize or move it by
 //     matrix, and its operands are left as they are (st.native, st.fixed). A throw, or no operand,
@@ -125,7 +127,17 @@ function makeBoolean(st, k) {
     var brt = made.relativeTransform;
     st.boolRt[k] = U.mul(U.matrix(st.want[k].rt), brt);
     parent.insertChild(at, made);
-    if (B.isAL(B.parentMode(st, k)) && ctx.prop(rec, "layoutPositioning") === "ABSOLUTE") made.layoutPositioning = "ABSOLUTE";
+    // Figma takes ABSOLUTE only under a parent whose flow exists at that moment, and throws
+    // otherwise. Under layoutOrder deepestFirst the parent's flow is written after this phase (the
+    // first live build of U, 2026-10-06: four ABSOLUTE booleans in flows threw here and were left
+    // beside their emptied holders, one frame too many each), so there the boolean stays AUTO until
+    // the place passes write ABSOLUTE and its matrix (detail.booleanAbsoluteLater).
+    if (B.isAL(B.parentMode(st, k)) && ctx.prop(rec, "layoutPositioning") === "ABSOLUTE") {
+      var flowNow = "NONE";
+      if (parent.type === "FRAME" || parent.type === "COMPONENT") { try { flowNow = parent.layoutMode || "NONE"; } catch (e3) { flowNow = "NONE"; } }
+      if (B.isAL(flowNow)) made.layoutPositioning = "ABSOLUTE";
+      else st.detail.booleanAbsoluteLater = (st.detail.booleanAbsoluteLater || 0) + 1;
+    }
     made.relativeTransform = st.boolRt[k];
     holder.remove();
   } catch (e2) {
