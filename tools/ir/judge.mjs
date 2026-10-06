@@ -68,6 +68,10 @@
 //                      the record's own space, placed by the expected transform. A record with no
 //                      drawing is not classified. Where Pixso's box and its drawing differ, the drawing
 //                      is what G9 and this check hold to; a drawn shift is still counted.
+//     booleanOperands  (docs/M1.md §15.13) a BOOLEAN_OPERATION record whose stored result is out of
+//                      date against its operands (VECTOR_ORACLE_DIFFERS boolean-operands, set by the
+//                      reader): the vectorBox rule with the box its operands bound (tools/ir/operands.mjs
+//                      drawnBox) as the drawing, since Figma computes it from them
 //   Every other visible delta counts: visibleOver05 (dp > 0.5), visibleOver1 (dp > 1, gate G6),
 //   sizeVisibleOver05, sizeVisibleOver1 (gate G7), maxSizeVisible. worst lists the records with a
 //   delta over 0.5 px, visible or not, largest first, at most 30.
@@ -93,7 +97,9 @@
 //   feature changes the drawing (SFU_GEOMETRY: the note's detail opens with its name) (task notes
 //   or IR notes), each excusing any kind but missing; then VECTOR_ORACLE_DIFFERS, which excuses only
 //   its class: region-no-fill the count (and only while the Figma paths' union stays inside the
-//   record's box + 1 px), network-bounds the bounds, winding the winding, and every kind found must
+//   record's box + 1 px), network-bounds the bounds, winding the winding, boolean-operands (a
+//   BOOLEAN_OPERATION record's) the bounds, and only while the Figma paths' union covers the stored
+//   result and stays inside the box its operands bound (each within 1 px), and every kind found must
 //   be covered. excused[code] counts every excused vector; excusedBuiltFromOracle[code] repeats the
 //   ones under VECTOR_FROM_GEOMETRY and BOOLEAN_FLATTENED, which should match and which part F
 //   reviews (a subset of excused, not added to it). Every other mismatch is a differs entry
@@ -110,9 +116,10 @@
 //   not an INSTANCE record of the task (gate G11).
 // codes      the task's (read-stage) notes, the build report's codes, and the judge's own:
 //   ROOT_NOT_FOUND per root not found, VECTOR_GEOMETRY_DIFFERS, TEXT_LINES_DIFFER.
-import { CODE, VECTOR_TYPES, ORACLE_CLASSES } from "./schema.mjs";
+import { CODE, VECTOR_TYPES, ORACLE_CLASSES, BOOLEAN_ORACLE_CLASSES } from "./schema.mjs";
 import { BUILT_TYPE } from "./task.mjs";
 import { geometryBounds, pathBounds, unionBounds, inBox } from "./pathgeom.mjs";
+import { drawnBox, kidsIndex } from "./operands.mjs";
 
 // A VERIFY row, by position (docs/M1.md §6 C):
 //   [i, builtType, childCount, effVisible, absX, absY, w, h, sides|null, vec|null, lines|null]
@@ -209,7 +216,7 @@ export const SFU_GEOMETRY = ["open region loop", "CONNECTLINE", "LINE with heigh
 const sfuGeometry = (detail) => typeof detail === "string" && SFU_GEOMETRY.some((f) => detail === f || detail.startsWith(f + ":") || detail.startsWith(f + ","));
 const BUILT_FROM_ORACLE = [CODE.VECTOR_FROM_GEOMETRY, CODE.BOOLEAN_FLATTENED];
 // The one mismatch kind each VECTOR_ORACLE_DIFFERS class excuses (schema.ORACLE_CLASSES).
-const CLASS_KIND = { "region-no-fill": "count", "network-bounds": "bounds", winding: "winding" };
+const CLASS_KIND = { "region-no-fill": "count", "network-bounds": "bounds", winding: "winding", "boolean-operands": "bounds" };
 // A differs entry names the first kind no class covers, in this order (each one of VECTOR_DIFF_KINDS).
 const KIND_ORDER = ["missing", "count", "bounds", "winding"];
 
@@ -340,6 +347,11 @@ export function judgeTask(args) {
   const coded = B && Array.isArray(B.coded) ? B.coded.filter(isObj) : [];
   for (const c of coded) if (rec.has(c.i)) note(c.i, c.code, c.detail);
   const has = (i, code) => (codesOf.get(i) || []).some((c) => c.code === code);
+  // The booleans whose stored result is out of date against their operands, and the box those bound.
+  const classOf = (n) => (typeof n.detail === "string" ? n.detail.split(":")[0].trim() : null);
+  const stale = new Set(recs.filter((t) => t.type === "BOOLEAN_OPERATION" && (codesOf.get(t.i) || []).some((n) => n.code === CODE.VECTOR_ORACLE_DIFFERS && BOOLEAN_ORACLE_CLASSES.indexOf(classOf(n)) >= 0)).map((t) => t.i));
+  let kidsOfIR = null;
+  const operandBox = (i) => { if (!kidsOfIR) kidsOfIR = kidsIndex(ir); return drawnBox(ir, i, kidsOfIR); };
 
   const J = emptyJ();
   for (const n of taskNotes) if (typeof n.code === "string") add(J.codes, n.code);
@@ -464,6 +476,16 @@ export function judgeTask(args) {
         }
       }
     }
+    if ((!posOk || !sizeOk) && builtType === "BOOLEAN_OPERATION" && stale.has(i)) {
+      const d = operandBox(i);
+      if (d) {
+        const dW = d.x1 - d.x0, dH = d.y1 - d.y0;
+        const at = boxOf(mul(m, [[1, 0, d.x0], [0, 1, d.y0]]), dW, dH);
+        if (Math.hypot(ax - at.x0, ay - at.y0) <= POS + EPS && (!sized || (Math.abs(rw - dW) <= POS + EPS && Math.abs(rh - dH) <= POS + EPS))) {
+          posOk = true; sizeOk = true; classes.add("booleanOperands");
+        }
+      }
+    }
     for (const c of classes) add(G.classified, c);
     if (!posOk) {
       G.visibleOver05++;
@@ -544,11 +566,12 @@ export function judgeTask(args) {
     V.checked++;
     const p = P(t.i), w = row.get(t.i);
     const kinds = [];
-    let regrouped = false, fig = [];
+    let regrouped = false, fig = [], oracleUnion = null;
     if (!w) kinds.push("missing");
     else {
       const geo = p.oracleFillGeometry !== undefined ? value(p.oracleFillGeometry) : p.fillGeometry !== undefined ? value(p.fillGeometry) : [];
       const o = geometryBounds(geo, exp.get(t.i));
+      oracleUnion = unionOf(o);
       fig = Array.isArray(w[ROW.vec]) ? w[ROW.vec] : [];
       // A hidden record's placement is judged by geometry, as hidden (hiddenOver05), not here: Figma
       // places a hidden child of an auto-layout flow where Pixso does not (the first live build,
@@ -584,6 +607,16 @@ export function judgeTask(args) {
     for (const n of codesOf.get(t.i) || []) {
       if (n.code !== CODE.VECTOR_ORACLE_DIFFERS || typeof n.detail !== "string") continue;
       const cls = n.detail.split(":")[0].trim();
+      if (BOOLEAN_ORACLE_CLASSES.indexOf(cls) >= 0) {
+        // Figma's result of the operands: it covers the out-of-date stored one and stays inside the
+        // box the operands bound (root-relative, the bound under the expected transform).
+        const uf = unionOf(fig), d = t.type === "BOOLEAN_OPERATION" ? operandBox(t.i) : null;
+        if (!uf || !d || !oracleUnion) continue;
+        const e = exp.get(t.i), bound = boxOf(mul(e, [[1, 0, d.x0], [0, 1, d.y0]]), d.x1 - d.x0, d.y1 - d.y0);
+        if (!inBox(uf, bound, VEC_TOL + EPS) || !inBox(oracleUnion, uf, VEC_TOL + EPS)) continue;
+        covered.add(CLASS_KIND[cls]);
+        continue;
+      }
       if (ORACLE_CLASSES.indexOf(cls) < 0) continue;
       if (cls === "region-no-fill") {
         const uf = unionOf(fig);
