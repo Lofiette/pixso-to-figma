@@ -118,6 +118,49 @@ export const RANGE_FIELDS = { fontName: "value", fontSize: "num", fills: "value"
   letterSpacing: "value", lineHeight: "value", textCase: TEXT_CASE, textDecoration: TEXT_DECORATION, hyperlink: "value",
   listOptions: "value", indentation: "int", listSpacing: "num", paragraphIndent: "num", paragraphSpacing: "num" };
 
+// IR version 3 (docs/M2A.md §5.1): the Figma fields an instance override may carry, each with its kind
+// (the kinds of KNOWN_PROPS, plus name: str). An override's fields are closed to this table, and,
+// where the override names its target record (`at`), to the target type's KNOWN_PROPS plus name; an
+// INSTANCE target takes KNOWN_PROPS.COMPONENT (its master root's look). The instance's own override
+// (path []) carries only ROOT_OVERRIDE_FIELDS below. Part P0 wrote this first version from the
+// override census of docs/M2A.md §1.3 (the targets of OVERRIDE_SOURCE_FIELDS in
+// tools/pix/ir/overrides.mjs); part C owns it from then on (docs/M2A.md §9).
+const TEXT_OVERRIDE = { characters: "str", textRanges: "own", fontName: "value", fontSize: "num", letterSpacing: "value",
+  lineHeight: "value", paragraphIndent: "num", paragraphSpacing: "num", textAlignHorizontal: TEXT_PROPS.textAlignHorizontal,
+  textAlignVertical: TEXT_PROPS.textAlignVertical, textAutoResize: TEXT_PROPS.textAutoResize, textCase: TEXT_CASE,
+  textDecoration: TEXT_DECORATION, textTruncation: TEXT_PROPS.textTruncation, maxLines: "int", leadingTrim: TEXT_PROPS.leadingTrim,
+  hangingPunctuation: "bool", hangingList: "bool", textStyle: "style" };
+const FRAME_OVERRIDE = { clipsContent: "bool", layoutMode: FRAME_LIKE.layoutMode, layoutWrap: FRAME_LIKE.layoutWrap,
+  primaryAxisSizingMode: FRAME_LIKE.primaryAxisSizingMode, counterAxisSizingMode: FRAME_LIKE.counterAxisSizingMode,
+  primaryAxisAlignItems: FRAME_LIKE.primaryAxisAlignItems, counterAxisAlignItems: FRAME_LIKE.counterAxisAlignItems,
+  counterAxisAlignContent: FRAME_LIKE.counterAxisAlignContent, paddingLeft: "num", paddingRight: "num", paddingTop: "num",
+  paddingBottom: "num", itemSpacing: "num", counterAxisSpacing: "num", itemReverseZIndex: "bool", strokesIncludedInLayout: "bool",
+  gridStyle: "style" };
+export const OVERRIDE_FIELDS = merge(
+  { visible: "bool", locked: "bool", name: "str", relativeTransform: "own", width: "num", height: "num" },
+  CHILD,
+  { opacity: "num", blendMode: BLEND, effects: "value", effectStyle: "style", exportSettings: "value" },
+  PAINT, CORNER, { strokeWeights: "own", cornerRadii: "own", arcData: "value" },
+  FRAME_OVERRIDE, TEXT_OVERRIDE);
+
+// Each override field's class from Figma's probes (REWRITE.md §9 P13; docs/M2A.md §5.1), which the
+// planner and M2b read: "applies" (Figma applies it on an instance sublayer, P13, C), "refused"
+// (Figma throws or ignores it, P13, C: kept in the IR and counted OVERRIDE_FIELD_UNSUPPORTED by the
+// planner), "unprobed" (A until M2b's P13b). Every field of OVERRIDE_FIELDS has exactly one class
+// (tools/test-ir.mjs), so a field added to OVERRIDE_FIELDS lands in "unprobed" until a probe says otherwise.
+const APPLIES = ["fills", "fillStyle", "strokes", "strokeStyle", "strokeWeight", "strokeWeights", "strokeAlign", "effects",
+  "effectStyle", "opacity", "blendMode", "name", "cornerRadius", "cornerRadii", "visible", "characters", "fontSize", "textAutoResize"];
+const REFUSED = ["width", "height", "relativeTransform", "constraints"];
+export const OVERRIDE_FIELD_CLASS = (function () {
+  const o = {};
+  for (const k of Object.keys(OVERRIDE_FIELDS)) o[k] = APPLIES.indexOf(k) >= 0 ? "applies" : REFUSED.indexOf(k) >= 0 ? "refused" : "unprobed";
+  return o;
+})();
+export const OVERRIDE_CLASSES = ["applies", "unprobed", "refused"];
+// The look of an instance itself (its override with path []): what a COMPONENT has and an INSTANCE
+// record does not (docs/M2A.md D8). The box, child layout, visible, locked and name are the record's.
+export const ROOT_OVERRIDE_FIELDS = Object.keys(OVERRIDE_FIELDS).filter((k) => KNOWN_PROPS.COMPONENT[k] !== undefined && KNOWN_PROPS.INSTANCE[k] === undefined);
+
 export const NEVER_OMIT = ["fills", "strokes", "strokeAlign", "strokeWeight", "clipsContent", "blendMode", "textAutoResize",
   "layoutMode", "primaryAxisSizingMode", "counterAxisSizingMode", "characters", "fontName", "fontSize", "booleanOperation",
   "pointCount", "innerRadius"];

@@ -39,10 +39,12 @@ function header(kind) {
         symbolVersions: false, derivedBoxes: false, inkBounds: true, renders: true }
       : { authoredOverrides: true, resolvedOverrides: false, overrideKeys: true, publishIds: true,
         symbolVersions: true, derivedBoxes: true, inkBounds: false, renders: false },
-    settings: { mode: "design", overrides: "fidelity", drift: "link", deleted: "publish",
-      resync: "pixso-unless-edited", textFit: "widen", booleans: "auto", spaceEvenlySingle: "between", kitmaps: "default" },
+    settings: Object.assign({ mode: "design", overrides: "fidelity", drift: "link", deleted: "publish",
+      resync: "pixso-unless-edited", textFit: "widen", booleans: "auto", spaceEvenlySingle: "between" }, m2aSettings(), { kitmaps: "default" }),
   };
 }
+// The thirteen settings version 3 added (docs/M2A.md §3), at their defaults.
+function m2aSettings() { const o = {}; for (const k of schema.M2A_SETTINGS) o[k] = schema.SETTING_DEFAULTS[k]; return o; }
 
 // The props a record of each kind always carries in version 2: its box, and the NEVER_OMIT props of
 // its type (values[0] is the empty list in every IR below).
@@ -194,7 +196,7 @@ if (example) {
   expectError("an assignment to an unknown property", mut(rich, (ir) => { ir.nodes[1].instance.properties[0].id = "Nope#0:9"; }), "nodes[1].instance.properties[0].id");
   expectError("an assignment of the wrong type", mut(rich, (ir) => { ir.nodes[1].instance.properties[0].value = true; }), "nodes[1].instance.properties[0].value");
   expectError("an override whose first hop is outside the master", mut(rich, (ir) => { ir.nodes[1].instance.overrides[0].path = ["2:22"]; }), "nodes[1].instance.overrides[0].path[0]");
-  expectError("two override entries for one path", mut(rich, (ir) => { ir.nodes[1].instance.overrides.push({ path: ["2:24"], fields: { visible: false } }); }), "nodes[1].instance.overrides[1].path");
+  expectError("two override entries for one path", mut(rich, (ir) => { ir.nodes[1].instance.overrides.push({ path: ["2:24"], at: [8], fields: { visible: false } }); }), "nodes[1].instance.overrides[2].path", true);
   expectError("an override that changes nothing", mut(rich, (ir) => { ir.nodes[1].instance.overrides[0].fields = {}; }), "nodes[1].instance.overrides[0]");
   expectError("a duplicate variant coordinate", mut(rich, (ir) => { ir.components[1].variant.State = "Default"; }), "components[1].variant");
   expectError("a coordinate off its axis", mut(rich, (ir) => { ir.components[1].variant.State = "Pressed"; }), "components[1].variant.State");
@@ -398,6 +400,135 @@ if (example) {
   else ok("props.mjs: every node type has its props, every kind is known, value and style kinds match INTERNED_PROPS and STYLE_REFS, geometry only on vector types, DEFAULTS of their kinds and apart from NEVER_OMIT; every setting has a default of its own values");
 }
 
+// ---------- version 3: settings, overrides, derived entries, instances, preferred values, notes (docs/M2A.md §5.1) ----------
+for (const k of schema.M2A_SETTINGS) {
+  expectError("the " + k + " setting missing", mut(minimal, (ir) => { delete ir.header.settings[k]; }), "header.settings." + k, true);
+  expectError("the " + k + " setting outside its enum", mut(minimal, (ir) => { ir.header.settings[k] = "sometimes"; }), "header.settings." + k, true);
+  for (const v of schema.SETTINGS[k]) if (v !== schema.SETTING_DEFAULTS[k]) expectValid("the " + k + " setting " + v, mut(minimal, (ir) => { ir.header.settings[k] = v; }));
+}
+{
+  const S = schema, bad = [];
+  if (S.M2A_SETTINGS.length !== 13) bad.push("M2A_SETTINGS has " + S.M2A_SETTINGS.length + " keys, not the thirteen of docs/M2A.md §3");
+  for (const k of S.SETTING_KEYS) if (!S.SETTING_FLAGS[k] || !/^--[a-z]+(-[a-z]+)*$/.test(S.SETTING_FLAGS[k])) bad.push(k + " has no flag");
+  if (new Set(Object.values(S.SETTING_FLAGS)).size !== Object.keys(S.SETTING_FLAGS).length) bad.push("two settings share a flag");
+  for (const k of S.M2A_SETTINGS) if (!S.SETTINGS[k] || S.SETTING_DEFAULTS[k] === undefined) bad.push(k + " has no values or no default");
+  if (bad.length) bad.forEach((b) => fail("settings: " + b));
+  else ok("settings: the thirteen M2a settings each have values, a default and a flag of their own");
+}
+if (example) {
+  const OV = (ir) => ir.nodes[1].instance.overrides;
+  expectValid("the instance's own override (path []) carrying its look", rich());
+  expectError("the instance's own override carrying a box field", mut(rich, (ir) => { OV(ir)[1].fields.width = 10; }), "nodes[1].instance.overrides[1].fields.width", true);
+  expectError("the instance's own override carrying its name", mut(rich, (ir) => { OV(ir)[1].fields.name = "X"; }), "nodes[1].instance.overrides[1].fields.name", true);
+  expectError("the instance's own override carrying visibility", mut(rich, (ir) => { OV(ir)[1].fields.visible = false; }), "nodes[1].instance.overrides[1].fields.visible", true);
+  expectError("the instance's own override with at", mut(rich, (ir) => { OV(ir)[1].at = []; }), "nodes[1].instance.overrides[1].at", true);
+  expectError("the instance's own override with a swap", mut(rich, (ir) => { OV(ir)[1].swap = { guid: "2:21" }; }), "nodes[1].instance.overrides[1].swap");
+  expectError("the instance's own override with properties", mut(rich, (ir) => { OV(ir)[1].properties = []; }), "nodes[1].instance.overrides[1].properties", true);
+  expectError("two own overrides", mut(rich, (ir) => { OV(ir).push({ path: [], fields: { blendMode: "MULTIPLY" } }); }), "nodes[1].instance.overrides[2].path", true);
+  expectError("an override without the at it needs", mut(rich, (ir) => { delete OV(ir)[0].at; }), "nodes[1].instance.overrides[0].at", true);
+  expectError("an at of the wrong length", mut(rich, (ir) => { OV(ir)[0].at = [8, 8]; }), "nodes[1].instance.overrides[0].at", true);
+  expectError("an at naming another record", mut(rich, (ir) => { OV(ir)[0].at = [6]; }), "nodes[1].instance.overrides[0].at[0]", true);
+  expectError("an override field outside OVERRIDE_FIELDS", mut(rich, (ir) => { OV(ir)[0].fields.pluginData = "x"; }), "nodes[1].instance.overrides[0].fields.pluginData", true);
+  expectError("an override field the target's type lacks (clipsContent on a TEXT)", mut(rich, (ir) => { OV(ir)[0].fields.clipsContent = false; }), "nodes[1].instance.overrides[0].fields.clipsContent", true);
+  expectError("an override field of the wrong kind", mut(rich, (ir) => { OV(ir)[0].fields.fontSize = "big"; }), "nodes[1].instance.overrides[0].fields.fontSize", true);
+  expectValid("an override's text ranges against its own characters", mut(rich, (ir) => { Object.assign(OV(ir)[0].fields, { characters: "Pay now", textRanges: [{ start: 4, end: 7, fields: { fontSize: 20 } }] }); }));
+  expectError("an override's text range past the target's characters", mut(rich, (ir) => { OV(ir)[0].fields.textRanges = [{ start: 2, end: 9, fields: { fontSize: 20 } }]; }), "nodes[1].instance.overrides[0].fields.textRanges[0]", true);
+  expectValid("a name override on a sublayer", mut(rich, (ir) => { OV(ir)[0].fields.name = "Price"; }));
+  expectError("a derived entry without the at it needs", mut(rich, (ir) => { delete ir.nodes[1].instance.derived[0].at; }), "nodes[1].instance.derived[0].at", true);
+  expectError("a derived entry with nothing to write", mut(rich, (ir) => { const d = ir.nodes[1].instance.derived[0]; delete d.size; delete d.lines; }), "nodes[1].instance.derived[0]", true);
+  expectError("a derived entry for the instance itself", mut(rich, (ir) => { ir.nodes[1].instance.derived[0].path = []; delete ir.nodes[1].instance.derived[0].at; }), "nodes[1].instance.derived[0].path", true);
+  expectError("two derived entries for one path", mut(rich, (ir) => { ir.nodes[1].instance.derived.push({ path: ["2:24"], at: [8], transform: [1, 0, 16, 0, 1, 10] }); }), "nodes[1].instance.derived[1].path", true);
+  expectError("a derived line count that is not one", mut(rich, (ir) => { ir.nodes[1].instance.derived[0].lines = -1; }), "nodes[1].instance.derived[0].lines", true);
+  expectError("derived side oracle that is not four booleans", mut(rich, (ir) => { ir.nodes[1].instance.derived[0].oracleSides = [true, true]; }), "nodes[1].instance.derived[0].oracleSides", true);
+  expectValid("a derived entry with its side oracle", mut(rich, (ir) => { ir.nodes[1].instance.derived[0].oracleSides = [false, false, true, false]; }));
+  expectError("exposed on a top-level instance", mut(rich, (ir) => { ir.nodes[1].instance.exposed = true; }), "nodes[1].instance.exposed", true);
+  expectError("exposed written as false", mut(rich, (ir) => { ir.nodes[1].instance.exposed = false; }), "nodes[1].instance.exposed", true);
+  for (const s of [1, 0, -2, "2"]) expectError("a scale of " + JSON.stringify(s), mut(rich, (ir) => { ir.nodes[1].instance.scale = s; }), "nodes[1].instance.scale", true);
+  expectValid("a scale other than 1", mut(rich, (ir) => { ir.nodes[1].instance.scale = 1.5; }));
+  const PV = (ir) => ir.components[2].properties[1].preferredValues;
+  expectError("a preferred value of an unknown type", mut(rich, (ir) => { PV(ir)[1].type = "STATE_GROUP"; }), "components[2].properties[1].preferredValues[1].type", true);
+  expectError("a preferred value whose key is not 40 hex", mut(rich, (ir) => { PV(ir)[1].componentKey = "c0ffee"; }), "components[2].properties[1].preferredValues[1].componentKey", true);
+  expectError("a preferred value whose guid is a record of another type", mut(rich, (ir) => { PV(ir)[1].guid = "2:21"; }), "components[2].properties[1].preferredValues[1].guid", true);
+  expectError("a preferred value whose guid has no record", mut(rich, (ir) => { PV(ir)[1].guid = "9:9"; }), "components[2].properties[1].preferredValues[1].guid", true);
+  expectError("a preferred value written as a master reference (version 2)", mut(rich, (ir) => { PV(ir)[1] = { guid: "2:21" }; }), "components[2].properties[1].preferredValues[1].type");
+  expectError("preferred values on a BOOLEAN property", mut(rich, (ir) => { ir.components[2].properties[0].preferredValues = []; }), "components[2].properties[0].preferredValues", true);
+  expectError("an INSTANCE_SWAP default that dangles", mut(rich, (ir) => { ir.components[2].properties[1].default = { guid: "9:9" }; }), "components[2].properties[1].default", true);
+  for (const [code, good, badDetail] of [["STALE_ASSIGNMENT", "no-root", "stale"], ["OVERRIDE_STALE", "unresolved", "gone"], ["PROPERTY_REF_DROPPED", "fill-style: 3", "fill"],
+    ["SWAP_VALUE_DANGLING", "swap: not carried", "a swap"], ["OVERRIDE_FIELD_DROPPED", "root-box: size 1", "size"]]) {
+    expectValid("a " + code + " note with its class", mut(rich, (ir) => { ir.notes[0] = { code, node: 1, detail: good }; }));
+    expectError("a " + code + " note with no class", mut(rich, (ir) => { ir.notes[0] = { code, node: 1, detail: badDetail }; }), "notes[0].detail", true);
+  }
+  expectValid("a VARIANT_SET_REJECTED note on a FRAME record, by node", mut(rich, (ir) => { ir.notes[0] = { code: CODE.VARIANT_SET_REJECTED, node: 0, detail: "duplicate-coordinate: 2 members" }; }));
+  expectError("a VARIANT_SET_REJECTED note by guid only", mut(rich, (ir) => { ir.notes[0] = { code: CODE.VARIANT_SET_REJECTED, guid: "1:10", detail: "axis-count" }; }), "notes[0].node", true);
+  expectError("a note with a path that names no instance", mut(rich, (ir) => { ir.notes[1].node = 0; }), "notes[1].node", true);
+  expectError("a note with a path and no node", mut(rich, (ir) => { delete ir.notes[1].node; }), "notes[1].node", true);
+}
+{
+  // Nested instances: Icon (1:20) holds a shape; Card (1:30) holds an instance of Icon; the page
+  // holds an instance of Card, whose overrides reach the nested instance and the shape inside it.
+  const nested = () => mut(minimal, (ir) => {
+    ir.values.push([{ type: "SOLID", color: { r: 1, g: 0, b: 0 } }]);
+    ir.nodes.push(
+      { parent: -1, page: 0, guid: "1:20", type: "COMPONENT", name: "Icon", props: frameProps(10, 10) },                                   // 1
+      { parent: 1, guid: "1:21", type: "RECTANGLE", name: "Shape", props: shapeProps(10, 10) },                                          // 2
+      { parent: -1, page: 0, guid: "1:30", type: "COMPONENT", name: "Card", props: frameProps(40, 20) },                                  // 3
+      { parent: 3, guid: "1:31", type: "INSTANCE", name: "Icon", props: { relativeTransform: [1, 0, 4, 0, 1, 4], width: 10, height: 10 },  // 4
+        instance: { master: { guid: "1:20" }, exposed: true } },
+      { parent: -1, page: 0, guid: "1:40", type: "INSTANCE", name: "Card", props: { relativeTransform: [1, 0, 0, 0, 1, 50], width: 40, height: 20 }, // 5
+        instance: { master: { guid: "1:30" }, overrideBasis: "authored",
+          overrides: [{ path: ["1:31"], at: [4], fields: { fills: 1 } }, { path: ["1:31", "1:21"], at: [4, 2], fields: { cornerRadius: 2 } }],
+          derived: [{ path: ["1:31", "1:21"], at: [4, 2], transform: [1, 0, 0, 0, 1, 0] }] } });
+    ir.components = [{ node: 1, set: null }, { node: 3, set: null }];
+  });
+  const I5 = (ir) => ir.nodes[5].instance;
+  expectValid("overrides on a nested instance (a fill: its master root's look) and on a layer inside it, with at; an exposed nested instance", nested());
+  expectError("characters on a nested INSTANCE target", mut(nested, (ir) => { I5(ir).overrides[0].fields.characters = "x"; }), "nodes[5].instance.overrides[0].fields.characters", true);
+  expectError("an at whose inner element is not an INSTANCE", mut(nested, (ir) => { I5(ir).overrides[1].path = ["1:21", "1:21"]; I5(ir).overrides[1].at = [2, 2]; }), "nodes[5].instance.overrides[1].at[0]");
+  expectError("an at whose later element lies inside no component", mut(nested, (ir) => { I5(ir).overrides[1].path = ["1:31", "1:10"]; I5(ir).overrides[1].at = [4, 0]; }), "nodes[5].instance.overrides[1].at[1]", true);
+  expectError("an at on an instance of a master that is not a record here", mut(nested, (ir) => {
+    I5(ir).master = { library: { publishFile: LIB, componentKey: "c0ffee" + "0".repeat(33) + "4" } };
+    I5(ir).overrides = [{ path: ["7:1"], at: [4], fields: { fills: 1 } }]; delete I5(ir).derived;
+  }), "nodes[5].instance.overrides[0].at", true);
+  expectError("assignments in an override naming a family not in this IR", mut(nested, (ir) => { I5(ir).overrides[0].properties = [{ family: "9:9", id: "X#1", value: true }]; }), "nodes[5].instance.overrides[0].properties[0].family", true);
+  expectError("exposed on an instance that sits in no component", mut(nested, (ir) => { I5(ir).exposed = true; }), "nodes[5].instance.exposed", true);
+  expectValid("a sparse derived entry: a transform alone", nested());
+}
+{
+  // The override tables (props.mjs, version 3).
+  const P = props, S = schema, bad = [];
+  const kindOk = (k) => S.PROP_KINDS.indexOf(k) >= 0 || (/^enum:[A-Z0-9_]+(\|[A-Z0-9_]+)*$/.test(k));
+  for (const k of Object.keys(P.OVERRIDE_FIELDS)) {
+    const kind = P.OVERRIDE_FIELDS[k];
+    if (!kindOk(kind)) bad.push("OVERRIDE_FIELDS." + k + " has an unknown kind " + kind);
+    if (P.OVERRIDE_CLASSES.indexOf(P.OVERRIDE_FIELD_CLASS[k]) < 0) bad.push(k + " has no class in OVERRIDE_FIELD_CLASS");
+    const known = Object.keys(P.KNOWN_PROPS).map((t) => P.KNOWN_PROPS[t][k]).filter(Boolean);
+    if (k !== "name" && !known.length) bad.push("OVERRIDE_FIELDS." + k + " is a prop of no node type");
+    if (known.some((x) => x !== kind)) bad.push("OVERRIDE_FIELDS." + k + " is " + kind + " but KNOWN_PROPS says " + known.join("/"));
+    if (S.ORACLE_PROPS.indexOf(k) >= 0 || S.GEOMETRY_PROPS.indexOf(k) >= 0) bad.push("OVERRIDE_FIELDS." + k + " is an oracle or geometry prop");
+  }
+  if (P.OVERRIDE_FIELDS.name !== "str") bad.push("OVERRIDE_FIELDS.name is not str");
+  for (const k of Object.keys(P.OVERRIDE_FIELD_CLASS)) if (!P.OVERRIDE_FIELDS[k]) bad.push("OVERRIDE_FIELD_CLASS." + k + " is no override field");
+  const want = { applies: ["fills", "fillStyle", "strokes", "strokeStyle", "strokeWeight", "strokeWeights", "strokeAlign", "effects", "effectStyle", "opacity", "blendMode",
+    "name", "cornerRadius", "cornerRadii", "visible", "characters", "fontSize", "textAutoResize"], refused: ["width", "height", "relativeTransform", "constraints"] };
+  for (const c of Object.keys(want)) for (const k of want[c]) if (P.OVERRIDE_FIELD_CLASS[k] !== c) bad.push(k + " is " + P.OVERRIDE_FIELD_CLASS[k] + ", not " + c + " (P13)");
+  for (const k of P.ROOT_OVERRIDE_FIELDS) if (!P.KNOWN_PROPS.COMPONENT[k] || P.KNOWN_PROPS.INSTANCE[k]) bad.push("ROOT_OVERRIDE_FIELDS." + k + " is not a COMPONENT prop an INSTANCE record lacks");
+  for (const k of ["width", "height", "relativeTransform", "visible", "locked", "name", "constraints", "layoutSizingHorizontal"]) if (P.ROOT_OVERRIDE_FIELDS.indexOf(k) >= 0) bad.push("ROOT_OVERRIDE_FIELDS holds the record's own " + k);
+  for (const k of ["fills", "opacity", "effects", "cornerRadius"]) if (P.ROOT_OVERRIDE_FIELDS.indexOf(k) < 0) bad.push("ROOT_OVERRIDE_FIELDS lacks the look field " + k);
+  if (bad.length) bad.forEach((b) => fail("props.mjs (version 3): " + b));
+  else ok("props.mjs (version 3): " + Object.keys(P.OVERRIDE_FIELDS).length + " override fields, each of a KNOWN_PROPS kind with one class (P13's applies and refused as probed, the rest unprobed); the instance's own override takes its look only (" + P.ROOT_OVERRIDE_FIELDS.length + " fields)");
+}
+{
+  const S = schema, bad = [];
+  for (const c of Object.keys(S.NOTE_CLASSES)) {
+    if (!REASON_CODES[c] || REASON_CODES[c].stage !== "read") bad.push(c + " is not a read-stage code");
+    if (!S.NOTE_CLASSES[c].length || new Set(S.NOTE_CLASSES[c]).size !== S.NOTE_CLASSES[c].length) bad.push(c + " has an empty or repeating class list");
+    if (S.noteClass(c, S.NOTE_CLASSES[c][0] + ": text") !== S.NOTE_CLASSES[c][0] || S.noteClass(c, "x" + S.NOTE_CLASSES[c][0]) !== null) bad.push("noteClass misreads " + c);
+  }
+  for (const c of ["PROPERTY_REF_DROPPED", "SWAP_VALUE_DANGLING", "SWAP_ASSIGNMENT_IGNORED", "OVERRIDE_PATHS_MERGED", "OVERRIDE_FIELD_DROPPED"]) if (!REASON_CODES[c] || REASON_CODES[c].stage !== "read") bad.push(c + " is missing or not read-stage");
+  if (bad.length) bad.forEach((b) => fail("note classes: " + b));
+  else ok("note classes: " + Object.keys(S.NOTE_CLASSES).length + " codes with frozen classes, read-stage, and noteClass reads them; the five M2a codes are in the vocabulary");
+}
+
 // ---------- the validator never throws, whatever it is given ----------
 for (const [label, v] of [["null", null], ["an array", []], ["a string", "pix2fig.ir"], ["a number", 1],
   ["a header of null", { header: null }], ["records of the wrong kind", { header: header("pix"), nodes: [null, 3, "x"], pages: {} }]]) {
@@ -461,7 +592,7 @@ const BUNDLED = ["schema.mjs", "props.mjs", "task.mjs", "pathgeom.mjs"];
   }
   const code = codeOf("schema.mjs");
   try {
-    const bareProps = runInNewContext(codeOf("props.mjs").replace(/^export (const|function) /gm, "$1 ") + "\n;({ KNOWN_PROPS, RANGE_FIELDS, NEVER_OMIT, DEFAULTS });",
+    const bareProps = runInNewContext(codeOf("props.mjs").replace(/^export (const|function) /gm, "$1 ") + "\n;({ KNOWN_PROPS, RANGE_FIELDS, NEVER_OMIT, DEFAULTS, OVERRIDE_FIELDS, OVERRIDE_FIELD_CLASS, ROOT_OVERRIDE_FIELDS });",
       { TextEncoder: undefined, TextDecoder: undefined, BigInt: undefined });
     const bare = runInNewContext(code.replace(/^export (const|function) /gm, "$1 ") + "\n;({ validateIR, valueSignature });",
       { TextEncoder: undefined, TextDecoder: undefined, BigInt: undefined });

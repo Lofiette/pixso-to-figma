@@ -1,4 +1,4 @@
-// The IR, version 2: what a source (a saved .pix or live Pixso) tells the builder, as data only.
+// The IR, version 3: what a source (a saved .pix or live Pixso) tells the builder, as data only.
 // docs/IR.md describes it; this file is the part of that description a program can check.
 //
 //   import { validate } from "./ir/validate.mjs";   // every caller: it passes the prop tables in
@@ -26,7 +26,8 @@
 // tools/test-ir.mjs fails on a quoted code in any M1 file and on a CODE.X that names no code.
 
 export const FORMAT = "pix2fig.ir";
-export const VERSION = 2;
+// Version 3 is M2a's one bump (docs/M2A.md D16): components, properties, overrides and derived boxes.
+export const VERSION = 3;
 
 export const SOURCE_KINDS = ["pix", "mcp"];
 export const SCOPE_KINDS = ["file", "pages", "page", "selection"];
@@ -49,14 +50,38 @@ export const SETTINGS = {
   // docs/M1.md D5 and D14: how a boolean is carried, and where a single flow child of SPACE_EVENLY goes.
   booleans: ["auto", "native", "flatten"],
   spaceEvenlySingle: ["between", "center"],
+  // docs/M2A.md §3: the component reader's policies (version 3). Each value's decision is named there.
+  variantSets: ["parse", "frames"],                 // D2, D13: frames is M1's D7 (no sets)
+  variantGrammar: ["names", "vocabulary"],          // D2
+  axisOrder: ["vocabulary", "names"],               // D2
+  swapDangling: ["skip", "strict"],                 // D5, D7 rule A
+  swapReset: ["on", "off"],                         // D7 rule B
+  swapFallback: ["derived", "off"],                 // D7 rule C
+  swapDefault: ["layer", "definition"],             // D5
+  rejectedProps: ["copy", "none"],                  // D3
+  defaultAssignments: ["keep", "drop"],             // D6
+  overrideMerge: ["last", "first", "outer"],        // D8, D17
+  echo: ["drop", "keep"],                           // D9
+  instanceOwn: ["overrides", "own"],                // D11
+  derivedGeometry: ["changed", "all", "none"],      // D10
 };
+// The thirteen settings M2a adds (docs/M2A.md §3), in the order of that table.
+export const M2A_SETTINGS = ["variantSets", "variantGrammar", "axisOrder", "swapDangling", "swapReset", "swapFallback",
+  "swapDefault", "rejectedProps", "defaultAssignments", "overrideMerge", "echo", "instanceOwn", "derivedGeometry"];
 export const SETTING_KEYS = Object.keys(SETTINGS).concat(["kitmaps"]);
 export const SETTING_FLAGS = { mode: "--mode", overrides: "--overrides", drift: "--drift", deleted: "--deleted",
   resync: "--resync", textFit: "--text-fit", booleans: "--booleans", spaceEvenlySingle: "--space-evenly-single",
-  kitmaps: "--kitmaps" };
-// The owner's default for each (docs/M1.md §3, REWRITE.md §11). mode has none: it is chosen per run.
+  variantSets: "--variant-sets", variantGrammar: "--variant-grammar", axisOrder: "--axis-order", swapDangling: "--swap-dangling",
+  swapReset: "--swap-reset", swapFallback: "--swap-fallback", swapDefault: "--swap-default", rejectedProps: "--rejected-props",
+  defaultAssignments: "--default-assignments", overrideMerge: "--override-merge", echo: "--echo", instanceOwn: "--instance-own",
+  derivedGeometry: "--derived-geometry", kitmaps: "--kitmaps" };
+// The owner's default for each (docs/M1.md §3, docs/M2A.md §3, REWRITE.md §11). mode has none: it is
+// chosen per run. overrideMerge is "last" until part C's measurement (docs/M2A.md D17).
 export const SETTING_DEFAULTS = { overrides: "fidelity", drift: "link", deleted: "publish",
-  resync: "pixso-unless-edited", textFit: "widen", booleans: "auto", spaceEvenlySingle: "center", kitmaps: "default" };   // spaceEvenlySingle: P18, 2026-10-05
+  resync: "pixso-unless-edited", textFit: "widen", booleans: "auto", spaceEvenlySingle: "center",   // spaceEvenlySingle: P18, 2026-10-05
+  variantSets: "parse", variantGrammar: "names", axisOrder: "vocabulary", swapDangling: "skip", swapReset: "on",
+  swapFallback: "derived", swapDefault: "layer", rejectedProps: "copy", defaultAssignments: "keep", overrideMerge: "last",
+  echo: "drop", instanceOwn: "overrides", derivedGeometry: "changed", kitmaps: "default" };
 
 // Figma's node types, which the IR speaks. Pixso never produces SLOT, but the Figma Сова kit uses
 // it inside its components, and the matcher and verifier read Figma trees with this same list.
@@ -69,6 +94,14 @@ export const PROPERTY_TYPES = ["BOOLEAN", "TEXT", "INSTANCE_SWAP"];
 export const STYLE_TYPES = ["PAINT", "TEXT", "EFFECT", "GRID"];
 export const IMAGE_FORMATS = ["png", "jpeg", "webp", "gif", "unknown"];
 export const OVERRIDE_BASES = ["authored", "resolved"];
+// Version 3 (docs/M2A.md §5.1). An INSTANCE_SWAP property's preferred values are key references in
+// Figma's own shape, { type, componentKey, guid? }: guid names the component or set when the key's
+// copy is in this IR; a key whose copy is not stays, by key, for M3's kit map.
+export const PREFERRED_TYPES = ["COMPONENT", "COMPONENT_SET"];
+// The keys of an instance's data, of one override entry and of one derived entry, each closed.
+export const INSTANCE_KEYS = ["master", "properties", "overrides", "overrideBasis", "derived", "exposed", "scale"];
+export const OVERRIDE_KEYS = ["path", "at", "fields", "swap", "properties"];
+export const DERIVED_KEYS = ["path", "at", "size", "transform", "fillGeometry", "strokeGeometry", "lines", "oracleSides"];
 
 // Properties whose value is an index into `values`, wherever they appear: node props, text range
 // fields and override fields. Today's payload interns the same kinds (pack4.mjs).
@@ -112,6 +145,25 @@ export const SUPERSEDED_BY = { x: "relativeTransform", y: "relativeTransform", r
 // The classes of VECTOR_ORACLE_DIFFERS, pre-registered (docs/M1.md §8.3). The note's detail is the
 // class, optionally followed by ": " and free text; the judge excuses only that class.
 export const ORACLE_CLASSES = ["region-no-fill", "network-bounds", "winding"];
+// Every code whose detail starts with a class from a frozen list (docs/M2A.md §5.1, IR.md §13): the
+// class, optionally followed by ": " and free text. Each list is in the order the reader decides in
+// (the first class that applies), which docs/M2A.md D2, D4, D6, D8 and D10 fix.
+export const NOTE_CLASSES = {
+  VECTOR_ORACLE_DIFFERS: ORACLE_CLASSES,
+  VARIANT_SET_REJECTED: ["no-equals", "duplicate-axis", "axis-count", "duplicate-coordinate", "vocabulary", "empty", "not-symbol"],
+  STALE_ASSIGNMENT: ["no-definition", "other-family", "no-root", "undeclared", "nested", "ignored"],
+  OVERRIDE_STALE: ["not-derived", "unresolved"],
+  PROPERTY_REF_DROPPED: ["fill-style", "outside-definition", "no-definition", "other-family", "no-root", "undeclared", "type-mismatch"],
+  SWAP_VALUE_DANGLING: ["assignment", "default", "swap"],
+  OVERRIDE_FIELD_DROPPED: ["no-equivalent", "not-on-type", "layer-not-carried", "root-box", "unknown"],
+};
+// The class of a note's detail, or null when the detail does not start with one of its code's classes.
+export function noteClass(code, detail) {
+  const list = Object.prototype.hasOwnProperty.call(NOTE_CLASSES, code) ? NOTE_CLASSES[code] : null;
+  if (!list || typeof detail !== "string") return null;
+  const cls = detail.split(": ")[0];
+  return list.indexOf(cls) >= 0 ? cls : null;
+}
 export const WINDING_RULES = ["NONZERO", "EVENODD"];
 export const HANDLE_MIRRORING = ["NONE", "ANGLE", "ANGLE_AND_LENGTH"];
 // The prop kinds of tools/ir/props.mjs, plus "enum:A|B|…". `own` is an IR-own prop whose rule is
@@ -134,17 +186,23 @@ export const REASON_CODES = {
   EXTRACT_FAILED: { stage: "run", plan: null, from: "§6: the verdict counts them, so a failed extraction is a failed object", meaning: "Pixso answered and the object's extraction still failed; the whole error is in its extract-error.log, and a re-run tries it again" },
   NO_ID: { stage: "run", plan: null, from: "§6: every object ends in a recorded state: built, built-with-fallbacks, failed or skipped", meaning: "reading the file gave the object no id, so it cannot be extracted; it is skipped and counted as a loss" },
 
-  VARIANT_SET_REJECTED: { stage: "read", plan: "§3", meaning: "a state group whose member names do not parse into one set of axes; its members become standalone components" },
-  STALE_ASSIGNMENT: { stage: "read", plan: "§3", meaning: "a property assignment whose definition cannot be reached from the instance's current family; dropped, never matched by name" },
+  VARIANT_SET_REJECTED: { stage: "read", plan: "§3", meaning: "a state group whose member names do not parse into one set of axes; it stays a FRAME record (the note names it by node) and its members become standalone components; the detail starts with the class (NOTE_CLASSES)" },
+  STALE_ASSIGNMENT: { stage: "read", plan: "§3", meaning: "a property assignment whose definition cannot be reached from the instance's current family; dropped, never matched by name; one note per assignment, the detail starting with the class (NOTE_CLASSES)" },
   STYLE_MISSING_IN_SOURCE: { stage: "read", plan: "§3", meaning: "a style reference that resolves to no style definition of its kind in the file, or to one with no value there; the node keeps its own values, unbound" },
   STYLE_VALUE_DIFFERS: { stage: "read", plan: "§3", meaning: "the node's own value differs from its resolved style's by more than 1/255 per channel or unit; Pixso draws the style's, so the style's value is written and the style bound (the node's own is a stale copy)" },
   VECTOR_FROM_GEOMETRY: { stage: "read", plan: "§3", meaning: "a vector with fill geometry but no region, built from its stored fill and stroke geometry" },
-  OVERRIDE_STALE: { stage: "read", plan: null, from: "§3: entries whose path is absent from derivedSymbolData are provably stale: dropped and counted", meaning: "an override entry whose path is absent from derivedSymbolData; dropped" },
-  OVERRIDE_ECHO: { stage: "read", plan: null, from: "§3: many override fields only echo the master's value and must be dropped before applying", meaning: "an override field equal to the master's value; dropped" },
+  OVERRIDE_STALE: { stage: "read", plan: null, from: "§3: entries whose path is absent from derivedSymbolData are provably stale: dropped and counted", meaning: "an override entry whose path is absent from derivedSymbolData (not-derived), or in it but not resolving (unresolved); dropped, one note per path" },
+  OVERRIDE_ECHO: { stage: "read", plan: null, from: "§3: many override fields only echo the master's value and must be dropped before applying", meaning: "override fields equal to the value the target layer has without them; dropped, one note per instance with the count and the field names" },
+  // M2a (docs/M2A.md §5.1).
+  PROPERTY_REF_DROPPED: { stage: "read", plan: null, from: "§3: Type, name and default therefore always come from the root definition on the set, and every definition is keyed by (family, id)", meaning: "a layer's binding to a component property that is not carried; never matched by name; one note per record and class, the detail starting with the class (NOTE_CLASSES) and the count" },
+  SWAP_VALUE_DANGLING: { stage: "read", plan: null, from: "§3: With swaps resolved, derivedSymbolData paths resolve", meaning: "an INSTANCE_SWAP value or default, or a swap target, naming no component the IR can reference; dropped (rule A for resolution); the detail starts with the class (NOTE_CLASSES)" },
+  SWAP_ASSIGNMENT_IGNORED: { stage: "read", plan: null, from: "§3: With swaps resolved, derivedSymbolData paths resolve", meaning: "a swap assignment Pixso's derived data shows was not applied; the declared symbol is used and the assignment dropped (rule C); one note per instance with the count" },
+  OVERRIDE_PATHS_MERGED: { stage: "read", plan: null, from: "§3: symbolOverrides are addressed by guidPath", meaning: "override entries of one path merged into one entry (--override-merge); one note per instance with the conflicting field count" },
+  OVERRIDE_FIELD_DROPPED: { stage: "read", plan: null, from: "§3: Many override fields only echo the master's value and must be dropped before applying", meaning: "an override field not carried; one note per instance and class, the detail the class (NOTE_CLASSES), then \": \" and the fields with counts" },
   NODE_TYPE_UNSUPPORTED: { stage: "read", plan: null, from: "§7: coverage, with every loss given a reason code; §8: the fixture covers an unsupported node type", meaning: "a source node of a type the IR has no type for; it and its subtree are not carried" },
   // M1 (docs/M1.md §5.1).
   TEXT_LINES_UNKNOWN: { stage: "read", plan: null, from: "§3: Pixso's own line breaks are stored, which gives a direct check for the one-pixel heading wrap (decision 9)", meaning: "a buildable text with no stored baselines; it carries no lines, so its line count is not checked" },
-  SOURCE_FEATURE_UNSUPPORTED: { stage: "read", plan: null, from: "§7: Source vs IR. Coverage, with every loss given a reason code", meaning: "a Pixso feature Figma lacks; the detail starts with the feature, from an open list (CONNECTLINE, LINE with height, SECTION strokes, SECTION corner radius, RIGHT_ANGLE, vibrance, hue filter, dashCap, deformationTransform, fontVariations, GRID, counter alignment <X>, strokeCap <X>, effect <TYPE>, an exportSettings format, paint type <X>, image paint without an image, text without a font name, inverse winding, open region loop, operand strokes, an operand without fill geometry, boolean without stored geometry, built natively); dropped or converted, and counted" },
+  SOURCE_FEATURE_UNSUPPORTED: { stage: "read", plan: null, from: "§7: Source vs IR. Coverage, with every loss given a reason code", meaning: "a Pixso feature Figma lacks; the detail starts with the feature, from an open list (CONNECTLINE, LINE with height, SECTION strokes, SECTION corner radius, RIGHT_ANGLE, vibrance, hue filter, dashCap, deformationTransform, fontVariations, GRID, counter alignment <X>, strokeCap <X>, effect <TYPE>, an exportSettings format, paint type <X>, image paint without an image, text without a font name, inverse winding, open region loop, operand strokes, an operand without fill geometry, boolean without stored geometry, built natively, COLOR property); dropped or converted, and counted" },
   GEOMETRY_INVALID: { stage: "read", plan: null, from: "§7: Source vs IR. Coverage, with every loss given a reason code", meaning: "a NaN size, transform or path, or a boolean with no operand and no geometry; the box comes from the geometry or the children, or the node is not carried" },
   IMAGE_HASH_MISMATCH: { stage: "read", plan: null, from: "§4: Pixso MCP bytes by hash (the SHA-1 is checked)", meaning: "an archive image entry whose SHA-1 is not its name; it is treated as missing (a file-level note: no node, the name in the detail)" },
   VECTOR_ORACLE_DIFFERS: { stage: "read", plan: null, from: "§3: Regions and fillGeometry disagree on 35 and 220 vectors", meaning: "the stored network and the stored fill geometry disagree in a pre-registered class (region-no-fill, network-bounds, winding); the judge excuses only that class" },
@@ -293,7 +351,7 @@ export function validateIR(ir, options) {
   // The tables are data (this file imports nothing). Without them every node would pass unchecked,
   // so a caller that forgets them is told at once rather than given a meaningless ok.
   const PT = options && options.props;
-  if (!isObj(PT) || !isObj(PT.KNOWN_PROPS) || !isObj(PT.RANGE_FIELDS) || !Array.isArray(PT.NEVER_OMIT)) {
+  if (!isObj(PT) || !isObj(PT.KNOWN_PROPS) || !isObj(PT.RANGE_FIELDS) || !Array.isArray(PT.NEVER_OMIT) || !isObj(PT.OVERRIDE_FIELDS)) {
     throw new TypeError("validateIR(ir, { props }) needs the prop tables of tools/ir/props.mjs; call validate() from tools/ir/validate.mjs");
   }
   const maxErrors = (options && options.maxErrors) || 200;
@@ -612,34 +670,36 @@ export function validateIR(ir, options) {
       else if (!(Array.isArray(pr.inkBounds) && pr.inkBounds.length === 4 && pr.inkBounds.every(isNum))) err(P + ".inkBounds", "must be [x, y, width, height]");
     }
     if (pr.lines !== undefined && (n.type !== "TEXT" || !isInt(pr.lines) || pr.lines < 0)) err(P + ".lines", "the number of lines Pixso drew: a TEXT record's non-negative integer; got " + show(pr.lines));
-    if (pr.textRanges !== undefined && n.type === "TEXT") {
-      if (!Array.isArray(pr.textRanges)) err(P + ".textRanges", "must be an array");
-      else {
-        const chars = isStr(pr.characters) ? pr.characters : "";
-        const len = chars.length;
-        // A bound between the two halves of a surrogate pair would style half a character.
-        const splits = (at) => at > 0 && at < len && chars.charCodeAt(at - 1) >= 0xd800 && chars.charCodeAt(at - 1) <= 0xdbff &&
-          chars.charCodeAt(at) >= 0xdc00 && chars.charCodeAt(at) <= 0xdfff;
-        let prevEnd = 0;
-        pr.textRanges.forEach((r, j) => {
-          const R = P + ".textRanges[" + j + "]";
-          if (!isObj(r)) { err(R, "must be an object"); return; }
-          closed(r, ["start", "end", "fields"], R);
-          if (!isInt(r.start) || !isInt(r.end) || r.start < 0 || r.end <= r.start || r.end > len) { err(R, "range [" + show(r.start) + ", " + show(r.end) + ") is not inside the " + len + " UTF-16 units of characters"); return; }
-          if (r.start < prevEnd) err(R + ".start", "ranges are ascending and do not overlap; this one starts at " + r.start + " before the previous end " + prevEnd);
-          prevEnd = r.end;
-          if (splits(r.start)) err(R + ".start", r.start + " splits a surrogate pair");
-          if (splits(r.end)) err(R + ".end", r.end + " splits a surrogate pair");
-          if (!isObj(r.fields)) { err(R + ".fields", "must be an object"); return; }
-          for (const k of Object.keys(r.fields)) {
-            if (!own(PT.RANGE_FIELDS, k)) err(R + ".fields." + k, "not a text range field (props.mjs RANGE_FIELDS)");
-            else checkKind(PT.RANGE_FIELDS[k], r.fields[k], R + ".fields." + k, k);
-          }
-          checkFields(r.fields, R + ".fields");
-        });
-      }
-    }
+    if (pr.textRanges !== undefined && n.type === "TEXT") checkTextRanges(pr.textRanges, pr.characters, P + ".textRanges");
   });
+
+  // Text ranges, on a TEXT record and in an override's fields (version 3), against the characters
+  // they style: in UTF-16 units, ascending, inside the characters, never splitting a surrogate pair.
+  function checkTextRanges(ranges, characters, P) {
+    if (!Array.isArray(ranges)) { err(P, "must be an array"); return; }
+    const chars = isStr(characters) ? characters : "";
+    const len = chars.length;
+    // A bound between the two halves of a surrogate pair would style half a character.
+    const splits = (at) => at > 0 && at < len && chars.charCodeAt(at - 1) >= 0xd800 && chars.charCodeAt(at - 1) <= 0xdbff &&
+      chars.charCodeAt(at) >= 0xdc00 && chars.charCodeAt(at) <= 0xdfff;
+    let prevEnd = 0;
+    ranges.forEach((r, j) => {
+      const R = P + "[" + j + "]";
+      if (!isObj(r)) { err(R, "must be an object"); return; }
+      closed(r, ["start", "end", "fields"], R);
+      if (!isInt(r.start) || !isInt(r.end) || r.start < 0 || r.end <= r.start || r.end > len) { err(R, "range [" + show(r.start) + ", " + show(r.end) + ") is not inside the " + len + " UTF-16 units of characters"); return; }
+      if (r.start < prevEnd) err(R + ".start", "ranges are ascending and do not overlap; this one starts at " + r.start + " before the previous end " + prevEnd);
+      prevEnd = r.end;
+      if (splits(r.start)) err(R + ".start", r.start + " splits a surrogate pair");
+      if (splits(r.end)) err(R + ".end", r.end + " splits a surrogate pair");
+      if (!isObj(r.fields)) { err(R + ".fields", "must be an object"); return; }
+      for (const k of Object.keys(r.fields)) {
+        if (!own(PT.RANGE_FIELDS, k)) err(R + ".fields." + k, "not a text range field (props.mjs RANGE_FIELDS)");
+        else checkKind(PT.RANGE_FIELDS[k], r.fields[k], R + ".fields." + k, k);
+      }
+      checkFields(r.fields, R + ".fields");
+    });
+  }
 
   // ---------- component definitions ----------
   const sets = table(ir.sets, "sets");
@@ -846,7 +906,21 @@ export function validateIR(ir, options) {
       if (def.preferredValues !== undefined) {
         if (def.type !== "INSTANCE_SWAP") err(path + ".preferredValues", "only an INSTANCE_SWAP property has preferred values");
         else if (!Array.isArray(def.preferredValues)) err(path + ".preferredValues", "must be an array");
-        else def.preferredValues.forEach((r, j) => resolveMaster(r, path + ".preferredValues[" + j + "]"));
+        // Version 3: key references in Figma's shape (docs/M2A.md D5). A key whose copy is not in
+        // this IR stays by key, for M3's kit map; a guid, when given, names that copy's record.
+        else def.preferredValues.forEach((r, j) => {
+          const R = path + ".preferredValues[" + j + "]";
+          if (!isObj(r)) { err(R, "a preferred value is { type, componentKey, guid? }"); return; }
+          closed(r, ["type", "componentKey", "guid"], R);
+          if (PREFERRED_TYPES.indexOf(r.type) < 0) err(R + ".type", "must be one of " + PREFERRED_TYPES.join(", ") + "; got " + show(r.type));
+          if (!(isStr(r.componentKey) && HEX40.test(r.componentKey))) err(R + ".componentKey", "must be 40 lowercase hex; got " + show(r.componentKey));
+          if (r.guid !== undefined) {
+            const ni = isGuid(r.guid) ? guidIndex.get(r.guid) : undefined;
+            if (!isGuid(r.guid)) err(R + ".guid", "not a guid: " + show(r.guid));
+            else if (ni === undefined || !nodeOk[ni]) err(R + ".guid", r.guid + " is not a record in this IR; a key whose copy is not carried is kept by key alone");
+            else if (nodes[ni].type !== r.type) err(R + ".guid", r.guid + " is a " + nodes[ni].type + " record; a " + r.type + " preferred value names a " + r.type + " record");
+          }
+        });
       }
     }
   }
@@ -875,23 +949,94 @@ export function validateIR(ir, options) {
   });
 
   // ---------- instances ----------
+  // Version 3 (docs/M2A.md §5.1). An override's fields are closed to OVERRIDE_FIELDS (props.mjs) and,
+  // where its target record is known (`at`), to the target type's props plus name; a nested INSTANCE
+  // target takes the props of a COMPONENT, its master root's look (KNOWN_PROPS.INSTANCE is the M1
+  // placeholder's box). The instance's own override (path []) carries its look only: the box, child
+  // layout, visibility and lock are the record's own props (D8).
+  const ROOT_LOOK = new Set(Object.keys(PT.OVERRIDE_FIELDS).filter((k) => kindOf("COMPONENT", k) !== undefined && kindOf("INSTANCE", k) === undefined));
+  const insideComponent = (ni) => {
+    const n0 = nodeAt(ni);
+    for (let k = n0 ? n0.parent : -1, guard = 0; isInt(k) && k >= 0 && guard <= nodes.length; guard++) {
+      const p = nodeAt(k);
+      if (!p) return false;
+      if (p.type === "COMPONENT") return true;
+      k = p.parent;
+    }
+    return false;
+  };
+  const checkOverrideFields = (f, P, target) => {
+    let any = false;
+    for (const k of Object.keys(f)) {
+      any = true;
+      const at = P + "." + k;
+      if (!own(PT.OVERRIDE_FIELDS, k)) { err(at, "not an override field (props.mjs OVERRIDE_FIELDS)"); continue; }
+      if (target === "ROOT") {
+        if (!ROOT_LOOK.has(k)) { err(at, "the instance's own override carries its look only; " + k + " is the record's own (docs/M2A.md D8)"); continue; }
+      } else if (target && k !== "name") {
+        const ttype = target.type === "INSTANCE" ? "COMPONENT" : target.type;
+        if (kindOf(ttype, k) === undefined) { err(at, k + " is not a prop of the target, a " + target.type + " record" + (target.type === "INSTANCE" ? " (which takes its master root's props)" : "")); continue; }
+      }
+      const kind = PT.OVERRIDE_FIELDS[k], v = f[k];
+      if (kind === "own") {
+        if (k === "relativeTransform") { if (!(Array.isArray(v) && v.length === 6 && v.every(isNum))) err(at, "six finite numbers [a, b, tx, c, d, ty]"); }
+        else if (k === "strokeWeights" || k === "cornerRadii") {
+          if (!quad(v, nonNeg)) err(at, "must be four finite numbers >= 0");
+          else if (v.every((x) => x === v[0])) err(at, "four equal values are written as " + (k === "strokeWeights" ? "strokeWeight" : "cornerRadius"));
+        } else if (k === "textRanges") {
+          const chars = isStr(f.characters) ? f.characters : target && target !== "ROOT" && isObj(target.props) ? target.props.characters : undefined;
+          checkTextRanges(v, chars, at);
+        }
+      } else checkKind(kind, v, at, k);
+    }
+    checkFields(f, P);
+    return any;
+  };
+
   nodes.forEach((n, i) => {
     if (!nodeOk[i] || n.type !== "INSTANCE" || !isObj(n.instance)) return;
     const P = "nodes[" + i + "].instance";
     const inst = n.instance;
-    closed(inst, ["master", "properties", "overrides", "overrideBasis", "derived"], P);
+    closed(inst, INSTANCE_KEYS, P);
     const ci = resolveMaster(inst.master, P + ".master");
     const local = isInt(ci) && ci >= 0;
     // The first hop of a guidPath is a layer of this instance's master. Later hops go through
-    // nested instances and swaps; resolving those is the reader's job (M2a), not this check's.
+    // nested instances and swaps; the reader resolves those (docs/M2A.md D7) and writes `at`, which
+    // is checked below element by element.
     const firstHop = (g, at) => {
       if (!local) return;
       const root = comps[ci].node, ni = guidIndex.get(g);
       if (ni === undefined || ni === root || !inSubtree(ni, root)) err(at, g + " is not a layer inside the master (" + nodes[root].guid + ")");
     };
+    // `at`: the record index of each path element (D10). Required when the master is a record here
+    // and every element has one. Returns the target record, or null when `at` is absent or wrong.
+    const checkAt = (at, path, AP) => {
+      if (at === undefined) {
+        if (local && path.every((g) => guidIndex.has(g))) err(AP, "missing; the master is a record in this IR and every path element has one, so the record index of each is written (docs/M2A.md D10)");
+        return null;
+      }
+      if (!Array.isArray(at) || at.length !== path.length || !at.every(isInt)) { err(AP, "the record index of each path element, as many as the path has (" + path.length + ")"); return null; }
+      if (!local) { err(AP, "only an instance whose master is a record in this IR indexes its path"); return null; }
+      let good = true;
+      at.forEach((x, k) => {
+        const A = AP + "[" + k + "]", r = nodeAt(x);
+        if (!r) { err(A, "index " + show(x) + " is not a node record"); good = false; return; }
+        if (r.guid !== path[k]) { err(A, "nodes[" + x + "] is " + r.guid + ", not the path's " + path[k]); good = false; return; }
+        const root = comps[ci].node;
+        if (k === 0 && (x === root || !inSubtree(x, root))) { err(A, "the first element is a layer inside the master (" + nodes[root].guid + ")"); good = false; }
+        if (k < at.length - 1 && r.type !== "INSTANCE") { err(A, "every element but the last is a nested INSTANCE; nodes[" + x + "] is a " + r.type); good = false; }
+        if (k > 0 && !insideComponent(x)) { err(A, "nodes[" + x + "] lies inside no COMPONENT record, so it is no layer of a nested master"); good = false; }
+      });
+      return good ? nodeAt(at[at.length - 1]) : null;
+    };
     const masterFamily = local ? familyOfComp(ci) : null;
     if (local && inSubtree(i, comps[ci].node)) err(P + ".master", "an instance inside its own master");
     checkAssignments(inst.properties, P + ".properties", masterFamily, ci === -1);
+    if (inst.exposed !== undefined) {
+      if (inst.exposed !== true) err(P + ".exposed", "written only as true (Figma's isExposedInstance); got " + show(inst.exposed));
+      else if (!insideComponent(i)) err(P + ".exposed", "only a nested instance inside a COMPONENT record exposes its properties");
+    }
+    if (inst.scale !== undefined && !(isNum(inst.scale) && inst.scale > 0 && inst.scale !== 1)) err(P + ".scale", "the uniform scale factor: a finite number > 0 other than 1; got " + show(inst.scale));
 
     const ov = inst.overrides;
     if (ov !== undefined) {
@@ -901,22 +1046,37 @@ export function validateIR(ir, options) {
         ov.forEach((o, j) => {
           const O = P + ".overrides[" + j + "]";
           if (!isObj(o)) { err(O, "must be an object"); return; }
-          closed(o, ["path", "fields", "swap", "properties"], O);
-          if (!Array.isArray(o.path) || o.path.length === 0) { err(O + ".path", "a guidPath is a non-empty array of guids"); return; }
+          closed(o, OVERRIDE_KEYS, O);
+          if (!Array.isArray(o.path)) { err(O + ".path", "a guidPath is an array of guids ([] for the instance itself)"); return; }
           let good = true;
           o.path.forEach((g, k) => { if (!isGuid(g)) { err(O + ".path[" + k + "]", "not a guid: " + show(g)); good = false; } });
           if (!good) return;
           const key = o.path.join("/");
           if (paths.has(key)) err(O + ".path", "same path as overrides[" + paths.get(key) + "]; one entry per path");
           else paths.set(key, j);
-          firstHop(o.path[0], O + ".path[0]");
-          let any = false;
+          let any = false, target = null;
+          if (o.path.length === 0) {
+            // The instance itself: its master is instance.master and its assignments instance.properties.
+            if (o.at !== undefined) err(O + ".at", "the instance's own override has no path to index");
+            if (o.swap !== undefined) err(O + ".swap", "the instance's own override takes no swap; its master is instance.master");
+            if (o.properties !== undefined) err(O + ".properties", "the instance's own override takes no properties; they are instance.properties");
+            target = "ROOT";
+          } else {
+            firstHop(o.path[0], O + ".path[0]");
+            target = checkAt(o.at, o.path, O + ".at");
+          }
           if (o.fields !== undefined) {
             if (!isObj(o.fields)) err(O + ".fields", "must be an object");
-            else { checkFields(o.fields, O + ".fields"); if (Object.keys(o.fields).length) any = true; }
+            else if (checkOverrideFields(o.fields, O + ".fields", target)) any = true;
           }
-          if (o.swap !== undefined) { resolveMaster(o.swap, O + ".swap"); any = true; }
-          if (checkAssignments(o.properties, O + ".properties", null, true)) any = true;
+          let swapFamily = null, swapExternal = false;
+          if (o.swap !== undefined && o.path.length) {
+            const si = resolveMaster(o.swap, O + ".swap");
+            if (isInt(si) && si >= 0) swapFamily = familyOfComp(si);
+            else if (si === -1) swapExternal = true;
+            any = true;
+          }
+          if (o.path.length && checkAssignments(o.properties, O + ".properties", swapFamily, swapExternal)) any = true;
           if (!any) err(O, "changes nothing; an override has fields, a swap or properties");
         });
         if (ov.length) {
@@ -928,19 +1088,33 @@ export function validateIR(ir, options) {
     if (inst.derived !== undefined) {
       if (!caps.derivedBoxes) err(P + ".derived", "present, but the header does not declare capabilities.derivedBoxes");
       else if (!Array.isArray(inst.derived)) err(P + ".derived", "must be an array");
-      else inst.derived.forEach((d, j) => {
-        const D = P + ".derived[" + j + "]";
-        if (!isObj(d)) { err(D, "must be an object"); return; }
-        // A fallback frame takes geometry and vector paths from derivedSymbolData (REWRITE.md §3),
-        // so an entry may carry the sublayer's fill and stroke geometry, interned like node props.
-        closed(d, ["path", "size", "transform", "fillGeometry", "strokeGeometry"], D);
-        if (!Array.isArray(d.path) || d.path.length === 0 || !d.path.every(isGuid)) err(D + ".path", "a guidPath is a non-empty array of guids");
-        else firstHop(d.path[0], D + ".path[0]");
-        if (!(Array.isArray(d.size) && d.size.length === 2 && d.size.every(isNum))) err(D + ".size", "must be [width, height]");
-        if (!(Array.isArray(d.transform) && d.transform.length === 6 && d.transform.every(isNum))) err(D + ".transform", "must be six numbers [a, b, tx, c, d, ty]");
-        checkFields(d, D);
-        for (const k of ["fillGeometry", "strokeGeometry"]) if (d[k] !== undefined) checkShape(k, d[k], D + "." + k);
-      });
+      else {
+        const dpaths = new Map();
+        inst.derived.forEach((d, j) => {
+          const D = P + ".derived[" + j + "]";
+          if (!isObj(d)) { err(D, "must be an object"); return; }
+          // A fallback frame takes geometry and vector paths from derivedSymbolData (REWRITE.md §3),
+          // so an entry may carry the sublayer's fill and stroke geometry, interned like node props.
+          // Version 3 (docs/M2A.md D10): sparse, as Pixso stores it; Pixso's line count (`lines`)
+          // and the side oracle (`oracleSides`) of the sublayer; `at` as on overrides.
+          closed(d, DERIVED_KEYS, D);
+          if (!Array.isArray(d.path) || d.path.length === 0 || !d.path.every(isGuid)) err(D + ".path", "a guidPath is a non-empty array of guids");
+          else {
+            firstHop(d.path[0], D + ".path[0]");
+            checkAt(d.at, d.path, D + ".at");
+            const key = d.path.join("/");
+            if (dpaths.has(key)) err(D + ".path", "same path as derived[" + dpaths.get(key) + "]; one derived entry per path");
+            else dpaths.set(key, j);
+          }
+          if (d.size !== undefined && !(Array.isArray(d.size) && d.size.length === 2 && d.size.every(isNum))) err(D + ".size", "must be [width, height]");
+          if (d.transform !== undefined && !(Array.isArray(d.transform) && d.transform.length === 6 && d.transform.every(isNum))) err(D + ".transform", "must be six numbers [a, b, tx, c, d, ty]");
+          if (d.lines !== undefined && !(isInt(d.lines) && d.lines >= 0)) err(D + ".lines", "the number of lines Pixso drew, a non-negative integer; got " + show(d.lines));
+          if (d.oracleSides !== undefined && !quad(d.oracleSides, (x) => typeof x === "boolean")) err(D + ".oracleSides", "must be four booleans [top, right, bottom, left]");
+          if (!["size", "transform", "fillGeometry", "strokeGeometry", "lines", "oracleSides"].some((k) => d[k] !== undefined)) err(D, "carries nothing besides its path; an entry with nothing to write is not written (docs/M2A.md D10)");
+          checkFields(d, D);
+          for (const k of ["fillGeometry", "strokeGeometry"]) if (d[k] !== undefined) checkShape(k, d[k], D + "." + k);
+        });
+      }
     }
   });
 
@@ -1033,15 +1207,28 @@ export function validateIR(ir, options) {
     if (!Object.prototype.hasOwnProperty.call(REASON_CODES, nt.code)) err(P + ".code", "unknown reason code " + show(nt.code) + "; codes come from the vocabulary in docs/IR.md");
     // The IR records what the reader decided; plan, build and run codes belong to the run's reports.
     else if (REASON_CODES[nt.code].stage !== "read") err(P + ".code", "IR notes carry read-stage codes only; " + nt.code + " is a " + REASON_CODES[nt.code].stage + "-stage code");
-    else if (nt.code === CODE.VECTOR_ORACLE_DIFFERS) {
-      const cls = isStr(nt.detail) ? nt.detail.split(": ")[0] : null;
-      const vn = nodeAt(nt.node);
-      if (ORACLE_CLASSES.indexOf(cls) < 0) err(P + ".detail", "a " + nt.code + " detail starts with its class, one of " + ORACLE_CLASSES.join(", ") + "; got " + show(nt.detail));
-      if (!vn || vn.type !== "VECTOR" || !isObj(vn.props) || vn.props.vectorNetwork === undefined) err(P + ".node", "a " + nt.code + " note names a VECTOR record built from its network");
+    else {
+      // A code with frozen classes: the detail starts with one (docs/M2A.md §5.1).
+      if (Object.prototype.hasOwnProperty.call(NOTE_CLASSES, nt.code) && noteClass(nt.code, nt.detail) === null) {
+        err(P + ".detail", "a " + nt.code + " detail starts with its class, one of " + NOTE_CLASSES[nt.code].join(", ") + "; got " + show(nt.detail));
+      }
+      if (nt.code === CODE.VECTOR_ORACLE_DIFFERS) {
+        const vn = nodeAt(nt.node);
+        if (!vn || vn.type !== "VECTOR" || !isObj(vn.props) || vn.props.vectorNetwork === undefined) err(P + ".node", "a " + nt.code + " note names a VECTOR record built from its network");
+      }
+      // A rejected state group stays a FRAME record, and the note names that record (docs/M2A.md D2).
+      if (nt.code === CODE.VARIANT_SET_REJECTED) {
+        const vn = nodeAt(nt.node);
+        if (!vn || vn.type !== "FRAME") err(P + ".node", "a " + nt.code + " note names the state group's FRAME record");
+      }
     }
     if (nt.node !== undefined && !nodeAt(nt.node)) err(P + ".node", "index " + show(nt.node) + " is not a node record");
     if (nt.guid !== undefined && !isGuid(nt.guid)) err(P + ".guid", "not a guid: " + show(nt.guid));
-    if (nt.path !== undefined && !(Array.isArray(nt.path) && nt.path.length > 0 && nt.path.every(isGuid))) err(P + ".path", "a guidPath is a non-empty array of guids");
+    if (nt.path !== undefined) {
+      if (!(Array.isArray(nt.path) && nt.path.length > 0 && nt.path.every(isGuid))) err(P + ".path", "a guidPath is a non-empty array of guids");
+      // A path is inside an instance, and the note names that instance by node (docs/M2A.md §5.1).
+      else if (!(nodeAt(nt.node) && nodeAt(nt.node).type === "INSTANCE")) err(P + ".node", "a note with a path names the INSTANCE record the path is inside");
+    }
     if (nt.detail !== undefined && !isStr(nt.detail)) err(P + ".detail", "must be a string");
   });
 
