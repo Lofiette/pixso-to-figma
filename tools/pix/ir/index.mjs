@@ -66,7 +66,7 @@ function newStats() {
     notCarried: { pages: 0, directories: 0, documents: 0, styleDefinitions: 0, variables: 0, unsupported: 0, foldedOperands: 0, degenerate: 0, outOfScope: 0 },
     populations: null, populationCounts: null, records: 0, nonInstance: 0, instances: 0,
     vectors: { networks: 0, fromNetwork: 0, fromGeometry: 0, loopsClosed: 0, loopsDropped: 0, regionFills: 0, classes: { "region-no-fill": 0, "network-bounds": 0, winding: 0 } },
-    text: { fontFromStyle: 0, rawLineHeight: 0, percentOneAuto: 0, styleValueOverridden: 0 },
+    text: { fontFromStyle: 0, rawLineHeight: 0, percentOneAuto: 0, styleValueOverridden: 0, trailingBaseStyleIds: 0 },
     spaceEvenly: { between: 0, single: 0 }, strokeAlignDecided: {}, cornerRadiusOnly: {}, lostBorderSections: 0, counterFillKeptFixed: 0,
     styles: { fill: style0(), stroke: style0(), effect: style0() },
   };

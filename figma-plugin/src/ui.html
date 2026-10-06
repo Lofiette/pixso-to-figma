@@ -99,7 +99,16 @@ function log(m) { L.textContent = (m + "\n" + L.textContent).slice(0, 4000); }
 const ST = { link: "unknown", phase: "idle", stage: null, trouble: null, sawDone: false, everJob: false, auth: "ok" };
 function paint(t, cls) { S.textContent = t; S.className = cls || ""; }
 function render() {
-  // Most specific first: this frame's own trouble, then its own work, then the runner's state.
+  // Most specific first: this frame's own trouble, then its own work, then the runner's state. Except
+  // the code: a runner that answers 401 waits for it whatever this window is doing. A window finishing
+  // a job for a runner that died, or showing why that job failed, used to keep its job's line and never
+  // said the new runner wanted the code (the live session of 2026-10-05, docs/M1.md §15.12). The runner
+  // is there and answered, but not to this window's key: it was started after this window was opened,
+  // and either the code or a fresh window fixes it (a busy one finishes its job first).
+  if (ST.auth === "need") {
+    return paint(busy ? "Раннер запущен заново, а Figma ещё доделывает прошлое задание — оно закончится само. Введите код из окна раннера."
+      : "Раннер запущен после этого окна. Введите код из окна раннера — или закройте плагин и откройте его снова.", "wait");
+  }
   if (ST.trouble) return paint(ST.trouble, "off");
   // Nothing this window does can fix it, and no code helps: only a fresh window has the new build.
   if (ST.auth === "stale") return paint("Раннер обновился после того, как открыли этот плагин. Закройте плагин и откройте его снова.", "wait");
@@ -113,9 +122,6 @@ function render() {
     if (ST.sawDone) return paint("Готово. Раннер закончил работу и закрылся — результат в Figma.", "on");
     return paint("Раннер не запущен. Откройте start.cmd (Windows) или start.command (macOS) в папке pix-to-fig.", "wait");
   }
-  // The runner is there and answered, but not to this window's key: it was started after this window
-  // was opened. Nothing is wrong, and one of two things fixes it.
-  if (ST.auth === "need") return paint("Раннер запущен после этого окна. Введите код из окна раннера — или закройте плагин и откройте его снова.", "wait");
   if (ST.phase === "done") return paint("Готово. Смотрите результат в Figma.", "on");
   if (ST.phase === "stopped") return paint("Перенос остановлен — причина в сообщениях ниже.", "off");
   if (ST.phase === "working") {
@@ -390,7 +396,8 @@ async function probeFetch(m) {
 function progressed(m) {
   const done = Number(m.done);
   if (!(done >= 0) || typeof m.id !== "string") return;
-  post("/alive?id=" + encodeURIComponent(m.id) + "&done=" + done, { id: m.id, done: done }).catch(() => {});
+  const ph = typeof m.phase === "string" ? "&phase=" + encodeURIComponent(m.phase.slice(0, 40)) : "";
+  post("/alive?id=" + encodeURIComponent(m.id) + "&done=" + done + ph, { id: m.id, done: done }).catch(() => {});
 }
 
 onmessage = async (e) => {

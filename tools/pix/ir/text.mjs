@@ -20,7 +20,10 @@
 //
 // Text data is checked before any of it is used: a glyph blob index out of range, a glyph path that
 // ends inside an op, a style id that is not in styleOverrideTable, a baseline whose first or end
-// character is outside the text, or more characterStyleIDs than code points, each throw PIX_CORRUPT.
+// character is outside the text, or more characterStyleIDs than code points, each throw PIX_CORRUPT -
+// except trailing ids of the base style (0) past the last code point, which Pixso writes now and then
+// (1 of 14 427 texts in the Сова-based UI kit) and which style nothing: they are dropped and counted
+// (stats.text.trailingBaseStyleIds).
 import { CODE } from "../../ir/schema.mjs";
 import { corrupt, decodePath } from "../../kiwi.mjs";
 import * as E from "./enums.mjs";
@@ -65,7 +68,10 @@ export function checkTextData(cx, n) {
   const cps = offs.length - 1;
   const where = "text " + guidStr(n.guid);
   const ids = td.characterStyleIDs || [];
-  if (ids.length > cps) throw corrupt(where + " has " + ids.length + " characterStyleIDs for " + cps + " code points");
+  if (ids.length > cps) {
+    if (ids.slice(cps).some((id) => id !== 0)) throw corrupt(where + " has " + ids.length + " characterStyleIDs for " + cps + " code points");
+    cx.stats.text.trailingBaseStyleIds++;
+  }
   const table = new Set((td.styleOverrideTable || []).map((e) => e.styleID));
   for (const id of ids) if (id !== 0 && !table.has(id)) throw corrupt(where + " uses style id " + id + ", which is not in its styleOverrideTable");
   for (const b of td.baselines || []) {

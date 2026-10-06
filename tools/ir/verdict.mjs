@@ -8,8 +8,10 @@
 // totals   judgeRun's result (TOTALS_SHAPE of tools/ir/judge.mjs), or null when nothing was judged
 // states   states.json v2 (tools/ir/runstate.mjs)
 // audit    null, or { format: "pix2fig.audit", version: 1 | 2, snapshot, runId, roots: [{ i, guid?, ok }] }: a
-//          render audit made by hand with the M0 tooling (§10); PASS needs one that covers every
-//          built root, all ok. snapshot and runId tie it to one run (states.snapshot, states.runId):
+//          render audit (tools/ir-audit.mjs, docs/M1.md §16, or one made by hand); PASS needs one that
+//          covers every built root, all ok. With opts.ir, a root that is an INSTANCE record (a
+//          placeholder, held by G11) is not required; an entry whose ok is not a boolean was not
+//          compared and covers nothing. snapshot and runId tie it to one run (states.snapshot, states.runId):
 //          required in version 2, checked whenever present, and an audit made for another run is
 //          ignored. A root's guid, when given and opts.ir is, must be that IR record's: IR indices
 //          change with the reader's settings and scope.
@@ -137,13 +139,22 @@ export function m1Gates(totals, states, opts) {
   let auditLine = null, audited = false, auditFail = false;
   if (audit) {
     const roots = new Set();
-    for (const t of T) if (t.op === "build") for (const i of t.roots) roots.add(i);
     const ir = opts && opts.ir;
-    // A root entry naming a guid that is not its IR record's was made for other records.
+    // A root that is an INSTANCE record is a placeholder frame in M1, held by G11: nothing to render
+    // (docs/M1.md §16). Without the IR every root is required.
+    let placeholderRoots = 0;
+    for (const t of T) if (t.op === "build") for (const i of t.roots) {
+      if (ir && ir.nodes[i] && ir.nodes[i].type === "INSTANCE") placeholderRoots++; else roots.add(i);
+    }
+    // A root entry naming a guid that is not its IR record's was made for other records. An entry
+    // whose ok is neither true nor false was not compared (tools/ir-audit.mjs: nothing left once its
+    // placeholders are masked): it covers nothing and fails nothing.
     const entries = ((audit && audit.roots) || []).filter((r) => r && (typeof r.guid !== "string" || !ir || (ir.nodes[r.i] && ir.nodes[r.i].guid === r.guid)));
-    const got = new Map(entries.map((r) => [r.i, r.ok === true]));
+    const notCompared = new Set(entries.filter((r) => r.ok !== true && r.ok !== false).map((r) => r.i));
+    const got = new Map(entries.filter((r) => r.ok === true || r.ok === false).map((r) => [r.i, r.ok === true]));
     const covered = [...roots].filter((i) => got.has(i)).length;
     const bad = [...roots].filter((i) => got.has(i) && !got.get(i)).length;
+    const unc = [...roots].filter((i) => !got.has(i) && notCompared.has(i)).length;
     const shapeOk = audit.format === AUDIT_FORMAT && (audit.version === 1 || (audit.version === 2 && typeof audit.snapshot === "string" && typeof audit.runId === "string"));
     const otherRun = (audit.snapshot !== undefined && audit.snapshot !== states.snapshot) || (audit.runId !== undefined && audit.runId !== states.runId);
     const usable = shapeOk && !otherRun;
@@ -151,7 +162,8 @@ export function m1Gates(totals, states, opts) {
     audited = usable && covered === roots.size && bad === 0 && roots.size > 0;
     auditLine = !shapeOk ? "audit: not a " + AUDIT_FORMAT + " version 1 or 2 report; ignored"
       : otherRun ? "audit: made for another run (its snapshot or runId is not this run's); ignored"
-      : "audit: " + covered + " of " + roots.size + " built roots covered, " + bad + " failed";
+      : "audit: " + covered + " of " + roots.size + " built roots covered, " + bad + " failed" + (unc ? ", " + unc + " not compared" : "") +
+        (placeholderRoots ? "; " + placeholderRoots + " placeholder roots left to G11" : "");
   }
 
   const failed = gates.filter((g) => g.fail).map((g) => g.id + " " + g.name);

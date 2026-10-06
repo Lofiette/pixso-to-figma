@@ -19,12 +19,27 @@ function fontOf(f) { return { family: String(f.family), style: String(f.style) }
 B.fontKey = function (f) { return String(f.family) + "|" + String(f.style); };
 function msgOf(e) { return String((e && e.message) || e); }
 
-// Loads the fonts at once: { ok: [font], missing: [{ font, msg }] }, in the order given.
-B.loadFonts = function (ctx, fonts) {
+// The fonts Figma has, asked once per session (listAvailableFontsAsync): a font that is not there is
+// never handed to loadFontAsync, which on the live Сова UI kit (2026-10-06) hung a verify past its
+// ceiling on a font that was not installed.
+IR.availableFonts = async function (ctx) {
+  if (ctx.S.available) return ctx.S.available;
+  var all = await ctx.figma.listAvailableFontsAsync(), set = {};
+  for (var j = 0; j < (all || []).length; j++) { var fn = all[j] && all[j].fontName; if (fn) set[B.fontKey(fn)] = 1; }
+  ctx.S.available = set;
+  return set;
+};
+
+// Loads the fonts at once: { ok: [font], missing: [{ font, msg }] }, in the order given. A font Figma
+// does not list is missing without being asked for.
+B.loadFonts = async function (ctx, fonts) {
   var list = Array.isArray(fonts) ? fonts : [];
+  ctx.progress();
+  var have = await IR.availableFonts(ctx);
   ctx.progress();
   return Promise.all(list.map(function (f) {
     var font = fontOf(f);
+    if (have[B.fontKey(font)] !== 1) return Promise.resolve({ font: font, ok: false, msg: "not installed in Figma" });
     return ctx.figma.loadFontAsync(font).then(function () { return { font: font, ok: true }; },
       function (e) { return { font: font, ok: false, msg: msgOf(e) }; });
   })).then(function (rs) {

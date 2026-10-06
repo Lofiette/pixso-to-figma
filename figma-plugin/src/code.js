@@ -159,7 +159,9 @@ async function cmdClean(P) {
 // ---------------------------------------------------------------------------------------------
 // render: every distinct thing the old free-form render jobs did, as named operations with data.
 //
-//   export         photograph one node (tools/visual.mjs, tools/visual-all.mjs)
+//   export         photograph one node (tools/visual.mjs, tools/visual-all.mjs, tools/ir-audit.mjs); with
+//                  `snap` only a node stamped with that snapshot, with `child` its k-th child; the
+//                  report gives the node's size, type, opacity, box and render bounds with the PNG
 //   ping           answer, and say which plugin build answered (tools/wait-plugin.mjs)
 //   scratch-make   make rectangles far off-canvas for a test (tools/test-clean.mjs)
 //   scratch-list   name the scratch rectangles still in the file
@@ -177,14 +179,31 @@ async function renderExport(P) {
   if (!lim || typeof c.value !== "number" || !(c.value >= lim[0] && c.value <= lim[1])) {
     refuse("render export: constraint must be SCALE, WIDTH or HEIGHT with a value in range");
   }
+  if (P.snap !== undefined && P.snap !== null && !isStr(P.snap, 200)) refuse("render export: snap must be a string");
+  if (P.child !== undefined && P.child !== null && !(typeof P.child === "number" && P.child >= 0 && P.child < 1000000 && Math.floor(P.child) === P.child)) {
+    refuse("render export: child must be a child's index");
+  }
   if (P.loadAll) await figma.loadAllPagesAsync();
   var want = P.src ? String(P.src) : "";
+  // An IR root names its snapshot too (the render audit, tools/ir-audit.mjs): a copy of the same
+  // source built from another .pix snapshot carries the same pxSrc and is not this run's root.
+  var snap = P.snap ? String(P.snap) : "";
+  var snapOf = function (x) { try { return x.getSharedPluginData(PXF_IR.NS, "pxSnap"); } catch (e) { return ""; } };
+  var right = function (x) { return stampOf(x) === want && (!snap || snapOf(x) === snap); };
   var n = await figma.getNodeByIdAsync(P.id);
-  var relocated = null;
+  var relocated = null, of = null;
   // Asked for by id, then made to prove it is the right node. A remembered id turned out to resolve
   // to something else entirely on two objects out of 45 — so photographing whatever answers to a
   // number would quietly compare the wrong pair of pictures, which is worse than failing.
-  if (want && (!n || n.removed || stampOf(n) !== want)) {
+  // An IR root (the render audit gives snap) is the node its verify found, proved, and never looked
+  // for elsewhere: an earlier build of the same .pix carries the same pxSrc and pxSnap, and only the
+  // verify knows which copy is this run's (docs/M1.md §15.10, §16). A node that no longer proves
+  // itself is a missing render, never another copy's picture.
+  if (want && snap && (!n || n.removed || !right(n))) {
+    if (!n || n.removed) return { e: "not found: the node the verify found is gone" };
+    return { e: stampOf(n) === want ? "the id names a copy of this source built from another snapshot" : "the id names another object's root, not the source asked for" };
+  }
+  if (want && (!n || n.removed || !right(n))) {
     // The stamp is searched on every page, and under documentAccess "dynamic-page" a page that is not
     // loaded lists no children: load them all first (docs/M1.md §6 E).
     if (!P.loadAll) await figma.loadAllPagesAsync();
@@ -192,7 +211,7 @@ async function renderExport(P) {
     var pages = figma.root.children;
     for (var pi = 0; pi < pages.length; pi++) {
       var k = pages[pi].children;
-      for (var ki = 0; ki < k.length; ki++) if (stampOf(k[ki]) === want) f.push(k[ki]);
+      for (var ki = 0; ki < k.length; ki++) if (right(k[ki])) f.push(k[ki]);
     }
     // Newest last: a root is appended to its page, so a leftover duplicate sits ahead of it.
     if (f.length) { n = f[f.length - 1]; relocated = n.id; }
@@ -202,8 +221,26 @@ async function renderExport(P) {
     else if (n && !n.removed && stampOf(n)) return { e: "the id names another object's root, and nothing carries the stamp asked for" };
   }
   if (!n || n.removed || typeof n.exportAsync !== "function") return { e: "not found" };
+  // A section's children one by one (the render audit's --section children): the k-th child of the
+  // node found and proved above.
+  if (P.child !== undefined && P.child !== null) {
+    var ks = n.children;
+    if (!ks || P.child >= ks.length) return { e: "no child " + P.child };
+    // How many children it has: the audit pairs them with the IR's by index, which holds only when
+    // the counts match (a child carries no stamp of its own).
+    of = ks.length;
+    n = ks[P.child];
+    if (!n || typeof n.exportAsync !== "function") return { e: "not found" };
+  }
   var by = await n.exportAsync({ format: "PNG", constraint: { type: c.type, value: c.value } });
-  return { w: n.width, h: n.height, bytes: by.length, d: figma.base64Encode(by), relocated: relocated };
+  // Where the picture sits: the node's box and, when Figma gives them, the bounds of what it draws
+  // (the picture covers those). The render audit places the box in the picture with them.
+  var bb = null, rb = null;
+  try { var a0 = n.absoluteBoundingBox; if (a0) bb = { x: a0.x, y: a0.y, width: a0.width, height: a0.height }; } catch (e1) {}
+  try { var a1 = n.absoluteRenderBounds; if (a1) rb = { x: a1.x, y: a1.y, width: a1.width, height: a1.height }; } catch (e2) {}
+  var op = null;
+  try { if (typeof n.opacity === "number") op = n.opacity; } catch (e3) {}
+  return { w: n.width, h: n.height, type: n.type, opacity: op, box: bb, render: rb, bytes: by.length, d: figma.base64Encode(by), relocated: relocated, of: of };
 }
 
 function scratchNodes() {
@@ -449,10 +486,14 @@ async function cmdProbe(P) {
 // The IR layer reaches this host only through what is given here: the images created this session
 // and the ones Figma refused, and the progress counter, which the window forwards to the runner as
 // the liveness signal (a heartbeat alone never extends a task).
+// The phase the job is in travels with the counter, so a stall names where the plugin stopped (the
+// live Сова UI kit run, 2026-10-06, stalled three times with nothing to say where).
+var irPhase = null;
 PXF_IR.setHost({
   images: function () { return images; },
   imageErrors: function () { return imageErrors; },
-  progress: function (done, id) { figma.ui.postMessage({ t: "progress", id: id, done: done }); },
+  phase: function (name) { irPhase = name; },
+  progress: function (done, id) { figma.ui.postMessage({ t: "progress", id: id, done: done, phase: irPhase }); },
   log: log
 });
 
