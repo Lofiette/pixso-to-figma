@@ -23,7 +23,9 @@
 //   - SOURCE_IDENTITY_MISMATCH stops the audit before any render, and --accept-identity-mismatch goes on
 //     and records the reason;
 //   - a second pass keeps the roots already ok; the RENDER export refuses another snapshot's copy;
-//   - the verdict: a root not compared covers nothing and fails nothing, INSTANCE roots are not required.
+//   - the verdict: a root not compared covers nothing and fails nothing, INSTANCE roots are not required;
+//   - a root whose verify is not done, or whose verified node is gone while an earlier run's copy is in
+//     the file, is a missing render; a section's children pair by index only when the counts match.
 // Everything is synthetic, and everything written goes to the system's temporary folder.
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -48,8 +50,8 @@ import { sampleGuids } from "./ir/identity.mjs";
 import { SCRIPTS, assertReadOnlyScript, makeMcpClient, readOnlyProblems } from "./ir/mcp-readonly.mjs";
 import { IDENTITY_SCRIPT } from "./extract-lib.mjs";
 import { fakePixso } from "./test/fake-pixso.mjs";
-import { AUDIT_SETTINGS, comparePictures, defaultAuditSettings, parseAuditArgs, placeBox, scaleAlpha } from "./ir/render-audit.mjs";
-import { auditFolder, main as auditMain } from "./ir-audit.mjs";
+import { AUDIT_SETTINGS, auditRoots, comparePictures, defaultAuditSettings, parseAuditArgs, placeBox, scaleAlpha } from "./ir/render-audit.mjs";
+import { auditFolder, main as auditMain, readRun } from "./ir-audit.mjs";
 import { decodePNG } from "./pngutil.mjs";
 
 let failed = 0;
@@ -456,6 +458,38 @@ const LP = localPixso();
   const g3 = m1Gates(GOOD.totals, GOOD.states, { audit: Object.assign({ roots: entries(() => true) }, base) });
   check(/^BUILT, NOT VISUALLY AUDITED/.test(g1.verdict) && /1 not compared/.test(g1.auditLine) && /^PASS/.test(g2.verdict) && /^BUILT, NOT VISUALLY AUDITED/.test(g3.verdict),
     "the verdict: a root not compared covers nothing and fails nothing; with the IR the placeholder roots are not required, without it they are", [g1.auditLine, g2.auditLine, g3.auditLine].join(" | "));
+}
+
+// ============================================================================================
+// 8. what the audit must not take for this run's root
+// ============================================================================================
+{
+  const CP = await buildRun("copies");
+  const H = figmaHost(CP.D);
+  // A verify that has not run to the end (its report may be an earlier build's) gives no Figma id.
+  const st = JSON.parse(JSON.stringify(CP.states));
+  const v = st.tasks.find((t) => t.op === "verify" && Number.isInteger(t.build));
+  v.state = "failed";
+  const bRoots = st.tasks.find((t) => t.taskNo === v.build).roots;
+  const { roots } = auditRoots(st, IR, readRun(CP.runDir).reports);
+  const of = roots.filter((r) => bRoots.indexOf(r.i) >= 0), rest = roots.filter((r) => bRoots.indexOf(r.i) < 0);
+  check(of.length > 0 && of.every((r) => r.figmaId === null) && rest.every((r) => typeof r.figmaId === "string"),
+    "a root whose verify is not done gets no Figma id from a report left in the folder (" + of.length + " root" + (of.length === 1 ? "" : "s") + "): a missing render", show(of));
+  // An earlier run's copy of root 19 (the same .pix: the same pxSrc, pxIdx, pxSnap and pxIr, another
+  // pxRun) is in the file, and the node the verify found is gone: the export takes no other copy.
+  const mine = CP.nodeOf(19), impostor = CP.nodeOf(8);
+  for (const k of ["pxSrc", "pxIdx", "pxSnap", "pxIr"]) impostor.setSharedPluginData("pix2fig", k, mine.getSharedPluginData("pix2fig", k));
+  impostor.setSharedPluginData("pix2fig", "pxRun", "a0a0a0a0a0a0a0a0");
+  mine.remove();
+  // Section 50 gains a child in Figma that the IR does not have: its children no longer pair by index.
+  const extra = CP.D.figma.createRectangle();
+  CP.nodeOf(50).appendChild(extra);
+  const res = await auditOf(CP, { mcp: LP, figmaExport: H.exportJob }, ["--section", "children"]);
+  const r19 = rootOf(res, 19), r50 = rootOf(res, 50);
+  check(r19 && r19.ok === false && !r19.compared && /figma render missing: not found/.test(r19.why) && !r19.figma,
+    "a root whose verified node is gone is a missing render, though an earlier run's copy of the same source and snapshot is in the file", show(r19));
+  check(r50 && r50.ok === false && /cannot be paired by index/.test(r50.why || ""),
+    "with --section children a section whose Figma children outnumber the IR's fails: its children cannot be paired by index", show(r50 && r50.why));
 }
 
 await PX.close();

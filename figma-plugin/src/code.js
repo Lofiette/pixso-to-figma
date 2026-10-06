@@ -191,10 +191,18 @@ async function renderExport(P) {
   var snapOf = function (x) { try { return x.getSharedPluginData(PXF_IR.NS, "pxSnap"); } catch (e) { return ""; } };
   var right = function (x) { return stampOf(x) === want && (!snap || snapOf(x) === snap); };
   var n = await figma.getNodeByIdAsync(P.id);
-  var relocated = null;
+  var relocated = null, of = null;
   // Asked for by id, then made to prove it is the right node. A remembered id turned out to resolve
   // to something else entirely on two objects out of 45 — so photographing whatever answers to a
   // number would quietly compare the wrong pair of pictures, which is worse than failing.
+  // An IR root (the render audit gives snap) is the node its verify found, proved, and never looked
+  // for elsewhere: an earlier build of the same .pix carries the same pxSrc and pxSnap, and only the
+  // verify knows which copy is this run's (docs/M1.md §15.10, §16). A node that no longer proves
+  // itself is a missing render, never another copy's picture.
+  if (want && snap && (!n || n.removed || !right(n))) {
+    if (!n || n.removed) return { e: "not found: the node the verify found is gone" };
+    return { e: stampOf(n) === want ? "the id names a copy of this source built from another snapshot" : "the id names another object's root, not the source asked for" };
+  }
   if (want && (!n || n.removed || !right(n))) {
     // The stamp is searched on every page, and under documentAccess "dynamic-page" a page that is not
     // loaded lists no children: load them all first (docs/M1.md §6 E).
@@ -209,12 +217,8 @@ async function renderExport(P) {
     if (f.length) { n = f[f.length - 1]; relocated = n.id; }
     // Nothing carries the stamp, and the id names a node stamped with another source: that is another
     // object's root, and a picture of it would be compared against the wrong source. An unstamped
-    // node is still photographed — a build from before stamping has only its id (not when a snapshot
-    // is asked for: an IR root is always stamped).
-    else if (n && !n.removed && (stampOf(n) || snap)) {
-      return { e: stampOf(n) === want ? "the id names a copy of this source built from another snapshot, and nothing carries the snapshot asked for"
-        : "the id names another object's root, and nothing carries the stamp asked for" };
-    }
+    // node is still photographed — a build from before stamping has only its id.
+    else if (n && !n.removed && stampOf(n)) return { e: "the id names another object's root, and nothing carries the stamp asked for" };
   }
   if (!n || n.removed || typeof n.exportAsync !== "function") return { e: "not found" };
   // A section's children one by one (the render audit's --section children): the k-th child of the
@@ -222,6 +226,9 @@ async function renderExport(P) {
   if (P.child !== undefined && P.child !== null) {
     var ks = n.children;
     if (!ks || P.child >= ks.length) return { e: "no child " + P.child };
+    // How many children it has: the audit pairs them with the IR's by index, which holds only when
+    // the counts match (a child carries no stamp of its own).
+    of = ks.length;
     n = ks[P.child];
     if (!n || typeof n.exportAsync !== "function") return { e: "not found" };
   }
@@ -233,7 +240,7 @@ async function renderExport(P) {
   try { var a1 = n.absoluteRenderBounds; if (a1) rb = { x: a1.x, y: a1.y, width: a1.width, height: a1.height }; } catch (e2) {}
   var op = null;
   try { if (typeof n.opacity === "number") op = n.opacity; } catch (e3) {}
-  return { w: n.width, h: n.height, type: n.type, opacity: op, box: bb, render: rb, bytes: by.length, d: figma.base64Encode(by), relocated: relocated };
+  return { w: n.width, h: n.height, type: n.type, opacity: op, box: bb, render: rb, bytes: by.length, d: figma.base64Encode(by), relocated: relocated, of: of };
 }
 
 function scratchNodes() {

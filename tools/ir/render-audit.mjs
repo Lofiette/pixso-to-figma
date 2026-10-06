@@ -111,14 +111,17 @@ export function parseAuditArgs(argv) {
 
 // ---------- which roots ----------
 // Every root of every build task (tools/ir/verdict.mjs's set), each with the Figma id its verify found.
-// reports: Map(taskNo -> verify report) or a plain object. Returns { roots, placeholderRoots }:
+// Only a verify the states record as done counts: a report left in the folder by a verify that has not
+// run again since its build was re-run names the earlier build's nodes. reports: Map(taskNo -> verify
+// report) or a plain object. Returns { roots, placeholderRoots }:
 // roots [{ i, guid, type, figmaId, verifyTask }], placeholderRoots [{ i, guid }] (INSTANCE records).
 export function auditRoots(states, ir, reports) {
   const rep = (no) => (reports instanceof Map ? reports.get(no) : reports && reports[no]) || null;
   const idOf = new Map();
   for (const t of states.tasks || []) {
-    if (t.op !== "verify") continue;
+    if (t.op !== "verify" || (t.state !== "built" && t.state !== "built-with-fallbacks")) continue;
     const r = rep(t.taskNo);
+    if (r && r.taskNo !== undefined && r.taskNo !== t.taskNo) continue;
     for (const x of (r && Array.isArray(r.roots) ? r.roots : [])) if (x && x.found && typeof x.id === "string") idOf.set(x.i, { id: x.id, task: t.taskNo });
   }
   const roots = [], placeholderRoots = [], seen = new Set();
@@ -269,7 +272,7 @@ export function scaleFor(rec, S) {
 
 // One pair: record j rendered in Figma (job) and Pixso (guid), compared. Returns the entry's evidence and
 // ok (true, false or null), with the two PNGs for the pictures folder.
-async function auditPair(j, job, ctx, crop) {
+async function auditPair(j, job, ctx, crop, siblings) {
   const { ir, kids, S, figmaExport, pixsoRender } = ctx;
   const rec = ir.nodes[j];
   const s = job.constraint.value;
@@ -277,6 +280,9 @@ async function auditPair(j, job, ctx, crop) {
   let F = null, Pv = null;
   try { F = await figmaExport(job); } catch (err) { F = { e: String((err && err.message) || err) }; }
   if (!F || F.e || typeof F.d !== "string" || !F.d) { e.why = "figma render missing: " + String((F && (F.e || F.error)) || "no picture").slice(0, 160); return { e }; }
+  // A section's child is asked for by its index (children carry no stamp): the pairing holds only when
+  // Figma's section has as many children as the IR's.
+  if (job.child !== undefined && F.of !== siblings) { e.why = "figma render missing: the section has " + F.of + " children in Figma and " + siblings + " in the IR, so its children cannot be paired by index"; return { e, figmaPng: F.d }; }
   try { Pv = await pixsoRender(rec.guid, s); } catch (err) { Pv = { ok: false, error: String((err && err.message) || err) }; }
   const pv = Pv && Pv.ok ? Pv.value : null;
   if (!pv || pv.e || typeof pv.d !== "string" || !pv.d) { e.why = "pixso render missing: " + String((pv && pv.e) || (Pv && Pv.error) || "no picture").slice(0, 160); return { e, figmaPng: F.d }; }
@@ -365,9 +371,13 @@ export async function auditRun(ctx) {
         entry.children = [];
         for (let k = 0; k < ch.length; k++) {
           const c = ir.nodes[ch[k]];
+          // A placeholder child is G11's, as in the section's own picture (masked there); a hidden one
+          // draws nothing in it. Neither is compared.
+          const skip = c.type === "INSTANCE" && S.placeholders === "mask" ? "an instance placeholder (G11 holds it)" : c.props.visible === false ? "hidden: it draws nothing in the section" : null;
+          if (skip) { entry.children.push({ i: ch[k], guid: c.guid, type: c.type, ok: null, compared: false, why: "not compared: " + skip }); continue; }
           const cs = scaleFor(c, S);
           const cj = Object.assign(job(k), { constraint: { type: "SCALE", value: cs } });
-          const p = await auditPair(ch[k], cj, ctx2(ctx, kids), c.type === "SECTION" && S.section !== "none");
+          const p = await auditPair(ch[k], cj, ctx2(ctx, kids), c.type === "SECTION" && S.section !== "none", ch.length);
           entry.children.push(Object.assign({ i: ch[k] }, p.e));
           if (p.figmaPng || p.pixsoPng) pics.push({ name: r.i + "-c" + k, figma: p.figmaPng, pixso: p.pixsoPng, ok: p.e.ok });
         }
