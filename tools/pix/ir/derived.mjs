@@ -17,9 +17,9 @@
 //                     differ from the target layer's own stored geometry), all, or none (geometry);
 //   at                the record index of every path element, when the master is a record here and every
 //                     element has one (else noAt, counted whether or not the entry is written).
-// An entry left with nothing to write is not written (empty), and neither is one whose first element
-// has no record while the master is a record here (empty too: the validator refuses that path; part
-// C's request to E), so resolved = written + empty, and
+// An entry left with nothing to write is not written (empty); one whose first element has no record (a
+// folded operand) is kept without `at` (noAt), as D10 says and the validator allows for derived entries
+// (part C's request, applied by part E). So resolved = written + empty, and
 // entries = resolved + unresolved (gate G1 holds when unresolved is 0). A path that does not resolve
 // is not written at all: its `at` would name the layers of a symbol Pixso did not draw.
 //
@@ -80,11 +80,7 @@ export function derivedEntries(cx, n, i, ctx) {
       if (any) S.geometry++;
     }
     if (!e.at) S.noAt++;
-    // The validator refuses a path whose first element has no record (docs/IR.md §9: path[0] is a
-    // layer inside the master), so such an entry (its first element a folded operand) is not written
-    // either: counted empty and noAt (part C's request to E: let path[0] name a layer with no record,
-    // as D10 keeps such entries without `at`).
-    if (Object.keys(e).every((k) => k === "path" || k === "at") || (ctx.local && res.elements[0].i === undefined)) { S.empty++; continue; }
+    if (Object.keys(e).every((k) => k === "path" || k === "at")) { S.empty++; continue; }
     S.written++;
     out.push(e);
   }

@@ -30,8 +30,8 @@
 //   overrides.live     = distinctLivePaths + mergedAway
 //   distinctLivePaths  = written (non-root overrides in the IR) + emptyAfterTranslation
 //   pixsoFields.total  = translated + consumed + Σ dropped[class][field]; dropped.unknown is empty
-//   fields.produced    = carried + Σ echo[field] under --echo drop; = carried under --echo keep (the
-//                        echo fields are carried and counted, D9)
+//   fields.produced    = carried + Σ echo[field] (carried: the fields that differ from the baseline);
+//                        the IR's override fields = carried, plus the echoes under --echo keep (D9)
 //   assignments.total  = kept + droppedWithEntry + merged + dangling + defaultDropped + Σ stale[class]
 //                        (D6: each assignment in exactly one class); dangling = swapDangling.assignment
 //   bindings.total     = kept + Σ dropped[class] (D4)
@@ -77,7 +77,7 @@ const list = (o) => Object.keys(o || {}).filter((k) => o[k]).map((k) => k + " " 
 export function irCounts(ir) {
   const N = ir.nodes || [];
   const c = { records: N.length, componentSets: 0, sets: (ir.sets || []).length, instances: 0, assignments: 0, bindings: 0,
-    overridesNonRoot: 0, overridesRoot: 0, derived: 0, rejectedNotes: {}, rejectedMembers: 0, notStandalone: 0, declared: 0,
+    overridesNonRoot: 0, overridesRoot: 0, overrideFields: 0, derived: 0, rejectedNotes: {}, rejectedMembers: 0, notStandalone: 0, declared: 0,
     badDeclaredType: 0, bindingTypeMismatch: 0, bindingNoDefinition: 0 };
   const comp = new Map();
   for (const e of ir.components || []) comp.set(e.node, e);
@@ -107,6 +107,7 @@ export function irCounts(ir) {
     if (r.type !== "INSTANCE" || !r.instance) return;
     c.assignments += (r.instance.properties || []).length;
     for (const o of r.instance.overrides || []) {
+      if (o.fields && typeof o.fields === "object") c.overrideFields += Object.keys(o.fields).length;
       if (Array.isArray(o.path) && o.path.length) { c.overridesNonRoot++; c.assignments += (o.properties || []).length; }
       else c.overridesRoot++;
     }
@@ -265,12 +266,13 @@ export function m2aGates(ir, stats, ctx) {
       g.need(PF.total === PF.translated + PF.consumed + dropped, "Pixso fields " + fmt(PF.total) + " ≠ translated " + fmt(PF.translated) + " + consumed " + fmt(PF.consumed) + " + dropped " + fmt(dropped));
       g.need(!sum(unknown), "fields outside OVERRIDE_SOURCE_FIELDS (unknown): " + list(unknown));
       const keep = settings.echo === "keep";
-      g.need(keep ? F.produced === F.carried : F.produced === F.carried + F.echo,
-        "Figma fields produced " + fmt(F.produced) + " ≠ carried " + fmt(F.carried) + (keep ? " (--echo keep carries the echoes)" : " + echo " + fmt(F.echo)));
+      g.need(F.produced === F.carried + F.echo, "Figma fields produced " + fmt(F.produced) + " ≠ carried " + fmt(F.carried) + " + echo " + fmt(F.echo));
+      const inIR = F.carried + (keep ? F.echo : 0);
+      g.need(ic.overrideFields === inIR, "the IR's overrides hold " + fmt(ic.overrideFields) + " fields, not carried " + fmt(F.carried) + (keep ? " + echo " + fmt(F.echo) + " (--echo keep writes the echoes)" : " (--echo drop writes no echo)"));
       g.line = "entries " + fmt(O.entries) + " = root " + fmt(O.root) + " + empty path " + fmt(O.emptyPath) + " + live " + fmt(O.live) + " + stale " + fmt(O.stale) +
         "; live = " + fmt(O.distinct) + " paths + " + fmt(O.mergedAway) + " merged away; paths = " + fmt(O.written) + " written + " + fmt(O.emptyAfter) +
         " empty; Pixso fields " + fmt(PF.total) + " = " + fmt(PF.translated) + " + " + fmt(PF.consumed) + " + " + fmt(dropped) + "; Figma fields " + fmt(F.produced) +
-        " = " + fmt(F.carried) + " carried" + (keep ? " (echo kept: " + fmt(F.echo) + ")" : " + " + fmt(F.echo) + " echo");
+        " = " + fmt(F.carried) + " carried + " + fmt(F.echo) + " echo" + (keep ? " (kept)" : "");
     }
     gates.push(g);
   }

@@ -18,7 +18,7 @@
 // The sample is deterministic: SAMPLE_SIZE records spread evenly over the IR's buildable records,
 // leaving out those whose type the reader changed (notes SOURCE_FEATURE_UNSUPPORTED, BOOLEAN_FLATTENED,
 // GEOMETRY_INVALID: a CONNECTLINE or a flattened boolean is a VECTOR in the IR and not in Pixso).
-import { CODE } from "./schema.mjs";
+import { CODE, isComponentNote } from "./schema.mjs";
 import { BUILT_TYPE, taskType } from "./task.mjs";
 import { SCRIPTS } from "./mcp-readonly.mjs";
 
@@ -30,7 +30,9 @@ const SAME_TYPE = { FRAME: ["FRAME", "COMPONENT_SET"], COMPONENT_SET: ["COMPONEN
 
 export function sampleGuids(ir, n) {
   const k = n || SAMPLE_SIZE;
-  const changed = new Set((ir.notes || []).filter((x) => CHANGED_BY_READER.indexOf(x.code) >= 0 && Number.isInteger(x.node)).map((x) => x.node));
+  // M2a's notes about components and properties say nothing about how a record is drawn (schema.mjs
+  // isComponentNote), and the families decide which record carries them (docs/M2A.md D3, D13).
+  const changed = new Set((ir.notes || []).filter((x) => CHANGED_BY_READER.indexOf(x.code) >= 0 && Number.isInteger(x.node) && !isComponentNote(x)).map((x) => x.node));
   const cand = [];
   // By the type the record is built as, so the sample does not depend on --variant-sets (docs/M2A.md D13).
   (ir.nodes || []).forEach((r, i) => { if (!changed.has(i) && Object.prototype.hasOwnProperty.call(BUILT_TYPE, taskType(r.type))) cand.push(i); });

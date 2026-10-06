@@ -172,7 +172,9 @@ if (example) {
   expectValid("a derived box with its fill geometry passes", mut(rich, withPaths));
   expectError("derived geometry index out of range", mut(rich, (ir) => { withPaths(ir); ir.nodes[1].instance.derived[0].strokeGeometry = 40; }), "nodes[1].instance.derived[0].strokeGeometry", true);
   expectError("derived geometry pointing at an object", mut(rich, (ir) => { ir.nodes[1].instance.derived[0].fillGeometry = 3; }), "nodes[1].instance.derived[0].fillGeometry", true);
-  expectError("a note with an empty path", mut(rich, (ir) => { ir.notes[1].path = []; }), "notes[1].path");
+  // path [] is the instance's own override (its `path` [] entry), as on overrides; anything else is not a path.
+  expectValid("a note with path [] about the instance's own override passes", mut(rich, (ir) => { ir.notes[1].path = []; }));
+  expectError("a note with a path that is not a guid list", mut(rich, (ir) => { ir.notes[1].path = ["x"]; }), "notes[1].path");
 }
 
 // ---------- reason codes ----------

@@ -76,11 +76,13 @@ export const SETTING_FLAGS = { mode: "--mode", overrides: "--overrides", drift: 
   defaultAssignments: "--default-assignments", overrideMerge: "--override-merge", echo: "--echo", instanceOwn: "--instance-own",
   derivedGeometry: "--derived-geometry", kitmaps: "--kitmaps" };
 // The owner's default for each (docs/M1.md §3, docs/M2A.md §3, REWRITE.md §11). mode has none: it is
-// chosen per run. overrideMerge is "last" until part C's measurement (docs/M2A.md D17).
+// chosen per run. overrideMerge is "outer" from part C's measurement (docs/M2A.md D17: on P's six
+// conflicting texts derived data agrees with outer and first, never with last; outer equals last where
+// no entry carries an overrideLevel, as in D and K).
 export const SETTING_DEFAULTS = { overrides: "fidelity", drift: "link", deleted: "publish",
   resync: "pixso-unless-edited", textFit: "widen", booleans: "auto", spaceEvenlySingle: "center",   // spaceEvenlySingle: P18, 2026-10-05
   variantSets: "parse", variantGrammar: "names", axisOrder: "vocabulary", swapDangling: "skip", swapReset: "on",
-  swapFallback: "derived", swapDefault: "layer", rejectedProps: "copy", defaultAssignments: "keep", overrideMerge: "last",
+  swapFallback: "derived", swapDefault: "layer", rejectedProps: "copy", defaultAssignments: "keep", overrideMerge: "outer",
   echo: "drop", instanceOwn: "overrides", derivedGeometry: "changed", kitmaps: "default" };
 
 // Figma's node types, which the IR speaks. Pixso never produces SLOT, but the Figma Сова kit uses
@@ -249,6 +251,22 @@ export const CODE = Object.freeze(REASON_CODE_LIST.reduce((o, c) => { o[c] = c; 
 // The read-stage codes that may explain a VECTOR built from its stored fillGeometry (docs/M1.md D3,
 // D5, D13). A geometry-built VECTOR record without one of them is refused here and in a task.
 export const GEOMETRY_SOURCE_CODES = [CODE.VECTOR_FROM_GEOMETRY, CODE.BOOLEAN_FLATTENED, CODE.SOURCE_FEATURE_UNSUPPORTED];
+// The notes M2a's reader writes about components, properties and instance overrides (docs/M2A.md
+// D2-D11). M1's build does not act on them, so the M1 planner leaves them out of tasks (D13: the tasks
+// of a --variant-sets parse IR equal those of a frames IR) and the identity sample does not read them
+// as a record drawn differently. A note with a `path` (an instance's sublayer) is one whatever its
+// code, and so is a SOURCE_FEATURE_UNSUPPORTED note whose detail is a PROPERTY_FEATURES entry: a
+// property definition the reader does not declare (D3), noted on its family's record, which is the set
+// under parse and every member under frames.
+export const COMPONENT_NOTE_CODES = [CODE.VARIANT_SET_REJECTED, CODE.STALE_ASSIGNMENT, CODE.OVERRIDE_STALE, CODE.OVERRIDE_ECHO,
+  CODE.PROPERTY_REF_DROPPED, CODE.SWAP_VALUE_DANGLING, CODE.SWAP_ASSIGNMENT_IGNORED, CODE.OVERRIDE_PATHS_MERGED, CODE.OVERRIDE_FIELD_DROPPED];
+export const PROPERTY_FEATURES = ["COLOR property", "preferred value with no component key"];
+export function isComponentNote(n) {
+  if (!n || typeof n !== "object") return false;
+  if (n.path !== undefined) return true;
+  if (COMPONENT_NOTE_CODES.indexOf(n.code) >= 0) return true;
+  return n.code === CODE.SOURCE_FEATURE_UNSUPPORTED && PROPERTY_FEATURES.indexOf(n.detail) >= 0;
+}
 
 // ---------- helpers ----------
 const GUID = /^\d+:\d+$/;
@@ -1003,9 +1021,12 @@ export function validateIR(ir, options) {
     // The first hop of a guidPath is a layer of this instance's master. Later hops go through
     // nested instances and swaps; the reader resolves those (docs/M2A.md D7) and writes `at`, which
     // is checked below element by element.
-    const firstHop = (g, at) => {
+    // unrecorded: a derived entry may start at a layer with no record (a folded boolean operand, a
+    // degenerate node; docs/M2A.md D10), which is then kept without `at`; an override may not.
+    const firstHop = (g, at, unrecorded) => {
       if (!local) return;
       const root = comps[ci].node, ni = guidIndex.get(g);
+      if (ni === undefined && unrecorded) return;
       if (ni === undefined || ni === root || !inSubtree(ni, root)) err(at, g + " is not a layer inside the master (" + nodes[root].guid + ")");
     };
     // `at`: the record index of each path element (D10). Required when the master is a record here
@@ -1100,7 +1121,7 @@ export function validateIR(ir, options) {
           closed(d, DERIVED_KEYS, D);
           if (!Array.isArray(d.path) || d.path.length === 0 || !d.path.every(isGuid)) err(D + ".path", "a guidPath is a non-empty array of guids");
           else {
-            firstHop(d.path[0], D + ".path[0]");
+            firstHop(d.path[0], D + ".path[0]", true);
             checkAt(d.at, d.path, D + ".at");
             const key = d.path.join("/");
             if (dpaths.has(key)) err(D + ".path", "same path as derived[" + dpaths.get(key) + "]; one derived entry per path");
@@ -1225,7 +1246,8 @@ export function validateIR(ir, options) {
     if (nt.node !== undefined && !nodeAt(nt.node)) err(P + ".node", "index " + show(nt.node) + " is not a node record");
     if (nt.guid !== undefined && !isGuid(nt.guid)) err(P + ".guid", "not a guid: " + show(nt.guid));
     if (nt.path !== undefined) {
-      if (!(Array.isArray(nt.path) && nt.path.length > 0 && nt.path.every(isGuid))) err(P + ".path", "a guidPath is a non-empty array of guids");
+      // [] is the instance's own override (its `path` [] entry), as on overrides.
+      if (!(Array.isArray(nt.path) && nt.path.every(isGuid))) err(P + ".path", "a guidPath is an array of guids ([] for the instance's own override)");
       // A path is inside an instance, and the note names that instance by node (docs/M2A.md §5.1).
       else if (!(nodeAt(nt.node) && nodeAt(nt.node).type === "INSTANCE")) err(P + ".node", "a note with a path names the INSTANCE record the path is inside");
     }

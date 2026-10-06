@@ -46,7 +46,7 @@
 // the service page they attach to the page at a grid place. A root whose subtree is over the size
 // cap is split at child boundaries: the later pieces attach to their built parent ({ i, guid }).
 import { randomBytes } from "node:crypto";
-import { CODE, INTERNED_PROPS, ORACLE_PROPS, snapshotId } from "./schema.mjs";
+import { CODE, INTERNED_PROPS, ORACLE_PROPS, isComponentNote, snapshotId } from "./schema.mjs";
 import { BUILT_TYPE, SERVICE_PAGE_GUID, TASK_FORMAT, TASK_IR_VERSION, TASK_SETTING_DEFAULTS,
   TASK_VERSION, maxTaskChars, taskChars, taskType } from "./task.mjs";
 import { tableFromIR } from "./images.mjs";
@@ -147,9 +147,12 @@ function refsOf(rec) {
   if (Array.isArray(rec.props && rec.props.textRanges)) for (const r of rec.props.textRanges) if (r && r.fields) add(r.fields);
   return out;
 }
+// A record as a task carries it: Pixso's oracle stays behind, and so do the component property
+// bindings (docs/M2A.md D4), which M1's builder does not write (M2b does).
+const NOT_IN_TASKS = ORACLE_PROPS.concat(["componentPropertyReferences"]);
 function taskNode(rec, i) {
   const props = {};
-  for (const k of Object.keys(rec.props || {})) if (ORACLE_PROPS.indexOf(k) < 0) props[k] = rec.props[k];
+  for (const k of Object.keys(rec.props || {})) if (NOT_IN_TASKS.indexOf(k) < 0) props[k] = rec.props[k];
   return { i, parent: rec.parent, guid: rec.guid, type: taskType(rec.type), name: rec.name, props };
 }
 function walkImages(v, out) {
@@ -179,8 +182,10 @@ export function planM1(ir, stats, opts) {
     fallbackFont: { family: st.fallbackFont.family, style: st.fallbackFont.style } };
   const imgTable = new Map((o.images || tableFromIR(ir)).map((t) => [t.hash, t]));
 
+  // A record's notes travel with it, except M2a's notes about components, properties and overrides,
+  // which M1's build does not act on (schema.mjs isComponentNote; docs/M2A.md D13).
   const notesOf = new Map();
-  for (const n of ir.notes || []) if (Number.isInteger(n.node)) {
+  for (const n of ir.notes || []) if (Number.isInteger(n.node) && !isComponentNote(n)) {
     if (!notesOf.has(n.node)) notesOf.set(n.node, []);
     notesOf.get(n.node).push({ code: n.code, i: n.node, detail: typeof n.detail === "string" ? n.detail : null });
   }

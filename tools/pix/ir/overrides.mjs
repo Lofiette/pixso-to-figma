@@ -23,7 +23,8 @@
 //                   swaps: { override, property, sameSet, noOp, unresolved, dropped } }
 //       derived   { entries, resolved, viaFallback, unresolved, written, empty, noAt, noTransform, noSize,
 //                   withLines, withOracleSides, geometry }
-//     with G6's balances (docs/M2A.md §8) holding when the stats are written.
+//     with G6's balances (docs/M2A.md §8) holding when the stats are written. entries = root + emptyPath
+//     + nonRoot: root counts the [symbolID] paths only (docs/M2A.md §0.2), emptyPath the [] ones (D only).
 //   OVERRIDE_SOURCE_FIELDS: every Pixso field of an override entry (the census of docs/M2A.md §1.3, the
 //     Сова UI kit's four more, and guidPath) with exactly one fate:
 //       { fate: "translate", to: [Figma field], by: M1 translator module }   carried, as `to` (props.mjs
@@ -55,12 +56,11 @@
 //     and lock fields compare with the INSTANCE record instead (echo, or dropped "root-box").
 // The Figma fields are closed to the target type's KNOWN_PROPS plus name (an INSTANCE target takes a
 // COMPONENT's; the instance itself ROOT_OVERRIDE_FIELDS): a Pixso field none of whose `to` fields the
-// target takes is dropped "not-on-type". Two fields where M1's translators write other fields than the
-// table names: inheritTextStyleID also yields the font, size, letter spacing and line height text.mjs
-// draws from the style (M1 writes no textStyle), and inheritGridStyleID yields nothing (M1 carries no
-// layout grids), so it is dropped "no-equivalent" (part C's request to E: give it that fate in the
-// table). Of the child-sizing fields' four, M1 writes layoutGrow from the primary one and layoutAlign
-// from the counter one, so each yields only that. width and height are one setter: when either differs, neither is an echo (so min and max).
+// target takes is dropped "not-on-type". The table follows what M1's translators write: inheritTextStyleID
+// yields the font, size, letter spacing and line height text.mjs draws from the style besides the style
+// reference, inheritGridStyleID is dropped "no-equivalent" (M1 carries no layout grids), and of the
+// child-sizing fields M1 writes layoutGrow from the primary one and layoutAlign from the counter one
+// (part C's request, applied by part E). width and height are one setter: when either differs, neither is an echo (so min and max).
 // A style a written field binds is registered through styles.mjs with the note's path (STYLE_VALUE_DIFFERS,
 // STYLE_MISSING_IN_SOURCE); fonts and images the written values use join the IR's through cx. A Pixso
 // feature Figma lacks that only the override brings is counted in stats.unsupported and noted
@@ -94,7 +94,6 @@ const T = (to, by) => Object.freeze({ fate: "translate", to: Object.freeze(to), 
 const C = (by) => Object.freeze({ fate: "consume", by });
 const D = (why) => Object.freeze({ fate: "drop", why });
 const SIDES = ["strokeWeight", "strokeWeights"], CORNERS = ["cornerRadius", "cornerRadii"];
-const CHILD_SIZING = ["layoutSizingHorizontal", "layoutSizingVertical", "layoutAlign", "layoutGrow"];
 const FONT_VARIANT = "a font variant Figma's text API does not set (M1: SOURCE_FEATURE_UNSUPPORTED on nodes)";
 const OT = "OpenType features (M1: SOURCE_FEATURE_UNSUPPORTED on nodes)";
 
@@ -142,8 +141,8 @@ export const OVERRIDE_SOURCE_FIELDS = Object.freeze({
   verticalConstraint: T(["constraints"], "layout"),
   maxSize: T(["maxWidth", "maxHeight"], "layout"),
   minSize: T(["minWidth", "minHeight"], "layout"),
-  stackChildCounterSizing: T(CHILD_SIZING, "layout"),
-  stackChildPrimarySizing: T(CHILD_SIZING, "layout"),
+  stackChildCounterSizing: T(["layoutAlign"], "layout"),
+  stackChildPrimarySizing: T(["layoutGrow"], "layout"),
   stackCounterAlignContent: T(["counterAxisAlignContent"], "layout"),
   stackCounterAlignItems: T(["counterAxisAlignItems"], "layout"),
   stackCounterSizing: T(["counterAxisSizingMode"], "layout"),
@@ -176,9 +175,9 @@ export const OVERRIDE_SOURCE_FIELDS = Object.freeze({
   inheritFillStyleID: T(["fillStyle"], "styles"),
   inheritStrokeStyleID: T(["strokeStyle"], "styles"),
   inheritEffectStyleID: T(["effectStyle"], "styles"),
-  inheritTextStyleID: T(["textStyle"], "text"),
-  inheritGridStyleID: T(["gridStyle"], "styles"),
+  inheritTextStyleID: T(["textStyle", "fontName", "fontSize", "letterSpacing", "lineHeight"], "text"),
   // dropped, class no-equivalent
+  inheritGridStyleID: D("a layout grid style; M1 carries no layout grids"),
   autoCornerRadius: D("Pixso's automatic corner radius; no Figma equivalent"),
   dashCap: D("no Figma equivalent (M1: SOURCE_FEATURE_UNSUPPORTED dashCap on nodes)"),
   exportImageQuality: D("an export option Figma's exportSettings lack"),
@@ -217,11 +216,6 @@ const BOX = ["size", "transform", "horizontalConstraint", "verticalConstraint", 
   "stackChildCounterSizing", "autoLayoutAbsolutePos", "name", "visible", "locked"];
 const BOX_SET = new Set(BOX);
 const ROOT_SET = new Set(ROOT_OVERRIDE_FIELDS);
-// Where M1's translators write other Figma fields than the table's `to` (the header says why).
-const EXTRA_TO = { inheritTextStyleID: ["fontName", "fontSize", "letterSpacing", "lineHeight"] };
-// Of the table's child-sizing fields, the one M1's layout.mjs writes from each (the others never are).
-const NARROW_TO = { stackChildPrimarySizing: ["layoutGrow"], stackChildCounterSizing: ["layoutAlign"] };
-const NO_EFFECT = new Set(["inheritGridStyleID"]);
 const SETTERS = [["width", "height"], ["minWidth", "minHeight"], ["maxWidth", "maxHeight"]];
 const FIELD_DEFAULTS = Object.assign({}, DEFAULTS, { textRanges: [] });
 // The instance's own stored look (D11): the Pixso fields, and the Figma fields they make.
@@ -506,11 +500,14 @@ export function instanceData(cx, n, i, master, indexOf) {
   };
   const noteStale = (cls, defIdCount) => { SA.total += defIdCount; SA.droppedWithEntry += defIdCount; };
   const writeNotes = (list, path) => {
+    // A dropped item with no code (merged away, dropped as the default, with its entry) is counted by
+    // assignments() and has no note of its own (D6); the others carry their whole detail (properties.mjs).
     for (const d of list) {
+      if (d.code === null || d.code === undefined) continue;
       const code = CODE[d.code];
-      if (!code) throw new Error("instanceData: assignments() named no code: " + JSON.stringify(d.code));
-      const cls = String(d.class);
-      cx.noteAt(code, { node: i, path, detail: cls + (cls.indexOf(": ") >= 0 ? ", " : ": ") + "definition " + d.defId });
+      if (!code) throw new Error("instanceData: assignments() named an unknown code: " + JSON.stringify(d.code));
+      const det = String(d.detail || d.class);
+      cx.noteAt(code, { node: i, path, detail: det + (det.indexOf(": ") >= 0 ? ", " : ": ") + "definition " + d.defId });
     }
   };
 
@@ -520,8 +517,8 @@ export function instanceData(cx, n, i, master, indexOf) {
     L.entries++;
     const guids = R.pathGuids(e);
     if (guids.length === 0 || (guids.length === 1 && guids[0] === S0)) {
-      L.root++;
-      if (!guids.length) L.emptyPath++;
+      // root: [symbolID] paths only; an empty path (D only) is counted apart (docs/M2A.md §0.2, §1.3's row).
+      if (guids.length) L.root++; else L.emptyPath++;
       roots.push(e);
       continue;
     }
@@ -558,7 +555,7 @@ export function instanceData(cx, n, i, master, indexOf) {
   }
 
   // ---- 2. merge the duplicates (D17) ----
-  const rule = st.overrideMerge || "last";
+  const rule = st.overrideMerge || "outer";
   const rootM = roots.length ? mergeEntries(roots, rule) : null;
   if (roots.length > 1) { mergedPaths++; mergedConflicts += rootM.conflicts; SA.total += rootM.mergedAssignments; SA.merged += rootM.mergedAssignments; }
   for (const lv of live.values()) {
@@ -607,10 +604,10 @@ export function instanceData(cx, n, i, master, indexOf) {
       const f = own(OVERRIDE_SOURCE_FIELDS, k) ? OVERRIDE_SOURCE_FIELDS[k] : null;
       if (!f) { drop("unknown", k); continue; }
       if (f.fate === "consume") { L.consumed++; continue; }
-      if (f.fate === "drop" || NO_EFFECT.has(k)) { drop("no-equivalent", k); continue; }
+      if (f.fate === "drop") { drop("no-equivalent", k); continue; }
       if (spec.notCarried) { drop("layer-not-carried", k); continue; }
       if (spec.isRoot && BOX_SET.has(k)) { rootBox(k, spec.fields[k]); continue; }
-      const tos = (NARROW_TO[k] || f.to).concat(EXTRA_TO[k] || []).filter((t) => spec.allowed.has(t));
+      const tos = f.to.filter((t) => spec.allowed.has(t));
       if (!tos.length) { drop("not-on-type", k); continue; }
       L.translated++;
       for (const t of tos) set.add(t);
@@ -625,7 +622,7 @@ export function instanceData(cx, n, i, master, indexOf) {
     const Fc = lookOf(q, Cn, spec.base.type, spec.base.parent, set);
     const fc = X.sink.features;
     X.sink.features = null;
-    newFeatures(fb, fc, spec.isRoot ? undefined : spec.path);
+    newFeatures(fb, fc, spec.isRoot ? [] : spec.path);
     const vals = new Map();
     for (const f of [...set].sort()) {
       const comp = f === "name" ? (typeof Cn.name === "string" ? Cn.name : undefined) : pv(Fc, f);
@@ -658,7 +655,7 @@ export function instanceData(cx, n, i, master, indexOf) {
   const parentI = parentOf(cx, n);
   let FI = null;
   const rootBox = (k, v) => {
-    const tos = NARROW_TO[k] || OVERRIDE_SOURCE_FIELDS[k].to;
+    const tos = OVERRIDE_SOURCE_FIELDS[k].to;
     if (!FI) FI = lookOf(q, n, "INSTANCE", parentI);
     const Fk = k === "name" ? null : lookOf(q, Object.assign({}, n, { [k]: v }), "INSTANCE", parentI);
     const equal = k === "name" ? v === n.name : tos.every((f) => canon(pv(Fk, f) === undefined ? null : pv(Fk, f)) === canon(pv(FI, f) === undefined ? null : pv(FI, f)));
@@ -763,7 +760,7 @@ export function instanceData(cx, n, i, master, indexOf) {
     }
   }
   if (Object.keys(rootFields).length) {
-    const fields = intern(rootFields, rootComposed, undefined);
+    const fields = intern(rootFields, rootComposed, []);   // notes on the instance's own override carry path []
     if (Object.keys(fields).length) { classify(fields); overrides.push({ path: [], fields }); }
   }
   // Assignments: the node's own, then its root entries' (an entry's value wins over the node's).
@@ -860,7 +857,7 @@ export function instanceData(cx, n, i, master, indexOf) {
 
   // ---- 9. G6's balances, per instance (a failure is a reader bug) ----
   const bad = [];
-  if (L.entries !== L.root + L.live + L.stale) bad.push("entries");
+  if (L.entries !== L.root + L.emptyPath + L.live + L.stale) bad.push("entries");
   if (L.live !== L.distinct + L.mergedAway) bad.push("live");
   if (L.distinct !== L.written + L.empty) bad.push("distinct live paths");
   if (L.total !== L.translated + L.consumed + L.dropped) bad.push("Pixso fields");

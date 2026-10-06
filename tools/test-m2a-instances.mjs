@@ -199,7 +199,8 @@ check("`at` names each path element's record, on every override and derived entr
     }
   });
   same(derAt(BASE.ir, M2A.iSwaps, P(M2A.cardRow, M2A.rowFlatL1)).at, undefined, "a derived entry through a folded operand:");
-  truth(!derAt(BASE.ir, M2A.iEntries, P(M2A.rowFlatL1)), "a derived entry whose first element is a folded operand is written (the validator refuses it)");
+  const folded = derAt(BASE.ir, M2A.iEntries, P(M2A.rowFlatL1));
+  truth(folded && folded.at === undefined, "a derived entry whose first element is a folded operand is kept without at (D10)");
   same(ovAt(BASE.ir, M2A.iSwaps, P(M2A.cardRow, M2A.rowTrail, M2A.triangleShape)).at, [M2A.cardRow, M2A.rowTrail, M2A.triangleShape].map((g) => recOf(BASE.ir, g)), "a path of length 3:");
   return n + " entries with at";
 });
@@ -337,7 +338,7 @@ check("--swap-fallback off: Rule C's path is not written and no SWAP_ASSIGNMENT_
 const balances = (st, label) => {
   const O = st.m2a.overrides, D = st.m2a.derived;
   const bad = [];
-  if (O.entries !== O.root + O.live + sum(O.stale)) bad.push("entries");
+  if (O.entries !== O.root + O.emptyPath + O.live + sum(O.stale)) bad.push("entries");
   if (O.live !== O.distinctLivePaths + O.mergedAway) bad.push("live");
   if (O.distinctLivePaths !== O.written + O.emptyAfterTranslation) bad.push("distinct live paths");
   if (O.pixsoFields.total !== O.pixsoFields.translated + O.pixsoFields.consumed + sum(O.pixsoFields.dropped)) bad.push("Pixso fields");
@@ -371,7 +372,7 @@ check("stats.m2a.instances, .overrides and .derived on the fixture", () => {
   same(S.instances, { instances: 27, notCarried: 0, noDerived: 1, exposed: 1, exposedOutside: 0, scaled: 1, ownDiffers: 1 });
   const O = S.overrides;
   same([O.entries, O.root, O.emptyPath, O.nonRoot, O.live, O.stale, O.distinctLivePaths, O.mergedAway, O.written, O.emptyAfterTranslation, O.merged],
-    [28, 2, 1, 26, 23, { "not-derived": 3, unresolved: 0 }, 22, 1, 17, 5, { paths: 2, conflicts: 2 }]);
+    [28, 1, 1, 26, 23, { "not-derived": 3, unresolved: 0 }, 22, 1, 17, 5, { paths: 2, conflicts: 2 }]);
   same(O.pixsoFields.dropped, { "no-equivalent": { vectorPaints: 1, pluginData: 1 }, "not-on-type": { fillPaints: 1 }, "layer-not-carried": { fillPaints: 1 }, "root-box": { size: 1 }, unknown: {} });
   same(O.swaps, { override: 6, property: 3, sameSet: 0, noOp: 2, unresolved: 0, dropped: 0 });
   same(O.fields.echo, { opacity: 1, fills: 1 });

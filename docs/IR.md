@@ -158,7 +158,7 @@ it, and records the outcome in its own state (`docs/M1.md` D9, SOURCE_IDENTITY_M
 | `swapDefault` | `layer`, `definition` | `--swap-default` | `layer` (D5) |
 | `rejectedProps` | `copy`, `none` | `--rejected-props` | `copy` (D3) |
 | `defaultAssignments` | `keep`, `drop` | `--default-assignments` | `keep` (D6) |
-| `overrideMerge` | `last`, `first`, `outer` | `--override-merge` | `last` until part C's measurement (D8, D17) |
+| `overrideMerge` | `last`, `first`, `outer` | `--override-merge` | `outer`, from part C's measurement (D8, D17) |
 | `echo` | `drop`, `keep` | `--echo` | `drop` (D9) |
 | `instanceOwn` | `overrides`, `own` | `--instance-own` | `overrides` (D11) |
 | `derivedGeometry` | `changed`, `all`, `none` | `--derived-geometry` | `changed` (D10) |
@@ -400,7 +400,7 @@ one note per instance and class). Entries of one path are merged into one (`OVER
 that cannot be reached is a `STALE_ASSIGNMENT`, and a swap value naming nothing the IR can reference a
 `SWAP_VALUE_DANGLING`. Size, position, rotation and constraint fields stay in the IR even though Figma cannot apply
 them to instance sublayers (REWRITE.md §9, P13). One entry per path. A note about an entry names the instance by
-`node` and the entry by `path`.
+`node` and the entry by `path`, `[]` for the instance's own override.
 
 **Derived entries** are Pixso's resolved boxes as stored, **sparse**: `size` and `transform` only where Pixso stores
 them (absent means the master layer's, I), `lines` from the sublayer's stored baselines, `oracleSides` from its
@@ -447,8 +447,8 @@ values) is listed, because every font is loaded before the first text write.
 ## 13. Notes and the reason-code vocabulary
 
 `notes`: `[{ code, node?, guid?, path?, detail? }]`. `node` is a record index; `guid` names a source node with no
-record (an unsupported node); `path` is a guidPath inside an instance, and a note with a `path` names that `INSTANCE`
-record by `node`; `detail` is free text, except that a code with classes (`NOTE_CLASSES` in the schema) has a detail
+record (an unsupported node); `path` is a guidPath inside an instance (`[]` for the instance's own override, the entry
+with `path` `[]`), and a note with a `path` names that `INSTANCE` record by `node`; `detail` is free text, except that a code with classes (`NOTE_CLASSES` in the schema) has a detail
 that starts with one of its classes, optionally followed by `: ` and text. The classes are listed in the table below,
 in the order the reader decides in. A `VECTOR_ORACLE_DIFFERS` note names a network-built `VECTOR` record and a
 `VARIANT_SET_REJECTED` note the state group's `FRAME` record. An IR's notes carry **read-stage codes only**; the
