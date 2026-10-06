@@ -31,6 +31,10 @@
   gate on the test design file, the test kit and both Сова-based product files with the plan's numbers; two reads give
   the same IR bytes, and M1's preflight and balances are unchanged. Every new policy is a reader setting. Next: M2b
   (components in Figma), starting with its probes (P13b, P21, P22, P23) and render pairs (`docs/M2A.md` §10).
+- **2026-10-06: a review of the M2a build fixed six findings** (`docs/M2A.md` §15): swaps Pixso drew, or did not, that
+  the kept data would not give are pinned with swap overrides (rule C's assignment held inside a master, swaps from
+  dropped assignments), duplicate entries are read in merge order everywhere, and a removal no field carries is
+  dropped with a code. The gates pass with the same numbers on D, K, M and P; M1's preflight is unchanged.
 
 - **Task:** Pixso -> Figma migration, 1:1, whole files, no model in the loop.
 - **Status:** five files migrated. Day three went into the *instrument* rather than the algorithm:

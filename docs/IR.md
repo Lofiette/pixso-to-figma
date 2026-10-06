@@ -391,14 +391,19 @@ name.
   `characters` or the target's. Each field has a class in `OVERRIDE_FIELD_CLASS`: `applies` (P13), `refused` (size,
   position, rotation, constraints: kept, and counted `OVERRIDE_FIELD_UNSUPPORTED` by the planner, decision 1) or
   `unprobed` (until M2b's P13b).
-- `swap` is a master reference;
+- `swap` is a master reference. Besides the swaps of live entries, the reader writes a **pinned** swap, to the
+  symbol Pixso drew, on a nested instance whose symbol the kept data would not give: a hop rule C forced whose
+  ignored assignment sits on an instance inside a master (kept there, where Pixso applied it), and a swap Pixso
+  drew from an assignment the IR drops (`docs/M2A.md` D7). A pinned swap joins the live entry of its path, or is an
+  override of its own with `path` and `at` only;
 - `properties` holds assignments to the nested instance the path ends in: each names a family in this IR, and that
   of the entry's `swap` when the swap is to a record here.
 
 Before writing, the reader drops: an entry whose path is absent from `derivedSymbolData`, which is provably stale
 (`OVERRIDE_STALE`, class `not-derived`; or `unresolved`, in it but not resolving); a field that only echoes the value
 the target already has (`OVERRIDE_ECHO`, one note per instance); and a field it does not carry (`OVERRIDE_FIELD_DROPPED`,
-one note per instance and class). Entries of one path are merged into one (`OVERRIDE_PATHS_MERGED`); an assignment
+one note per instance and class), including one whose only effect is to remove a prop the target has (a style
+detached or naming none, `maxLines` cleared) when no written field carries the removal (`no-equivalent`). Entries of one path are merged into one (`OVERRIDE_PATHS_MERGED`); an assignment
 that cannot be reached is a `STALE_ASSIGNMENT`, and a swap value naming nothing the IR can reference a
 `SWAP_VALUE_DANGLING`. Size, position, rotation and constraint fields stay in the IR even though Figma cannot apply
 them to instance sublayers (REWRITE.md §9, P13). One entry per path. A note about an entry names the instance by
@@ -484,7 +489,7 @@ from the preflight and the kit-map resolution, and *build* codes come from Figma
 | `OVERRIDE_ECHO` | read | override fields equal to the value the target has without them; dropped, one note per instance with the count and the field names | named here (§3, P9b) |
 | `PROPERTY_REF_DROPPED` | read | a layer's binding to a component property that is not carried; never matched by name; one note per record and class, with the count. Classes: `fill-style`, `outside-definition`, `no-definition`, `other-family`, `no-root`, `undeclared`, `type-mismatch` | named here (§3) |
 | `SWAP_VALUE_DANGLING` | read | an INSTANCE_SWAP value or default, or a swap target, naming no component the IR can reference; dropped. Classes: `assignment`, `default`, `swap` (a detail `: not carried` for a stored symbol with no record and no library identity) | named here (§3) |
-| `SWAP_ASSIGNMENT_IGNORED` | read | a swap assignment Pixso's derived data shows was not applied (rule C); the declared symbol is used and the assignment dropped; one note per instance with the count | named here (§3) |
+| `SWAP_ASSIGNMENT_IGNORED` | read | a swap assignment Pixso's derived data shows was not applied (rule C); the declared symbol is used and the assignment dropped, or, when an instance inside a master holds it, the hop pinned with a swap override; one note per instance with the counts | named here (§3) |
 | `OVERRIDE_PATHS_MERGED` | read | override entries of one path merged into one (`overrideMerge`); one note per instance with the conflicting field count | named here (§3) |
 | `OVERRIDE_FIELD_DROPPED` | read | an override field not carried; one note per instance and class, the detail the class, then `: ` and the fields with counts. Classes: `no-equivalent`, `not-on-type`, `layer-not-carried`, `root-box`, `unknown` | named here (§3) |
 | `NODE_TYPE_UNSUPPORTED` | read | a source node type the IR has no type for; it and its subtree are not carried | named here (§7, §8) |
