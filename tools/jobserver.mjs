@@ -124,8 +124,10 @@ export function startJobServer(port = 3778, opts = {}) {
   const transport = IMAGE_TRANSPORTS.indexOf(opts.imageTransport) >= 0 ? opts.imageTransport : defaultImageTransport();
   // The liveness state of the job being watched: { id, at (last advance), done, warned, onProgress }.
   let live = null;
-  const advance = (id, done) => {
+  const advance = (id, done, phase) => {
     if (!live || !pending || live.id !== id || pending.id !== id) return;
+    // The phase the plugin reported last, so a stall names where it stopped (2026-10-06).
+    if (typeof phase === "string" && phase) live.phase = phase;
     if (done === undefined) { live.at = Date.now(); live.warned = false; return; }
     if (!(done > live.done)) return;
     live.done = done; live.at = Date.now(); live.warned = false;
@@ -441,7 +443,8 @@ export function startJobServer(port = 3778, opts = {}) {
       lastPoll = Date.now();
       // The progress counter, when the window forwards one; a bare heartbeat carries none.
       const doneQ = url.searchParams.get("done"), idQ = url.searchParams.get("id");
-      if (doneQ !== null && idQ !== null && /^\d{1,12}$/.test(doneQ)) advance(idQ, Number(doneQ));
+      const phaseQ = url.searchParams.get("phase");
+      if (doneQ !== null && idQ !== null && /^\d{1,12}$/.test(doneQ)) advance(idQ, Number(doneQ), phaseQ && /^[A-Za-z0-9_-]{1,40}$/.test(phaseQ) ? phaseQ : undefined);
       req.resume();
       cors("application/json");
       return res.end(JSON.stringify({ ok: true }));
@@ -628,8 +631,9 @@ export function startJobServer(port = 3778, opts = {}) {
       if (!waiting.has(id)) return;
       waiting.delete(id);
       if (pending && pending.id === id) { pending = null; payload = ""; blobs = new Map(); }
+      const where = live && live.id === id ? " (last heard in phase " + (live.phase || "(none yet)") + ", progress " + live.done + ")" : "";
       if (live && live.id === id) live = null;
-      const e = new Error(CODE.PLUGIN_STALLED + ": job " + id + " " + why + "; the task is failed and a re-run resumes it");
+      const e = new Error(CODE.PLUGIN_STALLED + ": job " + id + " " + why + where + "; the task is failed and a re-run resumes it");
       e.code = CODE.PLUGIN_STALLED; e.resumable = true; e.stall = kind;
       warn("  " + e.message);
       reject(e);
@@ -642,7 +646,8 @@ export function startJobServer(port = 3778, opts = {}) {
       if (quiet > o.liveness.failMs) return fail("made no progress for " + Math.round(quiet / 1000) + " s (the limit is " + Math.round(o.liveness.failMs / 1000) + " s)", "stalled");
       if (quiet > o.liveness.warnMs && !live.warned) {
         live.warned = true;
-        warn("  waiting: job " + id + " has made no progress for " + Math.round(quiet / 1000) + " s; it fails at " + Math.round(o.liveness.failMs / 1000) + " s without any");
+        warn("  waiting: job " + id + " has made no progress for " + Math.round(quiet / 1000) + " s, last heard in phase " + (live.phase || "(none yet)") +
+          " at progress " + live.done + "; it fails at " + Math.round(o.liveness.failMs / 1000) + " s without any");
       }
     }, tick);
   }

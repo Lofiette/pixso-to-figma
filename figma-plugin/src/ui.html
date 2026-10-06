@@ -396,7 +396,8 @@ async function probeFetch(m) {
 function progressed(m) {
   const done = Number(m.done);
   if (!(done >= 0) || typeof m.id !== "string") return;
-  post("/alive?id=" + encodeURIComponent(m.id) + "&done=" + done, { id: m.id, done: done }).catch(() => {});
+  const ph = typeof m.phase === "string" ? "&phase=" + encodeURIComponent(m.phase.slice(0, 40)) : "";
+  post("/alive?id=" + encodeURIComponent(m.id) + "&done=" + done + ph, { id: m.id, done: done }).catch(() => {});
 }
 
 onmessage = async (e) => {

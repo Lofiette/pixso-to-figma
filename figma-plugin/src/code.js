@@ -486,10 +486,14 @@ async function cmdProbe(P) {
 // The IR layer reaches this host only through what is given here: the images created this session
 // and the ones Figma refused, and the progress counter, which the window forwards to the runner as
 // the liveness signal (a heartbeat alone never extends a task).
+// The phase the job is in travels with the counter, so a stall names where the plugin stopped (the
+// live Сова UI kit run, 2026-10-06, stalled three times with nothing to say where).
+var irPhase = null;
 PXF_IR.setHost({
   images: function () { return images; },
   imageErrors: function () { return imageErrors; },
-  progress: function (done, id) { figma.ui.postMessage({ t: "progress", id: id, done: done }); },
+  phase: function (name) { irPhase = name; },
+  progress: function (done, id) { figma.ui.postMessage({ t: "progress", id: id, done: done, phase: irPhase }); },
   log: log
 });
 
