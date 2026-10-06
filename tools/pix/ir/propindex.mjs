@@ -46,7 +46,8 @@
 // Pixso, gives every member a "same-id alias" (the set's id, unnamed, BOOL, no parent), and in M and P
 // one alias id sits on members with different parents, or as a root on one member and an alias on
 // another (counts in docs/M2A.md §13, P0's findings). So the definition is taken, in this order: the
-// one on `from` (the symbol the id is read from); the scope owner's; one with no parent; the first in
+// one on `from` (the symbol the id is read from), unless it is a same-id alias there (no parent, and
+// the scope's owner defines the id too; part B); the scope owner's; one with no parent; the first in
 // stored order. A parent is looked up the same way, from the owner of the definition that names it.
 // So a same-id alias names the set's root ("root"), a member-owned root, whose id collides with
 // nothing (docs/M2A.md §1.2), is found on its member, and a repeated alias id follows its own member's
@@ -110,7 +111,12 @@ export function propIndex(cx) {
     const m = byScope.get(scope);
     const list = m ? m.get(id) : null;
     if (!list || !list.length) return null;
-    return (from && list.find((d) => d.owner === from)) || list.find((d) => d.owner === scope) || list.find((d) => d.parent === null) || list[0];
+    // A same-id alias on `from` names the owner's root: type, name and default come from the root on
+    // the set, never from the unnamed BOOL a member repeats (D3).
+    const own = list.find((d) => d.owner === scope);
+    const mine = from ? list.find((d) => d.owner === from) : null;
+    if (mine && !(mine.parent === null && own && own !== mine)) return mine;
+    return own || list.find((d) => d.parent === null) || list[0];
   };
 
   const memo = new Map();
