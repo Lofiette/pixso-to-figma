@@ -243,8 +243,8 @@ const unionOf = (entries) => unionBounds(entries.filter((e) => subpaths(e) > 0).
 const pn = (n) => { const v = Number(Number(n).toFixed(6)); return String(Object.is(v, -0) ? 0 : v); };
 // The box of an IR drawing in the record's own space: its build source (a network's segments, curves
 // included, and any vertex no segment uses; or fillGeometry), or a boolean's stored result. null when
-// it has none.
-function drawingBox(p, value) {
+// it has none. Exported for the render audit's test (tools/test-iraudit.mjs: what a vector draws).
+export function drawingBox(p, value) {
   const boxes = [];
   if (p.vectorNetwork !== undefined) {
     const net = value(p.vectorNetwork) || {};
