@@ -25,6 +25,12 @@
   `node tools/ir-audit.mjs <runDir>` renders every built root in Figma and Pixso, compares them (opacity, section
   margin, placeholder masks, identity check) and writes the audit `m1-accept --audit` reads. Not yet run live; its
   thresholds are the M0 tool's and need the first pass on D, read root by root.
+- **2026-10-06: M2a is built and accepted offline** on branch `claude/m2a` (not pushed; `docs/M2A.md` §14): IR
+  version 3 with variant sets, property roots and bindings, assignments, a swap-aware guidPath resolver, live
+  overrides with echo, merge and field translation, and sparse derived entries. `node tools/m2a-accept.mjs` passes every
+  gate on the test design file, the test kit and both Сова-based product files with the plan's numbers; two reads give
+  the same IR bytes, and M1's preflight and balances are unchanged. Every new policy is a reader setting. Next: M2b
+  (components in Figma), starting with its probes (P13b, P21, P22, P23) and render pairs (`docs/M2A.md` §10).
 
 - **Task:** Pixso -> Figma migration, 1:1, whole files, no model in the loop.
 - **Status:** five files migrated. Day three went into the *instrument* rather than the algorithm:

@@ -382,7 +382,9 @@ name.
   `at[0]` lies inside the master, every element but the last is an `INSTANCE` record, and every later element lies
   inside a `COMPONENT` record. It is required when the master is a record in this IR and every element has a record;
   a path through an element with no record (a folded boolean operand) has none, so neither the planner nor the plugin
-  ever resolves a path.
+  ever resolves a path. Only a derived entry may start at a layer with no record (it is then kept without `at`); an
+  override's first element is always a record of the master, because a field on a layer that is not carried is
+  dropped (`OVERRIDE_FIELD_DROPPED` `layer-not-carried`).
 - `fields` holds Figma properties, interned like node props, closed to `OVERRIDE_FIELDS` (`props.mjs`) and, where `at`
   names the target, to the target type's props plus `name`; an `INSTANCE` target takes a `COMPONENT`'s props (its
   look is its master root's). A `textRanges` field is checked as on a record, against the override's own

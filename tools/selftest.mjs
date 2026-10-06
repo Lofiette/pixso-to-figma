@@ -182,23 +182,17 @@ for (const [t, part] of M1_TESTS) {
 }
 
 // ---------- 10. M2a: the frozen contract, then each part's tests (docs/M2A.md §5.5) ----------
-// test-m2a-contract.mjs is part P0's and stays. The others start as P0's stubs: each exits 2 and
-// prints "pending: part X" while its part's code is still P0's stub (reported here as pending, not as
-// a failure), and exits 1 once the part's code is in but its test is not. Each part replaces only its
-// own file: families (A), properties (B), instances (C), run and acceptance (D), end to end (E).
+// test-m2a-contract.mjs is part P0's and stays; the others are the parts' tests: families (A),
+// properties (B), instances (C), run and acceptance (D), end to end (E). They started as P0's stubs,
+// which exited 2 and printed "pending"; M2a is merged (docs/M2A.md §7), so any exit but 0 fails.
 const M2A_TESTS = [["test-m2a-contract.mjs", "P0"], ["test-m2a-families.mjs", "A"], ["test-m2a-props.mjs", "B"], ["test-m2a-instances.mjs", "C"],
   ["test-m2a-run.mjs", "D"], ["test-m2a-e2e.mjs", "E"]];
-const pendingParts = [];
 for (const [t, part] of M2A_TESTS) {
   console.log("");
   try { execFileSync(process.execPath, [join(HERE, t)], { stdio: "inherit" }); }
-  catch (e) {
-    if (e.status === 2 && part !== "P0") pendingParts.push(part);
-    else fail("tools/" + t + " (part " + part + ") failed (exit " + e.status + ")");
-  }
+  catch (e) { fail("tools/" + t + " (part " + part + ") failed (exit " + e.status + ")"); }
 }
 
 console.log("");
-if (pendingParts.length) console.log("pending: M2a part" + (pendingParts.length === 1 ? " " : "s ") + pendingParts.join(", ") + " (stub tests, docs/M2A.md §5.5)");
 console.log(failed ? failed + " check" + (failed === 1 ? "" : "s") + " FAILED" : "all checks pass");
 process.exit(failed ? 1 : 0);

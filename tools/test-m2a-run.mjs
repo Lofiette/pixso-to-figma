@@ -55,12 +55,9 @@ writeFileSync(PIX, FX.pix);
 // The first value of each M2a setting that is not its default.
 const NONDEFAULT = Object.fromEntries(M2A_SETTINGS.map((k) => [k, SETTINGS[k].find((v) => v !== SETTING_DEFAULTS[k])]));
 const flagsOf = (o) => M2A_SETTINGS.flatMap((k) => [SETTING_FLAGS[k], o[k]]);
-// While part C's instance pass is P0's stub, stats.m2a counts no instance, and G6 rightly fails on any
-// file with instances (its counters cover none of the IR's INSTANCE records): the fixture's checks
-// below then expect exactly that failure ("pending: C"), and every gate passing once C has landed.
-const C_PENDING = overrides.STUB !== undefined;
-const FIXTURE_VERDICT = C_PENDING ? "FAIL (G6)" : "PASS";
-if (C_PENDING) console.log("pending: C (the fixture's run folder fails G6 until part C counts the instances it carries)");
+// M2a is merged (docs/M2A.md §7): part C's instance pass counts every instance it carries, so every
+// gate passes on the fixture's run folder (with P0's stub, G6 failed on counters for no instance).
+if (overrides.STUB !== undefined) { console.log("FAIL tools/pix/ir/overrides.mjs is still P0's stub; M2a is merged (docs/M2A.md §7)"); process.exit(1); }
 const runFolder = (out) => { const m = /run folder: (.+)/.exec(out || ""); return m ? m[1].trim() : null; };
 
 // ---------- 1. the thirteen flags ----------
@@ -152,7 +149,7 @@ function m1Group() {
   const data = join(TMP, "data-fixture");
   const r = node([join(HERE, "pix-run.mjs"), PIX, "--dry", "--no-pixso", "--data", data]);
   const lines = GATE_IDS.filter((g) => !new RegExp("\\n  " + g + " ").test(r.out));
-  check(r.code === 0 && /BALANCE \(adds up\)/.test(r.out) && (C_PENDING ? /\nM2a \(FAIL: G6\)/ : /\nM2a \(no gate fails\)/).test(r.out) && !lines.length && /full acceptance: node tools\/m2a-accept\.mjs/.test(r.out),
+  check(r.code === 0 && /BALANCE \(adds up\)/.test(r.out) && /\nM2a \(no gate fails\)/.test(r.out) && !lines.length && /full acceptance: node tools\/m2a-accept\.mjs/.test(r.out),
     "pix-run --dry --no-pixso prints the M1 balance, adding up, and the M2a block with every gate", r.code !== 0 ? r.out.slice(-500) : lines.join(", "));
   const tasksLine = /tasks: (\d+) \(/.exec(r.out);
   check(tasksLine && Number(tasksLine[1]) === p3.tasks.length, "pix-run plans the same number of tasks", tasksLine && tasksLine[1]);
@@ -302,8 +299,8 @@ async function acceptGroup() {
 
   if (!FIXTURE_RUN) { check(false, "the fixture's run folder exists (section 3)"); return; }
   const t = acc([FIXTURE_RUN, "--twice"]);
-  check(t.code === (C_PENDING ? 3 : 0) && /G8 determinism +PASS/.test(t.out) && t.out.indexOf("VERDICT: " + FIXTURE_VERDICT) >= 0 && (!C_PENDING || /counters cover 0 carried instances/.test(t.out)),
-    "on the fixture's run folder every gate passes, G8 with --twice (two reads, one IR)" + (C_PENDING ? "; pending: C, G6 fails as it must on counters for no instance" : ""), t.out.slice(0, 800));
+  check(t.code === 0 && /G8 determinism +PASS/.test(t.out) && t.out.indexOf("VERDICT: PASS") >= 0,
+    "on the fixture's run folder every gate passes, G8 with --twice (two reads, one IR)", t.out.slice(0, 800));
   const ir = JSON.parse(readFileSync(join(FIXTURE_RUN, "ir.json"), "utf8"));
   const guids = ir.nodes.map((r) => r.guid).filter((g) => t.out.indexOf(g) >= 0);
   const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -314,7 +311,7 @@ async function acceptGroup() {
   const copy = mkRun("fixture-changed", ir2, JSON.parse(readFileSync(join(FIXTURE_RUN, "stats.json"), "utf8")), JSON.parse(readFileSync(join(FIXTURE_RUN, "plan.json"), "utf8")).balance);
   writeFileSync(join(copy, "run.json"), readFileSync(join(FIXTURE_RUN, "run.json")));
   const t2 = acc([copy, "--twice"]);
-  check(t2.code === 3 && /G8 determinism +FAIL/.test(t2.out) && t2.out.indexOf("VERDICT: FAIL (" + (C_PENDING ? "G6, G8" : "G8") + ")") >= 0, "--twice fails G8 alone when ir.json differs from a second read", t2.out.slice(0, 600));
+  check(t2.code === 3 && /G8 determinism +FAIL/.test(t2.out) && t2.out.indexOf("VERDICT: FAIL (G8)") >= 0, "--twice fails G8 alone when ir.json differs from a second read", t2.out.slice(0, 600));
   const rj = JSON.parse(readFileSync(join(FIXTURE_RUN, "run.json"), "utf8"));
   const other = join(TMP, "other.pix"); writeFileSync(other, makeFixture("renumbered").pix);
   writeFileSync(join(copy, "run.json"), JSON.stringify(Object.assign(rj, { pix: other })));
@@ -324,7 +321,7 @@ async function acceptGroup() {
   // Under --variant-sets frames the fixture's run folder passes too, G3 reading "frames".
   const fr = node([join(HERE, "pix-run.mjs"), PIX, "--dry", "--no-pixso", "--variant-sets", "frames", "--data", join(TMP, "data-frames")]);
   const fa = acc([runFolder(fr.out) || "none"]);
-  check(fa.code === (C_PENDING ? 3 : 0) && /G3 families +PASS .*--variant-sets frames/.test(fa.out) && fa.out.indexOf("VERDICT: " + FIXTURE_VERDICT) >= 0, "under --variant-sets frames G3 holds the IR to M1's D7 and passes on the fixture", fa.out.slice(0, 400));
+  check(fa.code === 0 && /G3 families +PASS .*--variant-sets frames/.test(fa.out) && fa.out.indexOf("VERDICT: PASS") >= 0, "under --variant-sets frames G3 holds the IR to M1's D7 and passes on the fixture", fa.out.slice(0, 400));
   // The classes the gates sum are the frozen note classes (docs/M2A.md §5.1).
   const M = newM2aStats();
   check(Object.keys(M.properties.assignments.stale).join() === NOTE_CLASSES.STALE_ASSIGNMENT.join() && Object.keys(M.overrides.pixsoFields.dropped).join() === NOTE_CLASSES.OVERRIDE_FIELD_DROPPED.join(),

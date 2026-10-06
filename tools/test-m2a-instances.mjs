@@ -30,7 +30,7 @@
 //   - stats.m2a.instances, .overrides and .derived: G6's three balances, G1's and G2's, under every
 //     setting value.
 // The checks that need part B's assignments() (nested and ignored assignments, G7's assignment
-// balance) print "pending: B" while tools/pix/ir/properties.mjs is part P0's stub, and run once B is in.
+// balance) printed "pending: B" until B merged; part E made them unconditional (docs/M2A.md §7).
 // DONE WHEN (docs/M2A.md §6 C) this test passes and, on D, K, M and P: derived 35 808 / 35 808,
 // 160 982 / 160 982, 86 941 / 86 941, 342 679 / 342 679 with 36 via rule C; live / stale 6 353 / 726,
 // 42 456 / 950, 52 982 / 949, 107 190 / 6 563 with resolvedNotDerived and inDerivedUnresolved 0; no
@@ -44,7 +44,6 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 let failed = 0;
 const ok = (m) => console.log("ok   " + m);
 const fail = (m) => { failed++; console.log("FAIL " + m); };
-const pending = (m) => console.log("pending: B (" + m + ")");
 const check = (label, fn) => {
   try { const r = fn(); if (r === false) fail(label); else ok(label + (typeof r === "string" ? " (" + r + ")" : "")); }
   catch (e) { fail(label + ": " + (e && e.message ? e.message.split("\n")[0] : e)); }
@@ -65,7 +64,7 @@ const { propIndex } = await imp("pix/ir/propindex.mjs");
 const { makeResolver } = await imp("pix/ir/resolve.mjs");
 const overrides = await imp("pix/ir/overrides.mjs");
 const properties = await imp("pix/ir/properties.mjs");
-const B_IN = properties.STUB === undefined;
+if (properties.STUB !== undefined) { console.log("FAIL tools/pix/ir/properties.mjs is still P0's stub; M2a is merged (docs/M2A.md §7)"); process.exit(1); }
 
 const FX = makeFixture();
 const read = (settings, mutate) => reader.pixToIR(mutate ? makeFixture("valid", { mutate }).pix : FX.pix, { settings });
@@ -404,11 +403,7 @@ check("the census and OVERRIDE_SOURCE_FIELDS list the same fields; every field o
 });
 
 // ---------- 5. what needs part B's assignments() ----------
-if (!B_IN) {
-  pending("Entries' [Trail] assignment to Row's Title against Circle's family: STALE_ASSIGNMENT \"nested: other-family\"");
-  pending("Rule C's ignored assignment: STALE_ASSIGNMENT \"ignored\" and absent from the IR");
-  pending("G7: every assignment of the fixture in exactly one of D6's classes, droppedWithEntry 1 (Entries' [5:499])");
-} else {
+{
   check("B: Entries' [Trail] assignment against Circle's family is STALE_ASSIGNMENT nested: other-family", () => {
     const d = notesOf(BASE.ir, M2A.iEntries, schema.CODE.STALE_ASSIGNMENT).filter((x) => x.path && key(x.path) === M2A.rowTrail).map((x) => x.detail);
     truth(d.length === 1 && d[0].startsWith("nested: other-family"), JSON.stringify(d));
@@ -427,5 +422,5 @@ if (!B_IN) {
 }
 
 console.log("");
-console.log(failed ? failed + " part C check" + (failed === 1 ? "" : "s") + " FAILED" : "all part C checks pass" + (B_IN ? "" : " (the checks that need part B pending)"));
+console.log(failed ? failed + " part C check" + (failed === 1 ? "" : "s") + " FAILED" : "all part C checks pass");
 process.exit(failed ? 1 : 0);
