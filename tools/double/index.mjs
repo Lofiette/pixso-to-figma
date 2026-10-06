@@ -67,7 +67,11 @@
 //     recorded (lineOperand, strokedOperand differs); its box the result's bounds;
 //   - images: createImage with SHA-1, size from the PNG, JPEG, GIF or WebP header, and P8's refusals;
 //     an IMAGE paint whose hash no image has, per P8 unknownHash; frame masks per P19B;
-//   - figma.ui.postMessage recorded and handed to the test.
+//   - figma.ui.postMessage recorded and handed to the test;
+//   - exportAsync as a PNG from the toy rasteriser (raster.mjs: a box per node with its solid fills),
+//     with the node's own opacity applied (Figma's export does, §15.11) and a SECTION drawn with
+//     SECTION_EXPORT_MARGIN of empty space on every side (Figma's is wider than the box, C; the
+//     amount and its shape are not measured, I); absoluteRenderBounds stays the box.
 // Nodes are Proxies. Reading, writing or calling anything outside surface.mjs throws, naming the
 // type and the property, so a gap in the surface is found here and not in Figma.
 import { createHash } from "node:crypto";
@@ -78,6 +82,7 @@ import { SURFACE, LAYOUT_GETTERS } from "./surface.mjs";
 import { layoutTree, applyConstraints, isAutoLayout, inFlow, flowFills } from "./layout.mjs";
 import { textMetrics, DEFAULT_TEXT_RATIO } from "./text.mjs";
 import { sniffImage, p8Case } from "./images.mjs";
+import { rasterize, pngOf } from "./raster.mjs";
 import { behaviour } from "./behaviour.mjs";
 import { parsePath, formatPath, mapPath, pathsBox, networkBox, shiftNetwork, scaleNetwork, networkPathAll, rectPath, ellipsePath, arcPath,
   polygonPath, starPath, booleanResult } from "./geom.mjs";
@@ -140,6 +145,8 @@ const RANGE_FIELD = { fontName: "setRangeFontName", fontSize: "setRangeFontSize"
   paragraphIndent: "setRangeParagraphIndent", paragraphSpacing: "setRangeParagraphSpacing" };
 const SIDES = ["strokeTopWeight", "strokeRightWeight", "strokeBottomWeight", "strokeLeftWeight"];
 const CORNERS = ["topLeftRadius", "topRightRadius", "bottomRightRadius", "bottomLeftRadius"];
+// Empty space around an exported SECTION, node units (the model of §15.11's wider margin, I).
+export const SECTION_EXPORT_MARGIN = 5;
 const CONTAINERS = ["DOCUMENT", "PAGE", "FRAME", "COMPONENT", "SECTION", "BOOLEAN_OPERATION"];
 // Reads that need the tree laid out first (the layout-forcing getters, and what layout moves).
 const GEOMETRY_READS = new Set(LAYOUT_GETTERS.concat(["relativeTransform", "fillGeometry", "strokeGeometry", "vectorNetwork", "vectorPaths",
@@ -304,6 +311,20 @@ export function makeDouble(opts = {}) {
       x0 = Math.min(x0, px); y0 = Math.min(y0, py); x1 = Math.max(x1, px); y1 = Math.max(y1, py);
     }
     return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+  }
+
+  // exportAsync: the node's subtree through the toy rasteriser, as PNG bytes.
+  function exportPNG(st, settings) {
+    const set = settings || {};
+    if (set.format !== undefined && set.format !== "PNG") throw new Error("double: exportAsync renders PNG only");
+    settleAll();
+    const tree = (s) => ({ abs: absOf(s), type: s.type, w: s.w, h: s.h, opacity: s.props.opacity, visible: s.props.visible, clips: !!s.props.clipsContent,
+      fills: Array.isArray(s.props.fills) ? s.props.fills : [], children: (s.children || []).map(tree) });
+    const b = bbox(st), margin = st.type === "SECTION" ? SECTION_EXPORT_MARGIN : 0;
+    const c = set.constraint || { type: "SCALE", value: 1 };
+    const scale = c.type === "WIDTH" ? c.value / Math.max(1e-9, b.width + 2 * margin) : c.type === "HEIGHT" ? c.value / Math.max(1e-9, b.height + 2 * margin) : c.value;
+    if (!(scale > 0)) throw new Error("double: exportAsync needs a positive scale");
+    return new Uint8Array(pngOf(rasterize(tree(st), { scale, ownOpacity: true, margin })));
   }
 
   // ---------- geometry ----------
@@ -657,7 +678,9 @@ export function makeDouble(opts = {}) {
         (st.spd[ns] || (st.spd[ns] = {}))[String(k)] = String(v); logWrite(st, "setSharedPluginData()", [ns, k, v]);
       });
       case "getSharedPluginData": return call((ns, k) => (st.spd[ns] || {})[String(k)] || "");
-      case "exportAsync": return call(() => Promise.resolve(new Uint8Array(16)));
+      case "exportAsync": return call((settings) => {
+        try { return Promise.resolve(exportPNG(st, settings)); } catch (e) { return Promise.reject(e); }
+      });
       case "appendChild": return call((c) => { attach(st, stOf(c)); logWrite(st, "appendChild()", stOf(c).id); });
       case "insertChild": return call((i, c) => { attach(st, stOf(c), i); logWrite(st, "insertChild()", [i, stOf(c).id]); });
       case "findAll": return call((cb) => {

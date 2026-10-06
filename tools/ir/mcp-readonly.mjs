@@ -225,6 +225,28 @@ export const SCRIPTS = Object.freeze({
       "const by = await node.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: sc } });",
       "return { n: by.length, d: b64(by), w: node.width, h: node.height };"].join(NL);
   },
+  // The render audit's picture of one node (tools/ir-audit.mjs, docs/M1.md §16): a PNG at the scale
+  // the audit gives both engines, with the node's size, type and opacity (Pixso's export leaves its
+  // own opacity out, §15.11), its box and, when Pixso has them, the bounds of what it draws.
+  auditRender(guid, opts) {
+    const scale = opts && opts.scale;
+    need(GUID.test(guid), "a guid");
+    need(Number.isFinite(scale) && scale >= 0.01 && scale <= 16, "scale is 0.01 to 16");
+    return ["// px:audit-render (read-only): a PNG of one node at a scale, with where it sits", args({ guid, scale }), B64,
+      "function rect(r) {",
+      "  if (!r || typeof r.x !== 'number') return null;",
+      "  return { x: r.x, y: r.y, width: r.width, height: r.height };",
+      "}",
+      "await pixso.loadAllPagesAsync();",
+      "const node = pixso.getNodeById(ARGS.guid);",
+      "if (!node) return { e: 'no node' };",
+      "let box = null;",
+      "let drawn = null;",
+      "try { box = rect(node.absoluteBoundingBox); } catch (e1) { box = null; }",
+      "try { drawn = rect(node.absoluteRenderBounds); } catch (e2) { drawn = null; }",
+      "const by = await node.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: ARGS.scale } });",
+      "return { w: node.width, h: node.height, type: node.type, opacity: typeof node.opacity === 'number' ? node.opacity : null, box: box, render: drawn, n: by.length, d: b64(by) };"].join(NL);
+  },
 });
 
 // ---------- the channel ----------
