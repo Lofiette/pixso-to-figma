@@ -21,6 +21,10 @@
   file and on the owner's product file (29 896 records), all gating probes are recorded and the creation order is frozen.
   K is 82 of 99 tasks built with every quality gate at 0; its run resumes when Figma's connection is stable. Next: finish
   K, then M2a (components IR, offline).
+- **2026-10-06: the render audit is built and tested offline** on branch `claude/m1-audit` (`docs/M1.md` §16):
+  `node tools/ir-audit.mjs <runDir>` renders every built root in Figma and Pixso, compares them (opacity, section
+  margin, placeholder masks, identity check) and writes the audit `m1-accept --audit` reads. Not yet run live; its
+  thresholds are the M0 tool's and need the first pass on D, read root by root.
 
 - **Task:** Pixso -> Figma migration, 1:1, whole files, no model in the loop.
 - **Status:** five files migrated. Day three went into the *instrument* rather than the algorithm:
