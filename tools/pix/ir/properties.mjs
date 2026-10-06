@@ -384,6 +384,24 @@ function valueOf(type, v, st) {
   return { symbol: valueGuid(v) };
 }
 
+// Whether assignments(cx, symbolGuid, [a]) would keep the raw assignment a (ignored and merged apart):
+// its id defined on the master symbol or its state group, reaching a root the family declares, and,
+// for an INSTANCE_SWAP root, a value the IR can reference. No counter moves. overrides.mjs asks it
+// for the swap assignment that decided a hop (D7 rule 2, which reads the whole definition scope).
+export function keeps(cx, symbolGuid, a) {
+  if (!a || !guidSet(a.defID) || !symbolGuid) return false;
+  state(cx);
+  const P = cx.props, scope = P.scopeOf(symbolGuid), id = guidStr(a.defID);
+  if (!scope || !(P.defsOf(symbolGuid).some((d) => d.id === id) || P.defsOf(scope).some((d) => d.id === id))) return false;
+  const c = P.chain(scope, id, symbolGuid);
+  if (!c.def) return false;
+  const decl = declarations(cx, cx.families ? cx.families.familyOf(symbolGuid) : symbolGuid).byId.get(c.def.id);
+  if (!decl || decl.def !== c.def) return false;
+  if (decl.ir.type !== "INSTANCE_SWAP") return true;
+  const g = valueGuid(a.value);
+  return !!g && !!P.refOf(g);
+}
+
 export function assignments(cx, symbolGuid, raw, opts) {
   const o = opts || {};
   const st = cx.m2a.properties;

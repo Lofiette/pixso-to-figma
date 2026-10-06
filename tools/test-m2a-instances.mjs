@@ -444,6 +444,29 @@ check("a bound field's baseline ignores an assignment the IR drops (other-family
   balances(p.stats, "planted unreached");
 });
 
+// A swap Pixso drew from an assignment the IR drops (review of claude/m2a): Chip default-equal assigns
+// its icon through 5:912, an alias id only Size=S defines. Rule 2 reads the definition scope, and the
+// derived path [5:223, 5:311] (Square's shape) resolves only under that swap; assignments() keeps only
+// ids its master or the set defines (docs/M2A.md §0.2) and drops it other-family. The hop is pinned with
+// a swap override to Square, so the IR shows what Pixso drew and the derived `at` names built layers.
+const plantDroppedSwap = (value) => {
+  const inst = value.pixsoNodes.find((n) => n.guid.sessionID === 5 && n.guid.localID === 501);
+  inst.componentPropAssignment[1] = Object.assign({}, inst.componentPropAssignment[1], { defID: { sessionID: 5, localID: 912 } });
+};
+check("a swap decided by an assignment the IR drops (other-family) is pinned with a swap override", () => {
+  const p = read({}, plantDroppedSwap);
+  truth(validate(p.ir).ok, "invalid");
+  same((instOf(p.ir, M2A.iDefaultEqual).properties || []).map((a) => a.id), [M2A.dShowIcon], "kept assignments:");
+  truth(notesOf(p.ir, M2A.iDefaultEqual, schema.CODE.STALE_ASSIGNMENT).some((x) => x.detail.startsWith("other-family")), "the alias assignment is not dropped other-family");
+  truth(derAt(p.ir, M2A.iDefaultEqual, P(M2A.chipMIcon, M2A.squareShape)), "the derived entry under the swap is not written");
+  const o = ovAt(p.ir, M2A.iDefaultEqual, P(M2A.chipMIcon));
+  truth(o, "no override pins the icon to Square");
+  same([o.swap, o.at], [{ guid: M2A.square }, [recOf(p.ir, M2A.chipMIcon)]]);
+  same([p.stats.m2a.overrides.swaps.pinned, p.stats.m2a.overrides.pinned], [1, 1]);
+  balances(p.stats, "planted dropped swap");
+  same(acceptGates(p).filter((g) => g.status === "FAIL").map((g) => g.id), []);
+});
+
 // ---------- 4. the census (docs/M2A.md §1.3) ----------
 const CENSUS = ["arcData", "autoCornerRadius", "autoLayoutAbsolutePos", "autoLayoutIncludeBorders", "autoLayoutItemReverseDraw",
   "borderBottomWeight", "borderLeftWeight", "borderRightWeight", "borderStrokeWeightsIndependent", "borderTopWeight", "componentPropAssignment",

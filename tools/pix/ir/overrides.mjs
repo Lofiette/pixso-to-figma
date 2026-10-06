@@ -90,7 +90,7 @@ import { frameLayoutProps, childLayoutProps, isAutoLayout } from "./layout.mjs";
 import { textProps } from "./text.mjs";
 import { drawnStyles } from "./styles.mjs";
 import { masterRef } from "./components.mjs";
-import { assignments } from "./properties.mjs";
+import { assignments, keeps } from "./properties.mjs";
 import { derivedEntries } from "./derived.mjs";
 
 const T = (to, by) => Object.freeze({ fate: "translate", to: Object.freeze(to), by });
@@ -453,6 +453,25 @@ function boundOf(cx, X, guids, res) {
   return out;
 }
 
+// D7 rule 2 as M2b will see it: the symbol the first pool's last assignment that assignments() keeps
+// gives the nested instance node (element k of guids, in the symbol cur), or null when none does.
+function keptSwapGives(cx, X, guids, k, res, node, cur) {
+  const P = cx.props, scope = cur ? P.scopeOf(cur) : null;
+  if (!scope) return null;
+  const pools = cx.resolver.poolsFor(guids, k, res.holders.filter((h) => h.start <= k));
+  for (const r of node.componentPropRef || []) {
+    if (!r || !guidSet(r.defID) || X.fieldOf(r.componentPropNodeField) !== "OVERRIDDEN_SYMBOL_ID") continue;
+    const root = P.rootOf(scope, guidStr(r.defID), cur);
+    if (!root) continue;
+    for (const pool of pools) {
+      let hit = null;
+      for (const a of pool.list) if (a && guidSet(a.defID) && P.rootOf(scope, guidStr(a.defID), cur) === root && keeps(cx, cur, a)) hit = a;
+      if (hit) return guidStr(hit.value.guidValue);
+    }
+  }
+  return null;
+}
+
 // D17: entries of one path, merged by --override-merge.
 function mergeEntries(list, rule) {
   const lvl = (e) => (isFin(e.overrideLevel) ? e.overrideLevel : 0);
@@ -605,6 +624,27 @@ export function instanceData(cx, n, i, master, indexOf) {
     const isOwn = !x.path || x.path.length === 0 || (x.path.length === 1 && x.path[0] === S0);
     if (isOwn) ignoredOwn.add(x.defId);
     else { const pk = x.path.join("/"); if (!ignoredAt.has(pk)) ignoredAt.set(pk, new Set()); ignoredAt.get(pk).add(x.defId); }
+  }
+
+  // ---- 3b. swaps decided by an assignment the IR drops (D7 rule 2, docs/M2A.md §0.2) ----
+  // Rule 2 matches an assignment by its root anywhere in the definition scope, and the derived paths
+  // below such a hop resolve only under the swap, so Pixso drew it; assignments() keeps only ids defined
+  // on the owning symbol or its state group (§0.2's "reached", which REWRITE's counts follow) and a
+  // value the IR can reference, and drops the rest with a note. When no kept assignment gives the same
+  // symbol, M2b would build another one there, so the hop is pinned (6b) to the symbol Pixso drew.
+  for (const d of n.derivedSymbolData || []) {
+    const gg = R.pathGuids(d);
+    if (!gg.length) continue;
+    const res = R.resolve(n, gg);
+    if (!res.ok || res.root) continue;
+    res.elements.forEach((x, k) => {
+      if (x.via !== "property" || !x.src) return;
+      const pk = gg.slice(0, k + 1).join("/");
+      if (pins.has(pk)) return;
+      const cur = k === 0 ? S0 : res.elements[k - 1].symbol;
+      if (keptSwapGives(cx, X, gg, k, res, x.n, cur) === x.symbol) return;
+      pins.set(pk, { hop: gg.slice(0, k + 1), symbol: x.symbol });
+    });
   }
 
   // ---- 4. translate a merged entry's Pixso fields into Figma fields ----
@@ -852,22 +892,25 @@ export function instanceData(cx, n, i, master, indexOf) {
     if (o.fields || o.swap || o.properties) { L.written++; overrides.push(o); }
     else L.empty++;
   }
-  // ---- 6b. rule C's hops whose ignored assignment another instance holds (D7 rule C) ----
-  // In P's shape the assignment sits on an entry of an instance inside a master: Pixso applied it there,
-  // so it stays in the IR on that instance, and every instance of the master would show the swap. Here
-  // Pixso drew the declared symbol, so a swap override to it pins the hop (overrides.swaps.pinned), merged
-  // into the live path's override when there is one; overrides.pinned counts the overrides written only
-  // for a pin. A hop that cannot be pinned (no master reference, or a path element with no record) is
-  // said in the SWAP_ASSIGNMENT_IGNORED note.
+  // ---- 6b. pinned hops: swaps Pixso drew (or did not) that the kept data would not give ----
+  // Rule C (D7): in P's shape the ignored assignment sits on an entry of an instance inside a master,
+  // where Pixso applied it, so it stays in the IR on that instance and every instance of the master
+  // would show the swap; here Pixso drew the declared symbol. Rule 2 (3b): a swap Pixso drew from an
+  // assignment the IR drops. Either way a swap override to the symbol Pixso drew pins the hop
+  // (overrides.swaps.pinned), merged into the live path's override when there is one; overrides.pinned
+  // counts the overrides written only for a pin. A rule C hop that cannot be pinned (no master
+  // reference, or a path element with no record) is said in the SWAP_ASSIGNMENT_IGNORED note; a rule 2
+  // one is said by the dropped assignment's own note.
   let pinned = 0, unpinned = 0;
   for (const [pk, x] of pins) {
     const res = R.resolve(n, x.hop);
     const T = res.ok && !res.root ? res.elements[res.elements.length - 1] : null;
     const recorded = !!T && res.elements.every((e) => e.i !== undefined);
-    const ref = T && cx.typeName(T.n) === "INSTANCE" && cx.props ? cx.props.refOf(R.declared(T.n)) : null;
-    if (!ref || (local && !recorded)) { unpinned++; continue; }
-    let o = overrides.find((q) => q.path.length && q.path.join("/") === pk);
-    if (o && o.swap) { unpinned++; continue; }
+    const sym = x.symbol !== undefined ? x.symbol : T ? R.declared(T.n) : null;
+    const ref = T && sym && cx.typeName(T.n) === "INSTANCE" && cx.props ? cx.props.refOf(sym) : null;
+    const o0 = ref && !(local && !recorded) ? overrides.find((q) => q.path.length && q.path.join("/") === pk) : null;
+    if (!ref || (local && !recorded) || (o0 && o0.swap)) { if (x.symbol === undefined) unpinned++; continue; }
+    let o = o0;
     if (!o) {
       o = { path: x.hop };
       if (local) o.at = res.elements.map((e) => e.i);
@@ -876,7 +919,7 @@ export function instanceData(cx, n, i, master, indexOf) {
     }
     o.swap = ref;
     SO.swaps.pinned++;
-    pinned++;
+    if (x.symbol === undefined) pinned++;
   }
 
   // Hops whose symbol a swap property decided, once per nested instance path (derived and live paths).
