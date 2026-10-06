@@ -5,7 +5,9 @@
 //   import { propertiesOf, bindingsOf, assignments } from "./properties.mjs";
 //
 // THE FROZEN CONTRACT (docs/M2A.md §5.3). Guids are "session:local" strings. The definition index is
-// cx.props (propindex.mjs), the family index cx.families (families.mjs).
+// cx.props (propindex.mjs), the family index cx.families (families.mjs). An id is resolved with the
+// symbol it is read from (cx.props.chain(scope, id, from): the layer's enclosing SYMBOL, or the
+// instance's master), because one alias id may sit on several members with different parents.
 //   propertiesOf(cx, familyGuid) -> [definition]
 //       The family's declared roots as IR property definitions ({ id, name, type, default,
 //       preferredValues? }, docs/IR.md §8), in sortPosition order, then by id. familyGuid is a set's

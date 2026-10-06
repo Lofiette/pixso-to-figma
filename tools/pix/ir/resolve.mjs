@@ -20,6 +20,8 @@
 //     B). fallback: rule C made the path resolve. ignored: [{ instance, defId }], the swap assignments
 //     rule C ignored (STALE_ASSIGNMENT "ignored"). On failure, at is the index of the element that did
 //     not resolve and why a short reason.
+//   (D7 rule 2 matches an assignment by raw id or by alias root: cx.props.rootOf(scope, id, from), from
+//   the symbol the node sits in, so an alias id repeated on members with other parents is read right.)
 //   R.effectiveSymbol(chain, node) -> symbol guid: the effective symbol of the nested INSTANCE `node` at
 //     the end of `chain` (the instances walked so far, outermost first), by D7's order.
 //   R.inDerived(instanceNode, guids) -> bool: whether the path is in the instance's derivedSymbolData.

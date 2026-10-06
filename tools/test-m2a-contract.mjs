@@ -209,8 +209,9 @@ check("scopeOf: a member's scope is its state group; a standalone symbol and a g
   same([PI.scopeOf(M2A.chipS), PI.scopeOf(M2A.chip), PI.scopeOf(M2A.row), PI.scopeOf(M2A.rejAxisCountA), PI.scopeOf(M2A.nothing)],
     [M2A.chip, M2A.chip, M2A.row, M2A.rejAxisCount, null]);
 });
-// [scope owner, defId, why, root id, hops], from the fixture's comments.
+// [scope owner, defId, why, root id, hops, from?], from the fixture's comments.
 const CASES = [
+  [M2A.chip, M2A.dChipLLabel, "alias", M2A.dLabel, 1, M2A.chipL], [M2A.chip, M2A.dChipLLabel, "alias", M2A.dShowIcon, 1, M2A.chipS],
   [M2A.chip, M2A.dChipSLabel, "alias", M2A.dLabel, 1], [M2A.chip, M2A.dLabel, "root", M2A.dLabel, 0],
   [M2A.chip, M2A.dChipMLabel, "alias", M2A.dLabel, 2], [M2A.chip, M2A.dBadge, "root", M2A.dBadge, 0],
   [M2A.chip, M2A.dSetAliasNowhere, "no-root", null, 0], [M2A.chip, M2A.dSetAliasOtherSet, "no-root", null, 0],
@@ -219,10 +220,10 @@ const CASES = [
   [M2A.row, M2A.dRowLeadAlias, "alias", M2A.dRowLead, 1], [M2A.rejAxisCount, M2A.dRejFlag, "root", M2A.dRejFlag, 0],
   [M2A.libTag, M2A.dTagText, "root", M2A.dTagText, 0],
 ];
-check("why and rootOf: roots, one- and two-hop aliases, a same-id alias, chains that leave the scope or end nowhere, other families", () => {
-  for (const [scope, id, why, rootId, hops] of CASES) {
-    const c = PI.chain(scope, id);
-    same([PI.why(scope, id), PI.rootOf(scope, id) ? PI.rootOf(scope, id).id : null, c.hops], [why, rootId, hops], scope + " " + id + ":");
+check("why and rootOf: roots, one- and two-hop aliases, a same-id alias, an alias id two members give different parents (read from its member), chains that leave the scope or end nowhere, other families", () => {
+  for (const [scope, id, why, rootId, hops, from] of CASES) {
+    const c = PI.chain(scope, id, from);
+    same([PI.why(scope, id, from), PI.rootOf(scope, id, from) ? PI.rootOf(scope, id, from).id : null, c.hops], [why, rootId, hops], scope + " " + id + " from " + from + ":");
   }
   // A member's same-id alias names the set's root, never itself (D3).
   const d = PI.rootOf(M2A.chip, M2A.dLabel);
@@ -230,7 +231,8 @@ check("why and rootOf: roots, one- and two-hop aliases, a same-id alias, chains 
   return CASES.length + " cases";
 });
 check("defsOf: definitions in stored order, types by name, 0:0 parents as null", () => {
-  same(PI.defsOf(M2A.chipS).map((d) => [d.id, d.type, d.name, d.parent]), [[M2A.dChipSLabel, "BOOL", "", M2A.dLabel], [M2A.dChipSShow, "BOOL", "", M2A.dShowIcon], [M2A.dChipSIcon, "BOOL", "", M2A.dIcon]]);
+  same(PI.defsOf(M2A.chipS).map((d) => [d.id, d.type, d.name, d.parent]), [[M2A.dChipSLabel, "BOOL", "", M2A.dLabel], [M2A.dChipSShow, "BOOL", "", M2A.dShowIcon], [M2A.dChipSIcon, "BOOL", "", M2A.dIcon],
+    [M2A.dChipLLabel, "BOOL", "", M2A.dShowIcon]]);
   same(PI.defsOf(M2A.circle), []);
   return PI.owners.length + " owners";
 });

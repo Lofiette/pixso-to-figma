@@ -781,7 +781,7 @@ export const M2A = {
   dSetAlias: "5:905", dSetAliasOtherSet: "5:906", dSetAliasNowhere: "5:907", dBadge: "5:908",
   dChipSLabel: "5:910", dChipSShow: "5:911", dChipSIcon: "5:912",
   dChipMLabel: "5:914", dChipMShow: "5:915", dChipMIcon: "5:916",
-  dChipLLabel: "5:917", dChipLShow: "5:918", dChipLIcon: "5:919",
+  dChipLLabel: "5:913", dChipLShow: "5:918", dChipLIcon: "5:919",
   dRowTitle: "5:920", dRowLead: "5:921", dRowLeadAlias: "5:922", dCardBadge: "5:930",
   dTagText: "5:950", dTagDot: "5:951", dRejFlag: "5:960", dRejTitle: "5:961",
   dNoDefinition: "5:997", dNoRootTarget: "5:996", nothing: "5:998", nothingInitial: "5:999", fillStyleNowhere: "5:995",
@@ -910,12 +910,17 @@ function m2aNodes({ E, T, solid, geom, B, INTERNAL, DIR, STYLE }) {
   //   5:205 INHERIT_FILL_STYLE_ID: PROPERTY_REF_DROPPED "fill-style";
   //   5:211 characters 5:900 (a same-id alias); 5:214 VISIBLE to Lib Tag's 5:951: "other-family";
   //   5:221 characters 5:900 through two hops (5:914 -> 5:905 -> 5:900); 5:224 VISIBLE via 5:907: "no-root";
+  //   5:231 characters 5:900 through 5:913, an alias id that 5:101 also defines with another parent
+  //   (Show icon): read from its own member 5:104 (propindex's `from`), it is Label, never Show icon
+  //   (which would be a type-mismatch); in M and P one alias id sits on members with different
+  //   parents (docs/M2A.md §13);
   //   5:234 visible 5:908 (the lifted member-owned root).
   // Bound layers whose own value differs from the root's default (properties.boundLayerDiffers):
   //   visible 1 (5:202 is hidden, Show icon defaults to true); text 1 (5:231 says "Large").
   const member = (id, position, name, x, defs, layers) => [node(id, M2A.chip, position, "SYMBOL", name, x, 0, 96, 32, { componentPropDef: defs }), ...layers];
   const icon = (guid, parent, defId) => inst(guid, parent, "c", "Icon", M2A.circle, 80, 11, 10, 10, { componentPropRef: [ref(defId, "OVERRIDDEN_SYMBOL_ID")], derivedSymbolData: [D([M2A.circleShape])] });
-  add(...member(M2A.chipS, "a", "Size=S, State=Default", 0, [alias(M2A.dChipSLabel, M2A.dLabel), alias(M2A.dChipSShow, M2A.dShowIcon), alias(M2A.dChipSIcon, M2A.dIcon)], [
+  add(...member(M2A.chipS, "a", "Size=S, State=Default", 0, [alias(M2A.dChipSLabel, M2A.dLabel), alias(M2A.dChipSShow, M2A.dShowIcon), alias(M2A.dChipSIcon, M2A.dIcon),
+    alias(M2A.dChipLLabel, M2A.dShowIcon)], [
     text(M2A.chipSLabel, M2A.chipS, "a", "Label", "Chip", 4, 8, { componentPropRef: [ref(M2A.dChipSLabel, "TEXT_DATA")] }),
     rect(M2A.chipSDot, M2A.chipS, "b", "Dot", 60, 12, 8, 8, { visible: false, componentPropRef: [ref(M2A.dChipSShow, "VISIBLE")] }),
     icon(M2A.chipSIcon, M2A.chipS, M2A.dChipSIcon),

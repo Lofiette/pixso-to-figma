@@ -16,10 +16,12 @@
 //                               5 INSTANCE owners in the Сова UI kit, none in D, K, M or P). A guid that
 //                               names no stored node gives null.
 //   P.defsOf(ownerGuid)      -> [def]: the definitions stored on that node, in stored order ([] if none).
-//   P.rootOf(scope, defId)   -> def | null: the root that defId reaches inside the scope by following
-//                               parentPropDefId (0:0 is "no parent") any number of hops; null when it
-//                               reaches none (see why).
-//   P.why(scope, defId)      -> "root"         defId's definition in the scope is itself a root
+//   P.rootOf(scope, defId, from?) -> def | null: the root that defId reaches inside the scope by
+//                               following parentPropDefId (0:0 is "no parent") any number of hops; null
+//                               when it reaches none (see why). `from` (optional, added by P0, see below)
+//                               is the symbol the id is read from: the SYMBOL enclosing a bound layer,
+//                               or the master of an instance whose assignment it is.
+//   P.why(scope, defId, from?) -> "root"       defId's definition in the scope is itself a root
 //                               "alias"        it reaches a root in one hop or more
 //                               "no-definition" defId is defined nowhere in the file
 //                               "other-family" defId is defined, but only outside this scope
@@ -30,7 +32,7 @@
 //                               when it is a COMPONENT record of this IR, else { library } when it is a
 //                               library copy, else null (M1's masterRef, tools/pix/ir/components.mjs)
 // Additions P0 made beyond the frozen five, for part B's counts:
-//   P.chain(scope, defId)    -> { def, why, hops }: rootOf and why in one call, with the number of hops
+//   P.chain(scope, defId, from?) -> { def, why, hops }: rootOf and why in one call, with the number of hops
 //   P.owners                 -> [owner guid]: every stored node that owns definitions, in stored order
 //
 // A def is { id, owner, scope, name, type, parent, sortPosition, initialValue, preferredValues, raw }:
@@ -40,11 +42,15 @@
 // initialValue carries all three slots, so a value is read by the root's type); raw the stored object.
 //
 // Which definition an id names inside a scope. Raw ids repeat across owners (REWRITE.md §3), and in
-// one scope an id may sit on the scope's owner and on its members: the fixture's model, and older
-// Pixso, gives every member a "same-id alias" (the set's id, unnamed, BOOL, no parent). The scope
-// owner's definition is taken first; else one with no parent; else the first in stored order. So a
-// same-id alias names the set's root ("root"), and a member-owned root, whose id collides with nothing
-// (docs/M2A.md §1.2), is found on its member.
+// one scope an id may sit on the scope's owner and on several members: the fixture's model, and older
+// Pixso, gives every member a "same-id alias" (the set's id, unnamed, BOOL, no parent), and in M and P
+// one alias id sits on members with different parents, or as a root on one member and an alias on
+// another (counts in docs/M2A.md §13, P0's findings). So the definition is taken, in this order: the
+// one on `from` (the symbol the id is read from); the scope owner's; one with no parent; the first in
+// stored order. A parent is looked up the same way, from the owner of the definition that names it.
+// So a same-id alias names the set's root ("root"), a member-owned root, whose id collides with
+// nothing (docs/M2A.md §1.2), is found on its member, and a repeated alias id follows its own member's
+// parent. Without `from`, a repeated alias id takes the first member's.
 import { guidStr, guidSet } from "./util.mjs";
 import { libraryOf } from "./components.mjs";
 
@@ -99,26 +105,26 @@ export function propIndex(cx) {
     defsByOwner.set(owner, defs);
   }
 
-  // The definition an id names inside a scope (the comment at the top says which, and why).
-  const pick = (scope, id) => {
+  // The definition an id names inside a scope, read from `from` (the comment at the top says which, and why).
+  const pick = (scope, id, from) => {
     const m = byScope.get(scope);
     const list = m ? m.get(id) : null;
     if (!list || !list.length) return null;
-    return list.find((d) => d.owner === scope) || list.find((d) => d.parent === null) || list[0];
+    return (from && list.find((d) => d.owner === from)) || list.find((d) => d.owner === scope) || list.find((d) => d.parent === null) || list[0];
   };
 
   const memo = new Map();
-  const chain = (scope, id) => {
-    const key = scope + "|" + id;
+  const chain = (scope, id, from) => {
+    const key = scope + "|" + id + "|" + (from || "");
     if (memo.has(key)) return memo.get(key);
     let out;
-    let d = scope ? pick(scope, id) : null;
+    let d = scope ? pick(scope, id, from) : null;
     if (!d) out = { def: null, why: scopesOfId.has(id) ? "other-family" : "no-definition", hops: 0 };
     else {
       const seen = new Set([d.id]);
       let hops = 0;
       while (d && d.parent !== null) {
-        const p = pick(scope, d.parent);
+        const p = pick(scope, d.parent, d.owner);
         if (!p || seen.has(p.id) || hops >= MAX_HOPS) { d = null; break; }
         seen.add(p.id);
         d = p;
@@ -139,8 +145,8 @@ export function propIndex(cx) {
     owners,
     scopeOf(guid) { return scopeOfNode(byGuid.get(guid)); },
     defsOf(owner) { return defsByOwner.get(owner) || []; },
-    rootOf(scope, id) { return chain(scope, id).def; },
-    why(scope, id) { return chain(scope, id).why; },
+    rootOf(scope, id, from) { return chain(scope, id, from).def; },
+    why(scope, id, from) { return chain(scope, id, from).why; },
     chain,
     symbolKnown,
     refOf(guid) {
