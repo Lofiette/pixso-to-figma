@@ -46,6 +46,7 @@
 //     lays it out (layout.mjs: auto layout, hug and fill, padding floor, min and max, wrap, hidden and
 //     absolute children out of the flow, constraints on resize); a flow child's rotation is dropped
 //     when written (builder4.js:381-389, measured);
+//   - layoutPositioning ABSOLUTE refused under a parent with no flow, as Figma refuses it (U, 2026-10-06);
 //   - strokeWeight resetting the four side weights (figma.mixed while they differ), cornerRadius
 //     likewise for the corners;
 //   - text (text.mjs): a missing-font throw on any write that lays text out, every font of the text
@@ -633,6 +634,13 @@ export function makeDouble(opts = {}) {
       case "backgrounds": P.backgrounds = clone(value); break;
       case "fills": P.fills = clone(checkPaint(value, st.type + ".fills")); break;
       case "layoutSizingHorizontal": case "layoutSizingVertical": writeSizing(st, prop, value); break;
+      case "layoutPositioning":
+        // Figma takes ABSOLUTE only on a child of a frame that has a flow at that moment, and throws
+        // otherwise (the first live build of U, 2026-10-06: four booleans made before their parents'
+        // flows were written, "in set_layoutPositioning: Can only set layoutPositioning = ABSOLUTE if
+        // the parent node has layoutMode !== NONE"). AUTO is taken anywhere.
+        if (value === "ABSOLUTE" && !(st.parent && isAutoLayout(st.parent))) throw new Error("double: in set_layoutPositioning: Can only set layoutPositioning = ABSOLUTE if the parent node has layoutMode !== NONE");
+        P.layoutPositioning = value; break;
       case "characters": {
         // New characters take the first character's style (the Plugin API's rule for a styled text,
         // assumed: A): a range that covered index 0 covers the whole new text, the rest go. A field

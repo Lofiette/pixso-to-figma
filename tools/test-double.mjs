@@ -245,12 +245,29 @@ function rect(f, parent, w, h, opts) {
   check(g[2].height === 40 && G.height === 50, "in a hugging counter axis a STRETCH child keeps its size (builder4: Figma pins it)", G.height + " " + g[2].height);
   check(G.layoutSizingVertical === "HUG" && g[1].layoutSizingHorizontal === "FILL" && g[0].layoutSizingHorizontal === "FIXED", "layoutSizing* read back from the modes");
 
-  // The padding floor (builder4.js:302-306, measured): never smaller than the padding on the flow axis.
+  // The padding floor (builder4.js:302-306, measured): never smaller than the padding on the flow axis,
+  // nor on the counter axis (the first live build of U, 2026-10-06: a vertical flow 24 px wide with
+  // 35 + 35 px of side padding was built 70 px wide).
   const P = frame(f, { layoutMode: "HORIZONTAL", primaryAxisSizingMode: "FIXED", counterAxisSizingMode: "FIXED", paddingLeft: 4, paddingRight: 4, paddingTop: 4, paddingBottom: 4 });
   P.resize(4, 4);
   const floor = [P.width, P.height];
   P.layoutMode = "NONE"; P.resize(4, 4);
-  check(same(floor, [8, 4]) && P.width === 4 && P.paddingLeft === 4, "the padding floor on the flow axis, gone with layoutMode NONE while the padding stays", JSON.stringify(floor));
+  check(same(floor, [8, 8]) && P.width === 4 && P.height === 4 && P.paddingLeft === 4, "the padding floor on both axes, gone with layoutMode NONE while the padding stays", JSON.stringify(floor));
+  const PV = frame(f, { layoutMode: "VERTICAL", primaryAxisSizingMode: "FIXED", counterAxisSizingMode: "FIXED", paddingLeft: 35, paddingRight: 35 });
+  PV.resize(24, 24);
+  check(PV.width === 70 && PV.height === 24, "the counter-axis floor: a vertical flow 24 px wide with 35 + 35 px of side padding is 70 px wide (U, live)", JSON.stringify([PV.width, PV.height]));
+
+  // layoutPositioning ABSOLUTE is refused under a parent with no flow (U, live: "Can only set
+  // layoutPositioning = ABSOLUTE if the parent node has layoutMode !== NONE"); AUTO is taken anywhere,
+  // and ABSOLUTE once the parent has its flow.
+  const NF = frame(f, {}), nf = rect(f, NF, 10, 10);
+  let refused = null;
+  try { nf.layoutPositioning = "ABSOLUTE"; } catch (e) { refused = e.message; }
+  nf.layoutPositioning = "AUTO";
+  NF.layoutMode = "VERTICAL";
+  nf.layoutPositioning = "ABSOLUTE";
+  check(/Can only set layoutPositioning = ABSOLUTE if the parent node has layoutMode !== NONE/.test(String(refused)) && nf.layoutPositioning === "ABSOLUTE",
+    "layoutPositioning ABSOLUTE is refused under a parent with no flow and taken once the flow exists", String(refused));
 
   const S = frame(f, { layoutMode: "HORIZONTAL", primaryAxisSizingMode: "AUTO", counterAxisSizingMode: "AUTO", strokes: [BLACK], strokeWeight: 3, strokeAlign: "INSIDE" });
   const s = rect(f, S, 10, 10);

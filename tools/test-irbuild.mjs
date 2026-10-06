@@ -1015,6 +1015,72 @@ check(DOUBLE_FEATURES.layout === true && DOUBLE_FEATURES.text === true, "the dou
   }
 }
 
+// ============================================================================================
+// 14. the first live build of U (2026-10-06): each case built, verified and judged on the double
+// ============================================================================================
+{
+  const judged = async (nodes, settings) => {
+    const task = mkTask({ nodes, settings });
+    valid("U case", task);
+    const E = env();
+    const { R, ctx } = await build(E, task);
+    const vt = Object.assign({}, task, { op: "verify" });
+    const V = await E.IR.ops.verify(E.IR.makeCtx(E.figma, vt, { id: "v" }), vt);
+    const values = []; for (const k of Object.keys(task.values)) values[Number(k)] = task.values[k];
+    const ir = { nodes: task.nodes.map((t) => ({ parent: t.parent, guid: t.guid, type: t.type, name: t.name, props: t.props })), values, notes: [] };
+    return { E, R, ctx, V, J: judgeTask({ ir, task, build: R, verify: JSON.parse(JSON.stringify(V)) }) };
+  };
+  {
+    // U: an ABSOLUTE boolean in a flow. Figma takes ABSOLUTE only under a parent whose flow exists at
+    // that moment; under layoutOrder deepestFirst the flow is written after the booleans phase, so the
+    // boolean stays AUTO there and the place passes take it out of the flow. Live, the write threw:
+    // the boolean was left beside its emptied holder (one frame too many), in the flow at the padding.
+    const nodes = [frame(0, -1, [T6(0, 0), 263, 241], { layoutMode: "VERTICAL", paddingLeft: 29, paddingRight: 29, paddingTop: 29, paddingBottom: 29, itemSpacing: 10, clipsContent: false }),
+      boolean(1, 0, [T6(0, 0), 40, 30], "UNION", { layoutPositioning: "ABSOLUTE", fills: [SOLID(0, 0, 1)] }),
+      rect(2, 1, [T6(0, 0), 20, 30], { fills: [SOLID(0, 0, 1)] }),
+      rect(3, 1, [T6(20, 0), 20, 30], { fills: [SOLID(0, 0, 1)] }),
+      rect(4, 0, [T6(29, 29), 50, 20], { fills: [SOLID(1, 0, 0)] })];
+    for (const layoutOrder of ["deepestFirst", "creation"]) {
+      const { E, R, ctx, V, J } = await judged(nodes, { layoutOrder });
+      const b = nodeOf(E, ctx, 1), f = nodeOf(E, ctx, 0);
+      check(R.failures.length === 0 && V.count === nodes.length && J.count.ok && f.children.length === 2 && b.type === "BOOLEAN_OPERATION" && b.parent.id === f.id &&
+        b.layoutPositioning === "ABSOLUTE" && J.geometry.visibleOver05 === 0 && J.geometry.sizeVisibleOver05 === 0 && R.counters.booleansNative === 1 &&
+        (layoutOrder === "deepestFirst" ? R.detail.booleanAbsoluteLater === 1 : !R.detail.booleanAbsoluteLater),
+        "booleans: an ABSOLUTE boolean in a flow (" + layoutOrder + ") takes its holder's place, leaves the flow at its IR place, no failure and no frame too many",
+        JSON.stringify([R.failures, V.count, f.children.length, b.layoutPositioning, J.geometry.worst.slice(0, 3), R.detail.booleanAbsoluteLater]));
+    }
+  }
+  {
+    // U: a vertical flow 24 px wide with 35 + 35 px of side padding. Figma will not make a flow frame
+    // narrower than its padding on the counter axis either (live: built 70 px wide); it gives up the
+    // flow, keeps its size and padding values, and its child is placed by matrix where Pixso put it
+    // (centred in a negative inner width: x 0).
+    const nodes = [frame(0, -1, [T6(0, 0), 200, 100]),
+      component(1, 0, [T6(20, 20), 24, 24], { layoutMode: "VERTICAL", primaryAxisAlignItems: "CENTER", counterAxisAlignItems: "CENTER", paddingLeft: 35, paddingRight: 35, clipsContent: false }),
+      rect(2, 1, [T6(0, 0), 24, 24])];
+    for (const layoutOrder of ["deepestFirst", "creation"]) {
+      const { E, R, ctx, J } = await judged(nodes, { layoutOrder });
+      const n = nodeOf(E, ctx, 1), r = nodeOf(E, ctx, 2);
+      check(J.geometry.sizeVisibleOver05 === 0 && J.geometry.visibleOver05 === 0 && near(n.width, 24, 0.01) && n.layoutMode === "NONE" && n.paddingLeft === 35 &&
+        R.counters.layoutDroppedForSize === 1 && R.detail.layoutDroppedForCounterPadding === 1 && near(r.relativeTransform[0][2], 0, 1e-9),
+        "repair: a flow frame under its padding on the counter axis (" + layoutOrder + ") keeps its size and padding values, gives up the flow, and its child keeps its place",
+        JSON.stringify([n.width, n.layoutMode, r.relativeTransform, R.counters.layoutDroppedForSize, R.detail, J.geometry.worst]));
+    }
+  }
+  {
+    // U: a vertex's own radius of 0 under a node radius (the reader carries it, docs/M1.md §15.13) is
+    // the vertex's own: it is written as 0, never given the node's.
+    const net = { vertices: [{ x: 0, y: 0, cornerRadius: 0 }, { x: 10, y: 0, cornerRadius: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
+      segments: NET_SQUARE.segments, regions: NET_SQUARE.regions };
+    const nodes = [frame(0, -1, [T6(0, 0), 100, 100]), vector(1, 0, [T6(10, 10), 10, 10], { vectorNetwork: net, cornerRadius: 3, fills: [SOLID(0, 0, 0)] })];
+    const { E, R, ctx } = await judged(nodes);
+    const sent = (E.D.writes.find((w) => w.id === nodeOf(E, ctx, 1).id && w.prop === "setVectorNetworkAsync()") || {}).value;
+    const radii = (sent || { vertices: [] }).vertices.map((v) => v.cornerRadius);
+    check(same(radii, [0, 0, 3, 3]) && R.detail.vertexRadiusFromNode === 1, "vectors: a vertex's own radius of 0 stays 0 under the node's radius; the others take the node's",
+      JSON.stringify([radii, R.detail.vertexRadiusFromNode]));
+  }
+}
+
 console.log("");
 if (failed) { console.log(failed + " IR builder check" + (failed === 1 ? "" : "s") + " failed"); process.exit(1); }
 console.log("all IR builder checks pass");
