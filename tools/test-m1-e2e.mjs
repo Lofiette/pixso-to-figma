@@ -31,7 +31,7 @@ import { BUILD_PHASES, maxTaskChars, taskChars } from "./ir/task.mjs";
 import { validate, validateTask } from "./ir/validate.mjs";
 import { cleanTaskFor, planM1 } from "./ir/plan.mjs";
 import { resolveImages } from "./ir/images.mjs";
-import { newStates, probeStatus, runTasks, saveStates } from "./ir/runstate.mjs";
+import { newStates, probeStatus, resumeStates, runTasks, saveStates } from "./ir/runstate.mjs";
 import { BUILT_NOT_AUDITED } from "./ir/verdict.mjs";
 import { judgeRun } from "./ir/judge.mjs";
 import { makeDouble, loadVerdicts } from "./double/index.mjs";
@@ -61,51 +61,65 @@ const VERDICTS = loadVerdicts();
 const noteOf = (i, code) => IR.notes.filter((n) => n.node === i && n.code === code);
 const notesOn = (i) => IR.notes.filter((n) => n.node === i).map((n) => n.code);
 
-// One run, as tools/pix-run.mjs runs it, with the plugin played in the double. opts.plant(taskNo, env)
-// runs after a build task and may change Figma; opts.refuse(task) makes the plugin throw on a task.
-async function runOnce(label, opts) {
-  const o = opts || {};
-  const IR = o.ir || READ.ir;
-  const { bytes, table } = await resolveImages(IR, PIX, { links: ["archive"], verdicts: VERDICTS });
-  const plan = planM1(IR, STATS, Object.assign({ m1Scope: "default", images: table, runId: RUN }, o.maxChars ? { maxChars: o.maxChars } : {}));
+// One Figma file: a double with the plugin's IR layer loaded on it, as one plugin window runs it.
+function makeFile() {
   const D = makeDouble({ verdicts: VERDICTS });
   const host = defaultHost();
   host.phase = D.setPhase;
   const figImages = {}, figErrors = {};
   host.images = () => figImages;
   host.imageErrors = () => figErrors;
-  const B = loadPluginBundle({ figma: D.figma, host });
-  const env = { D, B, ctxs: new Map(), plan };
+  return { D, B: loadPluginBundle({ figma: D.figma, host }), figImages, figErrors };
+}
+
+// One run, as tools/pix-run.mjs runs it, with the plugin played in the double. opts.plant(taskNo, env)
+// runs after a build task and may change Figma; opts.refuse(task) makes the plugin throw on a task.
+// A run attempt of its own (§15.12): opts.file is the Figma file of an earlier attempt (makeFile, or
+// that run's .file), opts.runId the attempt's runId (RUN by default), opts.prev the states.json the
+// earlier attempt left (resumed as pix-run resumes it); opts.elsewhere(task) sends a task to a second
+// file (a second plugin window); opts.stall(task) makes the plugin stall on a task (PLUGIN_STALLED).
+async function runOnce(label, opts) {
+  const o = opts || {};
+  const IR = o.ir || READ.ir;
+  const { bytes, table } = await resolveImages(IR, PIX, { links: ["archive"], verdicts: VERDICTS });
+  const plan = planM1(IR, STATS, Object.assign({ m1Scope: "default", images: table, runId: o.runId || RUN }, o.maxChars ? { maxChars: o.maxChars } : {}));
+  const file = o.file || makeFile(), other = o.elsewhere ? makeFile() : null;
+  const { D, B } = file;
+  const env = { D, B, ctxs: new Map(), plan, file, other, sent: [] };
   // figma-plugin/src/code.js: images first (createImage per hash, a refusal remembered), then cmdIr:
   // the task text parsed, validated whole against the plugin's own tables, then the op.
   const post = async (task, p) => {
-    for (const [hash, buf] of p.images) {
-      try { figImages[hash] = D.figma.createImage(new Uint8Array(buf)).hash; delete figErrors[hash]; }
-      catch (e) { figErrors[hash] = String((e && e.message) || e); }
-    }
     const P = JSON.parse(JSON.stringify(task));
+    env.sent.push(P);
+    if (o.stall && o.stall(P)) { const e = new Error(CODE.PLUGIN_STALLED + ": synthetic"); e.code = CODE.PLUGIN_STALLED; e.resumable = true; throw e; }
+    const F = other && o.elsewhere(P) ? other : file;
+    for (const [hash, buf] of p.images) {
+      try { F.figImages[hash] = F.D.figma.createImage(new Uint8Array(buf)).hash; delete F.figErrors[hash]; }
+      catch (e) { F.figErrors[hash] = String((e && e.message) || e); }
+    }
     if (o.refuse && o.refuse(P)) throw new Error("synthetic: the plugin refused task " + P.taskNo);
-    const v = B.PXF_TASK.validateTask(P, { schema: B.PXF_SCHEMA, props: B.PXF_PROPS, maxChars: B.PXF_TASK.MAX_TASK_CHARS_CEILING, maxErrors: 20 });
+    const v = F.B.PXF_TASK.validateTask(P, { schema: F.B.PXF_SCHEMA, props: F.B.PXF_PROPS, maxChars: F.B.PXF_TASK.MAX_TASK_CHARS_CEILING, maxErrors: 20 });
     if (!v.ok) throw new Error("ir: the task is refused: " + v.errors.slice(0, 3).map((e) => e.path + ": " + e.message).join("; "));
-    const ctx = B.PXF_IR.makeCtx(D.figma, P, { id: label + "-" + P.taskNo });
-    env.ctxs.set(P.taskNo, ctx);
-    const rep = await B.PXF_IR.ops[P.op](ctx, P);
+    const ctx = F.B.PXF_IR.makeCtx(F.D.figma, P, { id: label + "-" + P.taskNo });
+    if (F === file) env.ctxs.set(P.taskNo, ctx);
+    const rep = await F.B.PXF_IR.ops[P.op](ctx, P);
     if (P.op === "build" && o.plant) await o.plant(P.taskNo, env, P);
     return JSON.parse(JSON.stringify(rep));
   };
   const imagesFor = imagesOf(bytes);
-  const states = statesFor(IR, plan);
-  const reports = [];
+  let states = statesFor(IR, plan, o.runId);
+  if (o.prev) states = resumeStates(JSON.parse(JSON.stringify(o.prev)), states, plan.tasks).states;
+  const reports = [], said = [];
   const r = await runTasks({ states, tasks: plan.tasks, post, imagesFor, clean: (t) => cleanTaskFor(t, IR), judge: judgeWith(IR, STATS),
-    onReport: (t, rep) => reports.push({ taskNo: t.taskNo, op: t.op, rep }), log: () => {}, missingFonts: "ask" });
-  return Object.assign(env, { table, states, reports, r }, folderOf(label, IR, table, plan, states, r));
+    onReport: (t, rep) => reports.push({ taskNo: t.taskNo, op: t.op, rep }), log: (l) => said.push(l), missingFonts: "ask" });
+  return Object.assign(env, { table, states, reports, r, said }, folderOf(label, IR, table, plan, states, r));
 }
 const imagesOf = (bytes) => (task) => { const m = new Map(); for (const im of task.images) if (im.source !== "none" && bytes.has(im.hash)) m.set(im.hash, bytes.get(im.hash)); return m; };
-function statesFor(IR, plan) {
+function statesFor(IR, plan, runId) {
   const settings = { source: "pix", scope: "file", m1Scope: "default", booleans: "auto", spaceEvenlySingle: "between", textFit: "widen", layoutOrder: "creation",
     textRead: "measure", images: "archive", noPixso: true, missingFonts: "ask", fallbackFont: { family: "Inter", style: "Regular" }, maxTaskMb: 4,
     livenessWarnS: 60, livenessFailS: 300, ceilingMsPerNode: 20 };
-  return newStates({ snapshot: plan.tasks[0].snapshot, irVersion: IR.header.version, runId: RUN, settings, probes: probeStatus(VERDICTS),
+  return newStates({ snapshot: plan.tasks[0].snapshot, irVersion: IR.header.version, runId: runId || RUN, settings, probes: probeStatus(VERDICTS),
     pixso: { used: false, identity: null, q5: false }, balance: plan.balance, ledger: plan.ledger });
 }
 // The run folder, as pix-run writes it, and m1-accept over it.
@@ -483,6 +497,72 @@ for (const [label, maxChars] of [["two-windows", 0], ["two-windows-split", 4500]
     show({ A: run.A.ran.length + "/" + tasks.length, B: run.B.ran, refused: run.B.refused, server: run.srv, errors: [run.A.error, run.B.error] }));
 }
 clearTimeout(twoWindowsDeadline);
+
+// ============================================================================================
+// 3d. a verify measures the build of the attempt that made it, and no other run's copy (§15.12)
+// ============================================================================================
+// The second live build of K (§15.10): one verify measured the build an earlier run had left in the
+// file it ran in, because this attempt's build of that page had gone to another file. Played with two
+// files: an earlier run (its own runId) builds everything in the first; a later run sends one page's
+// clean and build to the second, and its verify to the first.
+const RUN_OLD = "a0a0a0a0a0a0a0a0", RUN_NEW = "b1b1b1b1b1b1b1b1", RUN_RESUMED = "c2c2c2c2c2c2c2c2";
+const rootsStamped = (D, run, idx) => D.figma.root.children.flatMap((pg) => pg.findAllWithCriteria({ sharedPluginData: { namespace: "pix2fig", keys: ["pxIdx"] } }))
+  .filter((n) => n.getSharedPluginData("pix2fig", "pxRun") === run && idx.indexOf(Number(n.getSharedPluginData("pix2fig", "pxIdx"))) >= 0).length;
+{
+  const earlier = await runOnce("earlier-run", { runId: RUN_OLD });
+  const k = earlier.plan.tasks.find((t) => t.op === "build" && t.page && !t.page.service).taskNo;
+  const roots = earlier.plan.tasks.find((t) => t.taskNo === k).roots.map((x) => x.i);
+  const run = await runOnce("other-file", { runId: RUN_NEW, file: earlier.file, elsewhere: (t) => (t.op === "clean" || t.op === "build") && t.taskNo === k });
+  const vRec = run.states.tasks.find((t) => t.op === "verify" && t.build === k);
+  const vRep = run.reports.find((x) => x.op === "verify" && x.taskNo === vRec.taskNo).rep;
+  const sentV = run.sent.find((t) => t.op === "verify" && t.taskNo === vRec.taskNo);
+  check(rootsStamped(run.D, RUN_OLD, roots) === roots.length && rootsStamped(run.other.D, RUN_NEW, roots) === roots.length && sentV.buildRun === RUN_NEW &&
+    vRep.roots.length === roots.length && vRep.roots.every((q) => q.found === false && q.id === null && /only another run's copy/.test(q.reason) && q.reason.indexOf(RUN_OLD) >= 0),
+    "a verify names the run that built its task (buildRun), and in a file holding only an earlier run's copy of its " + roots.length + " root" + (roots.length === 1 ? "" : "s") +
+    " finds none, each reported found: false with the reason", show({ buildRun: sentV.buildRun, roots: vRep.roots }));
+  check(vRec.codes[CODE.ROOT_NOT_FOUND] === roots.length && vRec.buildRun === RUN_NEW && failedGates(run).some((g) => /^G2 /.test(g)) &&
+    run.said.some((l) => l.indexOf(CODE.ROOT_NOT_FOUND + ": only another run's copy") >= 0),
+    "the judge counts them ROOT_NOT_FOUND (G2 fails), the states record the verify's buildRun, and the runner says why", show({ codes: vRec.codes, gates: failedGates(run) }));
+  check(run.states.tasks.filter((t) => t.op === "build").every((t) => t.run === RUN_NEW), "every build task records the run attempt that built it (run)");
+}
+// A resume: the first attempt stalls on a verify and stops; the second, under a new runId in the same
+// file, keeps what the first built and verified and builds the rest again. Each verify names the
+// attempt that built its task and finds its roots; the earlier attempt's copy of the re-built task is
+// cleaned away, and every gate passes.
+{
+  const F = makeFile();
+  const probe = planM1(IR, STATS, { m1Scope: "default", runId: RUN });
+  const lastVerify = probe.tasks.filter((t) => t.op === "verify").pop().taskNo;
+  const first = await runOnce("resume", { runId: RUN_OLD, file: F, stall: (t) => t.op === "verify" && t.taskNo === lastVerify });
+  const kept = first.states.tasks.filter((t) => t.op === "build" && t.state !== "pending" && t.state !== "failed" && t.state !== "skipped").map((t) => t.taskNo);
+  const second = await runOnce("resume", { runId: RUN_RESUMED, file: F, prev: first.states });
+  const S = second.states, bOf = (no) => S.tasks.find((t) => t.taskNo === no);
+  const redo = S.tasks.find((t) => t.op === "verify" && t.taskNo === lastVerify).build;
+  const redoRoots = second.plan.tasks.find((t) => t.taskNo === redo).roots.map((x) => x.i);
+  const sentVerifies = second.sent.filter((t) => t.op === "verify");
+  check(first.r.stopped === "stalled" && kept.length > 1 && S.tasks.every((t) => t.state === "built" || t.state === "built-with-fallbacks") && failedGates(second).length === 0,
+    "a run resumed under a new runId after a stall completes, and every gate passes (" + (kept.length - 1) + " build" + (kept.length === 2 ? "" : "s") + " kept from the first attempt)",
+    show({ first: first.r.stopped, kept, gates: failedGates(second), states: S.tasks.map((t) => t.taskNo + ":" + t.state) }));
+  check(kept.filter((no) => no !== redo).every((no) => bOf(no).run === RUN_OLD) && bOf(redo).run === RUN_RESUMED &&
+    sentVerifies.length === 1 && sentVerifies[0].buildRun === RUN_RESUMED && bOf(lastVerify).buildRun === RUN_RESUMED &&
+    S.tasks.filter((t) => t.op === "verify" && t.taskNo !== lastVerify).every((t) => t.buildRun === RUN_OLD),
+    "the resume keeps each kept build's run, and the verify run again names the attempt that built its task", show(S.tasks.map((t) => [t.taskNo, t.op, t.run || t.buildRun || null])));
+  check(rootsStamped(F.D, RUN_OLD, redoRoots) === 0 && rootsStamped(F.D, RUN_RESUMED, redoRoots) === redoRoots.length,
+    "the earlier attempt's copy of the re-built task is cleaned away; its verify measured the new one");
+  // Should a verify ever run after its build's attempt (the resume keeps a build only with its verify,
+  // as the judge needs the build report), it is sent with that attempt's runId and finds its roots.
+  const again = JSON.parse(JSON.stringify(S));
+  const vRec = again.tasks.find((t) => t.taskNo === lastVerify);
+  Object.assign(vRec, { state: "pending", codes: {}, ms: {} });
+  delete vRec.buildRun;
+  const plan3 = planM1(IR, STATS, { m1Scope: "default", images: second.table, runId: "d3d3d3d3d3d3d3d3" });
+  const sent3 = [];
+  const post3 = async (task) => { const P = JSON.parse(JSON.stringify(task)); sent3.push(P); return JSON.parse(JSON.stringify(await F.B.PXF_IR.ops[P.op](F.B.PXF_IR.makeCtx(F.D.figma, P, { id: "again-" + P.taskNo }), P))); };
+  const r3 = await runTasks({ states: again, tasks: plan3.tasks, post: post3, imagesFor: () => new Map(), log: () => {}, missingFonts: "ask" });
+  const v3 = sent3.find((t) => t.taskNo === lastVerify);
+  check(r3.stopped === null && sent3.length === 1 && v3.runId === "d3d3d3d3d3d3d3d3" && v3.buildRun === RUN_RESUMED && vRec.buildRun === RUN_RESUMED && !vRec.codes[CODE.ROOT_NOT_FOUND],
+    "a verify sent in a later attempt than its build names the build's attempt and finds every root", show({ sent: sent3.map((t) => [t.taskNo, t.runId, t.buildRun]), codes: vRec.codes }));
+}
 
 // ============================================================================================
 // 4. pix-run --dry --no-pixso on the fixture file

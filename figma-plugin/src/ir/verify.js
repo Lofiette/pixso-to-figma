@@ -4,14 +4,17 @@
 //
 // CONTRACT:
 //
-//   IR.ops.verify(ctx, task) -> Promise<{ op: "verify", taskNo, runId, roots: [{ i, id, found }], count,
+//   IR.ops.verify(ctx, task) -> Promise<{ op: "verify", taskNo, runId, roots: [{ i, id, found, reason? }], count,
 //                                          rows, fontsMissing, ms, codes, coded, failures }>
 //     (code.js adds `plugin`.) In order:
 //     1. fonts: loadFontAsync for task.fonts and settings.fallbackFont; a font that will not load is
 //        listed in fontsMissing, and ctx.S.fonts marks it "sub" unless the session already knows it
 //        (so countLines writes what the build wrote).
 //     2. roots: ctx.findRoot(i) for every task root; one not found is { i, id: null, found: false }
-//        and is coded ROOT_NOT_FOUND (the judge counts it from `roots`). A split root found (attachTo
+//        and is coded ROOT_NOT_FOUND (the judge counts it from `roots`). Only the build of the run
+//        attempt that built the task (task.buildRun, else task.runId) is found; when only another run's
+//        copy is in the file, the entry adds reason: a string naming that copy's pxRun (docs/M1.md
+//        §15.12), and the coded entry carries it as its detail. A split root found (attachTo
 //        { i }) also carries inParent: [x, y], the min corner of its box (0..width, 0..height) under
 //        its absolute transform relative to its Figma parent's, measured after the settle, so the
 //        judge holds its place in the parent an earlier task built.
@@ -104,11 +107,14 @@ IR.ops.verify = async function (ctx, task) {
   for (var t = 0; t < taskRoots.length; t++) {
     var ri = taskRoots[t].i;
     ctx.progress();
-    var node = await ctx.findRoot(ri);
+    var miss = {};
+    var node = await ctx.findRoot(ri, undefined, miss);
     var entry = { i: ri, id: node ? node.id : null, found: !!node };
+    // Only another run's copy is in the file: not the build this verify measures (§15.12).
+    if (!node && miss.otherRun !== undefined) entry.reason = "only another run's copy (pxRun " + JSON.stringify(miss.otherRun) + ", node " + miss.otherId + "); the build of run " + (task.buildRun || task.runId) + " is not in this file";
     roots.push(entry);
     if (node) found.push([node, byI[ri], entry, taskRoots[t]]);
-    else ctx.code(CODE.ROOT_NOT_FOUND, ri, null);
+    else ctx.code(CODE.ROOT_NOT_FOUND, ri, entry.reason || null);
   }
 
   // 3. one settle

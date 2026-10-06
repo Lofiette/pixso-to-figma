@@ -9,7 +9,7 @@
 //     task    the build (or verify) task (tools/ir/task.mjs) that was built and verified; each of its
 //             records must be the IR record of the same index (same guid and type)
 //     build   the plugin's build report (docs/M1.md §6 B), or null when the build failed
-//     verify  the plugin's verify report: { op: "verify", taskNo, roots: [{ i, id, found, inParent? }], count, rows }
+//     verify  the plugin's verify report: { op: "verify", taskNo, roots: [{ i, id, found, inParent?, reason? }], count, rows }
 //             where each row is an array indexed by ROW below (inParent: a split root's [x, y] in its parent)
 //     lostBorder  optional: part A's stats.populations.lostBorder (IR indices). Only it names the
 //             lost-border population (the .pix border fields are not in the IR); without it

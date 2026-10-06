@@ -6,14 +6,18 @@
 // states.json v2:
 //   { version: 2, snapshot, irVersion, runId, settings, probes: { P4, P5, P6, P8, P18, P19B: "run <date>" | "pending" },
 //     pixso: { used, identity, q5 }, fonts: { missing: [{ family, style }] }, balance: {…},
-//     tasks: [{ taskNo, op, roots: [IR index], nodes, ceilingMs, state, codes, ms, error, failures, build? }] }
+//     tasks: [{ taskNo, op, roots: [IR index], nodes, ceilingMs, state, codes, ms, error, failures, build?, run?, buildRun? }] }
 //   state: pending | built | built-with-fallbacks | failed | skipped. `failures` (the build report's
 //   failures[] count, gate G5) is a key this file adds to docs/M1.md §6 D's task record, and so is
 //   `flow` on a build ({ groupNodes, absolute, rotPinned, quarterTurnsBaked }: the auto layout the
 //   build gave up to hold positions, printed by the verdict); `build`, on a
 //   verify task, names the build task it verifies (the plan's ledger; a split chain's verifies come
 //   after all its builds, so a verify is not always the task after its build). A record without it
-//   (states.json written before) pairs a verify with the task before it (buildNoOf).
+//   (states.json written before) pairs a verify with the task before it (buildNoOf). `run`, on a
+//   build, is the runId of the run attempt that built it (task.runId: a new one on every attempt, so a
+//   resume runs under another); the verify of that build is sent with buildRun = that run and records
+//   it, and measures only roots stamped with it (docs/M1.md §15.12). A verify whose build carries no
+//   `run` (states.json written before) is sent without one, and measures only its own attempt's roots.
 //
 // Transitions (TRANSITIONS): pending -> built | built-with-fallbacks | failed | skipped; on resume
 // failed and skipped -> pending. A built task is never re-run by a resume of the same snapshot and
@@ -112,7 +116,11 @@ export function resumeStates(old, fresh, tasks) {
   let resumed = 0;
   fresh.tasks.forEach((t, k) => {
     const o = old.tasks[k];
-    if (keep[k]) { Object.assign(t, { state: o.state, codes: o.codes, ms: o.ms, error: null, failures: o.failures || 0 }); resumed++; }
+    if (keep[k]) {
+      Object.assign(t, { state: o.state, codes: o.codes, ms: o.ms, error: null, failures: o.failures || 0 });
+      for (const key of ["run", "buildRun"]) if (typeof o[key] === "string") t[key] = o[key];
+      resumed++;
+    }
   });
   fresh.fonts = old.fonts || fresh.fonts;
   return { states: fresh, resumed };
@@ -160,7 +168,7 @@ export function transition(states, taskNo, to, rec) {
   if (TASK_STATES.indexOf(to) < 0) throw new RangeError("unknown state " + JSON.stringify(to));
   if (TRANSITIONS[t.state].indexOf(to) < 0) throw new Error("task " + taskNo + ": " + t.state + " cannot become " + to);
   t.state = to;
-  if (rec) for (const k of ["codes", "ms", "error", "failures", "flow"]) if (rec[k] !== undefined) t[k] = rec[k];
+  if (rec) for (const k of ["codes", "ms", "error", "failures", "flow", "run", "buildRun"]) if (rec[k] !== undefined) t[k] = rec[k];
   return t;
 }
 
@@ -224,7 +232,7 @@ export async function runTasks(o) {
       continue;
     }
     const opts = { ceilingMs: rec.ceilingMs, images: o.imagesFor ? o.imagesFor(task) : new Map() };
-    let report;
+    let report, sent = task;
     try {
       if (task.op === "build" && o.clean) {
         const c = o.clean(task);
@@ -252,8 +260,10 @@ export async function runTasks(o) {
           save(states);
           continue;
         }
+        // The verify measures the build of the attempt that made it, and no other run's copy.
+        if (typeof b.run === "string") sent = Object.assign({}, task, { buildRun: b.run });
       }
-      report = await o.post(task, opts);
+      report = await o.post(sent, opts);
     } catch (e) {
       const codes = {};
       if (isStall(e)) {
@@ -297,19 +307,21 @@ export async function runTasks(o) {
     }
     if (task.op === "build") {
       const out = buildOutcome(report);
-      transition(states, task.taskNo, out.state, { codes: out.codes, ms: out.ms, failures: out.failures, flow: out.flow });
+      transition(states, task.taskNo, out.state, { codes: out.codes, ms: out.ms, failures: out.failures, flow: out.flow, run: task.runId });
       builds.set(task.taskNo, report);
       save(states);
       continue;
     }
     if (task.op === "verify") {
       const codes = {};
-      const lost = (report.roots || []).filter((r) => !r.found).length;
+      const lostRoots = (report.roots || []).filter((r) => !r.found);
+      const lost = lostRoots.length;
       if (lost) count(codes, CODE.ROOT_NOT_FOUND, lost);
+      for (const r of lostRoots) if (typeof r.reason === "string") log("  task " + task.taskNo + " (verify): root " + r.i + " " + CODE.ROOT_NOT_FOUND + ": " + r.reason);
       const build = builds.has(buildNoOf(rec)) ? builds.get(buildNoOf(rec)) : null;
       const J = o.judge ? o.judge({ task, build, verify: report }) : null;
       if (J) { Js.push(Object.assign({ taskNo: task.taskNo }, { J })); if (o.onJudge) o.onJudge(task, J); }
-      transition(states, task.taskNo, "built", { codes, ms: report.ms || {} });
+      transition(states, task.taskNo, "built", Object.assign({ codes, ms: report.ms || {} }, sent.buildRun ? { buildRun: sent.buildRun } : {}));
       save(states);
       continue;
     }

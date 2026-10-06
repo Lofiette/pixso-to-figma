@@ -65,13 +65,18 @@
 //   ctx.stamp(node, key, val)   shared plugin data in namespace "pix2fig"; key one of STAMP_KEYS, or it
 //                               throws. pxScratch is written as private plugin data too
 //   ctx.stampOf(node, key)      the shared stamp, or "" (also when the node cannot be read)
-//   ctx.findRoot(i, guid?)      -> Promise<node|null>: S.nodes[i] if that node still carries pxIdx = i,
+//   ctx.findRoot(i, guid?, miss?) -> Promise<node|null>: S.nodes[i] if that node still carries pxIdx = i,
 //                               pxSnap = task.snapshot, pxIr = the IR version and, when record i is in the
 //                               task, pxSrc = its guid (else the guid given: a split root's parent, which
 //                               the later task names in attachTo; review S8); else a node on any page carrying those (pages are
 //                               loaded first), one stamped pxRun = task.runId preferred, else the last
 //                               found; else null. The guid check matters because IR indices depend on
-//                               the reader's settings and scope, which the snapshot does not hold
+//                               the reader's settings and scope, which the snapshot does not hold.
+//                               A verify task takes only a node stamped pxRun = task.buildRun (the run
+//                               attempt that built it), or = task.runId when it names none: an earlier
+//                               run's copy of the root is not found (§15.12). When that is all there is
+//                               and `miss` is an object, findRoot sets miss.otherRun (its pxRun) and
+//                               miss.otherId. Build and clean take any run's, preferring this one's
 //   ctx.log(message)
 //   ctx.report                  { op, taskNo, runId, ms: {}, codes: {}, coded: [], failures: [] }; an op
 //                               adds its own fields and returns it
@@ -225,20 +230,24 @@ var PXF_IR = (function () {
         if (key === "pxScratch") node.setPluginData("pxScratch", String(val));
       },
       stampOf: stampOf,
-      findRoot: async function (i, guidOf) {
+      findRoot: async function (i, guidOf, miss) {
         var want = String(i), snap = String(task.snapshot), irv = String(PXF_SCHEMA.VERSION), guid = null;
         var recs = Array.isArray(task.nodes) ? task.nodes : [];
         for (var r = 0; r < recs.length; r++) if (recs[r] && recs[r].i === i) guid = String(recs[r].guid);
         if (guid === null && typeof guidOf === "string" && guidOf) guid = guidOf;
+        // A verify measures only the build of the attempt that built its roots (task.buildRun, else its
+        // own runId): another run's copy of a root is not that build (docs/M1.md §15.12).
+        var onlyRun = task.op === "verify" ? String(typeof task.buildRun === "string" && task.buildRun ? task.buildRun : task.runId) : null;
         var is = function (n) {
           return !!n && !n.removed && stampOf(n, "pxIdx") === want && stampOf(n, "pxSnap") === snap && stampOf(n, "pxIr") === irv &&
             (guid === null || stampOf(n, "pxSrc") === guid);
         };
+        var mine = function (n) { return onlyRun === null || stampOf(n, "pxRun") === onlyRun; };
         if (own(session.nodes, want)) {
           var known = await figma.getNodeByIdAsync(String(session.nodes[want]));
-          if (is(known)) return known;
+          if (is(known) && mine(known)) return known;
         }
-        var found = null, pages = figma.root.children;
+        var found = null, other = null, pages = figma.root.children;
         for (var p = 0; p < pages.length; p++) {
           var page = pages[p];
           if (typeof page.loadAsync === "function") await page.loadAsync();
@@ -247,11 +256,13 @@ var PXF_IR = (function () {
             : page.children;
           for (var c = 0; c < cands.length; c++) {
             if (!is(cands[c])) continue;
+            if (!mine(cands[c])) { other = cands[c]; continue; }
             // This run's build wins over an earlier run's; among equals the last found.
             if (!found || stampOf(cands[c], "pxRun") === String(task.runId) || stampOf(found, "pxRun") !== String(task.runId)) found = cands[c];
           }
         }
         if (found) session.nodes[want] = found.id;
+        else if (other && miss !== null && typeof miss === "object") { miss.otherRun = stampOf(other, "pxRun"); miss.otherId = other.id; }
         return found;
       },
       log: function (m) { if (typeof host.log === "function") host.log(String(m)); },
