@@ -29,7 +29,7 @@ import { pixToIR } from "./pix/ir/index.mjs";
 import { CODE, ORACLE_CLASSES, VECTOR_TYPES } from "./ir/schema.mjs";
 import { BUILD_PHASES, maxTaskChars, taskChars } from "./ir/task.mjs";
 import { validate, validateTask } from "./ir/validate.mjs";
-import { cleanTaskFor, planM1 } from "./ir/plan.mjs";
+import { CEILING_BASE_MS, PLAN_DEFAULTS, cleanTaskFor, planM1 } from "./ir/plan.mjs";
 import { resolveImages } from "./ir/images.mjs";
 import { newStates, probeStatus, resumeStates, runTasks, saveStates } from "./ir/runstate.mjs";
 import { BUILT_NOT_AUDITED } from "./ir/verdict.mjs";
@@ -72,12 +72,18 @@ function makeFile() {
   return { D, B: loadPluginBundle({ figma: D.figma, host }), figImages, figErrors };
 }
 
+// Every node in a file, pages excluded.
+const PARENT_TYPES = ["FRAME", "GROUP", "SECTION", "COMPONENT", "COMPONENT_SET", "INSTANCE", "BOOLEAN_OPERATION"];
+const nodesIn = (D) => { let n = 0; const walk = (x) => { n++; if (PARENT_TYPES.indexOf(x.type) >= 0) for (const c of x.children) walk(c); }; for (const pg of D.figma.root.children) for (const c of pg.children) walk(c); return n; };
+
 // One run, as tools/pix-run.mjs runs it, with the plugin played in the double. opts.plant(taskNo, env)
 // runs after a build task and may change Figma; opts.refuse(task) makes the plugin throw on a task.
 // A run attempt of its own (§15.12): opts.file is the Figma file of an earlier attempt (makeFile, or
 // that run's .file), opts.runId the attempt's runId (RUN by default), opts.prev the states.json the
 // earlier attempt left (resumed as pix-run resumes it); opts.elsewhere(task) sends a task to a second
 // file (a second plugin window); opts.stall(task) makes the plugin stall on a task (PLUGIN_STALLED).
+// opts.cleanCost(removed) -> ms plays the time a clean takes to remove that many nodes: past the
+// ceiling the runner posted it with, the clean stalls (PLUGIN_STALLED, as the job server rules it).
 async function runOnce(label, opts) {
   const o = opts || {};
   const IR = o.ir || READ.ir;
@@ -85,7 +91,7 @@ async function runOnce(label, opts) {
   const plan = planM1(IR, STATS, Object.assign({ m1Scope: "default", images: table, runId: o.runId || RUN }, o.maxChars ? { maxChars: o.maxChars } : {}));
   const file = o.file || makeFile(), other = o.elsewhere ? makeFile() : null;
   const { D, B } = file;
-  const env = { D, B, ctxs: new Map(), plan, file, other, sent: [] };
+  const env = { D, B, ctxs: new Map(), plan, file, other, sent: [], cleans: [] };
   // figma-plugin/src/code.js: images first (createImage per hash, a refusal remembered), then cmdIr:
   // the task text parsed, validated whole against the plugin's own tables, then the op.
   const post = async (task, p) => {
@@ -102,7 +108,13 @@ async function runOnce(label, opts) {
     if (!v.ok) throw new Error("ir: the task is refused: " + v.errors.slice(0, 3).map((e) => e.path + ": " + e.message).join("; "));
     const ctx = F.B.PXF_IR.makeCtx(F.D.figma, P, { id: label + "-" + P.taskNo });
     if (F === file) env.ctxs.set(P.taskNo, ctx);
+    const before = P.op === "clean" && o.cleanCost ? nodesIn(F.D) : 0;
     const rep = await F.B.PXF_IR.ops[P.op](ctx, P);
+    if (P.op === "clean" && o.cleanCost) {
+      const removed = before - nodesIn(F.D), ms = o.cleanCost(removed);
+      env.cleans.push({ taskNo: P.taskNo, removed, ms, ceilingMs: p.ceilingMs });
+      if (ms > p.ceilingMs) { const e = new Error(CODE.PLUGIN_STALLED + ": job passed its ceiling of " + Math.round(p.ceilingMs / 1000) + " s"); e.code = CODE.PLUGIN_STALLED; e.resumable = true; throw e; }
+    }
     if (P.op === "build" && o.plant) await o.plant(P.taskNo, env, P);
     return JSON.parse(JSON.stringify(rep));
   };
@@ -562,6 +574,32 @@ const rootsStamped = (D, run, idx) => D.figma.root.children.flatMap((pg) => pg.f
   const v3 = sent3.find((t) => t.taskNo === lastVerify);
   check(r3.stopped === null && sent3.length === 1 && v3.runId === "d3d3d3d3d3d3d3d3" && v3.buildRun === RUN_RESUMED && vRec.buildRun === RUN_RESUMED && !vRec.codes[CODE.ROOT_NOT_FOUND],
     "a verify sent in a later attempt than its build names the build's attempt and finds every root", show({ sent: sent3.map((t) => [t.taskNo, t.runId, t.buildRun]), codes: vRec.codes }));
+}
+
+// ============================================================================================
+// 3e. a clean is its own job, its ceiling sized on what it may remove (§15.12)
+// ============================================================================================
+// The live session: a build into a file holding an earlier build's 30 000 nodes stalled at the default
+// ceiling, which was sized on the task's own records while its clean removed the earlier build. Played
+// here with the fixture: an earlier run builds every root whole; a later run, its roots split across
+// tasks, cleans that build away before the first task of each chain. A clean takes, in this play,
+// what the ceiling model allows for making as many nodes (CEILING_BASE_MS + 20 ms per node removed).
+{
+  const F = makeFile();
+  const earlier = await runOnce("clean-earlier", { runId: RUN_OLD, file: F });
+  const cost = (removed) => CEILING_BASE_MS + PLAN_DEFAULTS.ceilingMsPerNode * removed;
+  const run = await runOnce("clean-ceiling", { runId: RUN_NEW, file: F, maxChars: 4500, cleanCost: cost });
+  const big = run.cleans.filter((c) => c.removed > 0);
+  const chainFirst = big.map((c) => run.plan.ledger.find((l) => l.taskNo === c.taskNo));
+  const S = run.states;
+  check(earlier.r.stopped === null && big.length > 0 && chainFirst.some((l) => cost(big.find((c) => c.taskNo === l.taskNo).removed) > l.ceilingMs) &&
+    big.every((c) => c.ms <= c.ceilingMs && c.ceilingMs === S.tasks.find((t) => t.taskNo === c.taskNo).cleanCeilingMs),
+    "each clean that removes an earlier run's root (" + big.length + ", " + big.reduce((n, c) => n + c.removed, 0) + " nodes) runs under its own ceiling, sized on that root's IR records; " +
+    chainFirst.filter((l) => cost(big.find((c) => c.taskNo === l.taskNo).removed) > l.ceilingMs).length + " of them would pass its build task's ceiling (sized on the task's own records)",
+    show({ cleans: run.cleans, ledger: chainFirst }));
+  check(run.r.stopped === null && S.tasks.every((t) => t.state === "built" || t.state === "built-with-fallbacks") && failedGates(run).length === 0 &&
+    big.every((c) => S.tasks.find((t) => t.taskNo === c.taskNo).clean.removed >= 1),
+    "the run completes and every gate passes; each build records what its clean removed", show({ stopped: run.r.stopped, gates: failedGates(run), said: run.said.slice(0, 3) }));
 }
 
 // ============================================================================================

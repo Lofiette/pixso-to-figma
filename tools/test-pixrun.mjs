@@ -238,6 +238,26 @@ function syntheticIR(opts) {
   check(built.size === scope.size && [...scope].every((i) => built.has(i)) && bp.tasks.filter((t) => t.op === "build").reduce((s, t) => s + t.nodes.length, 0) === scope.size,
     "every record in scope is built exactly once across the split tasks");
   {
+    // The clean's own ceiling (docs/M1.md §15.12): sized on every IR record under the task's top-level
+    // roots (an earlier run's whole build of them), not on the task's records; a later piece of a chain
+    // is not top-level, and its clean removes nothing.
+    const kids = new Map();
+    big.ir.nodes.forEach((n, j) => { if (!kids.has(n.parent)) kids.set(n.parent, []); kids.get(n.parent).push(j); });
+    const under = (i) => 1 + (kids.get(i) || []).reduce((s, j) => s + under(j), 0);
+    const cc = (no) => bp.ledger.find((l) => l.taskNo === no).cleanCeilingMs;
+    const first = bp.ledger.find((l) => l.taskNo === firstWithBig.taskNo);
+    const topLevel = firstWithBig.roots.filter((r) => r.attachTo === "page").map((r) => r.i);
+    const st0 = newStates({ snapshot: bp.tasks[0].snapshot, irVersion: 2, runId: RUN, settings: {}, probes: probeStatus(VERDICTS), pixso: null,
+      balance: JSON.parse(JSON.stringify(bp.balance)), ledger: bp.ledger });
+    check(topLevel.length > 0 && cc(firstWithBig.taskNo) === CEILING_BASE_MS + PLAN_DEFAULTS.ceilingMsPerNode * topLevel.reduce((s, i) => s + under(i), 0) &&
+      cc(firstWithBig.taskNo) > first.ceilingMs && split.every((t) => cc(t.taskNo) === CEILING_BASE_MS + PLAN_DEFAULTS.ceilingMsPerNode *
+        t.roots.filter((r) => r.attachTo === "page").reduce((s, r) => s + under(r.i), 0)) &&
+      bp.ledger.every((l) => (l.op === "build") === Number.isFinite(l.cleanCeilingMs)) &&
+      st0.tasks.every((t) => (t.op === "build") === Number.isFinite(t.cleanCeilingMs) && (t.op !== "build" || t.cleanCeilingMs === cc(t.taskNo))),
+      "a build's clean has its own ceiling, on every IR record under its top-level roots (" + cc(firstWithBig.taskNo) + " ms against the task's " + first.ceilingMs +
+      " ms); a split piece adds nothing to it; states.json carries it", JSON.stringify(bp.ledger.filter((l) => l.op === "build")));
+  }
+  {
     // Part F: a resume keeps a split root only whole (B's request: after a plugin restart the split
     // pieces' parent carries no stamp, so its task runs again with them).
     const chain = splitChains(bp.tasks).find((g) => g.indexOf(firstWithBig.taskNo) >= 0) || [];
