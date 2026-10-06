@@ -437,6 +437,33 @@ const LP = localPixso();
     "with the plugin in another Figma file the audit stops after the first roots, says why, and writes no audit", JSON.stringify({ code: res.code, asked }));
 }
 
+// Pixso cannot parse a script in which a function declaration comes before an await statement, and
+// answers { error } as an ordinary result (the next live audit, 2026-10-06: every render came back as
+// "no picture"). The library holds no such script, the static check refuses one, the channel reads
+// Pixso's { error } as a failed script, and the audit stops after the first roots when Pixso gives
+// no picture for any of them.
+{
+  const bad = "// px:x (read-only)\nconst ARGS = {};\nfunction x() { return 1; }\nawait pixso.loadAllPagesAsync();\nreturn x();";
+  const lib = [SCRIPTS.auditRender("1:2", { scale: 1 }), SCRIPTS.imageBytes("0".repeat(40)), SCRIPTS.imageRange("0".repeat(40), 0, 1), SCRIPTS.render("1:2"), SCRIPTS.sample(["1:2"])];
+  check(readOnlyProblems(bad).some((p) => /function declaration before a statement that starts with await/.test(p)) && lib.every((s) => readOnlyProblems(s).length === 0),
+    "the static check refuses a function declaration before an await statement, and passes every library script");
+  PX.fails = { "9:9": "SyntaxError: expecting ';'" };
+  const r = await makeMcpClient({ dir: join(SCRATCH, "mcp-parse"), url: PX.url }).run("// px:fake-object 9:9\nreturn 1;");
+  PX.fails = {};
+  check(r.ok === false && !r.transport && /the script failed in Pixso: SyntaxError: expecting/.test(r.error || ""),
+    "Pixso's { error } answer is a failed script, not a value", JSON.stringify(r));
+  quietLog.length = 0;
+  let asked = 0;
+  const refusing = { run: async (src) => {
+    if (src.indexOf("// px:audit-render") !== 0) return LP.run(src);
+    asked++;
+    return { ok: false, transport: false, refused: false, error: "the script failed in Pixso: SyntaxError: expecting ';'" };
+  } };
+  const res = await auditOf(GOOD, { mcp: refusing, figmaExport: FIG.exportJob });
+  check(res.code === 1 && asked <= 6 && quietLog.some((l) => /Pixso gave no picture/.test(l) && /SyntaxError/.test(l)) && !existsSync(join(GOOD.runDir, "audit", "audit.json")),
+    "with every Pixso render refused the audit stops after the first roots, says why, and writes no audit", JSON.stringify({ code: res.code, asked }));
+}
+
 // ============================================================================================
 // 7. a second pass, the snapshot, and the verdict's reading of an audit
 // ============================================================================================

@@ -105,9 +105,10 @@ export async function auditFolder(runDir, opts, io) {
   const pixsoRender = (guid, scale) => io.mcp.run(SCRIPTS.auditRender(guid, { scale }));
   // The plugin open in another Figma file than the one the run built finds none of the verified ids:
   // the live audit of 2026-10-06 went through 1 872 roots that way. If the first EARLY_STOP roots it
-  // compares are all "not found" in Figma, it stops and says so.
-  let seen = 0, notFound = 0;
-  const WRONG_FILE = "WRONG_FIGMA_FILE";
+  // compares are all "not found" in Figma, it stops and says so. Likewise when Pixso gives no picture
+  // for any of them: the next live audit went through 24 roots with every Pixso render refused.
+  let seen = 0, notFound = 0, noPixso = 0, pixsoWhy = "";
+  const WRONG_FILE = "WRONG_FIGMA_FILE", NO_PIXSO = "NO_PIXSO_RENDER";
   let audit;
   try {
   audit = await auditRun({ states, ir, reports, builds, settings: S, identity, previous, log,
@@ -116,8 +117,10 @@ export async function auditFolder(runDir, opts, io) {
       if (entry.ok !== null && entry.ok !== undefined) {
         seen++;
         if (entry.ok === false && /figma render missing: not found/.test(entry.why || "")) notFound++;
+        if (entry.ok === false && /^pixso render missing: /.test(entry.why || "")) { noPixso++; pixsoWhy = entry.why; }
       }
       if (seen === EARLY_STOP && notFound === EARLY_STOP) { const e = new Error(WRONG_FILE); e.code = WRONG_FILE; throw e; }
+      if (seen === EARLY_STOP && noPixso === EARLY_STOP) { const e = new Error(NO_PIXSO); e.code = NO_PIXSO; throw e; }
       appendFileSync(jsonl, JSON.stringify(entry) + NL, "utf8");
       for (const p of pics) {
         if (S.pictures === "none" || (S.pictures === "failed" && p.ok !== false)) continue;
@@ -126,6 +129,11 @@ export async function auditFolder(runDir, opts, io) {
       }
     } });
   } catch (e) {
+    if (e && e.code === NO_PIXSO) {
+      log("ir-audit: Pixso gave no picture for any of the first " + EARLY_STOP + " roots (the last: " + pixsoWhy.slice(0, 200) + ").");
+      log("  Nothing was written to the audit.");
+      return { code: 1 };
+    }
     if (!e || e.code !== WRONG_FILE) throw e;
     log("ir-audit: the first " + EARLY_STOP + " roots are all not found in Figma: the plugin window is open in another Figma file");
     log("  than the one this run built in. Open the runner plugin in that file (the one whose pages this run made) and");
