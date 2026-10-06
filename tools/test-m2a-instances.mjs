@@ -70,6 +70,8 @@ const B_IN = properties.STUB === undefined;
 const FX = makeFixture();
 const read = (settings, mutate) => reader.pixToIR(mutate ? makeFixture("valid", { mutate }).pix : FX.pix, { settings });
 const BASE = read();
+// The D17 default is part E's to set from part C's measurement; what depends on it reads "last" explicitly.
+const LAST = schema.SETTING_DEFAULTS.overrideMerge === "last" ? BASE : read({ overrideMerge: "last" });
 const recOf = (ir, g) => ir.nodes.findIndex((n) => n.guid === g);
 const instOf = (ir, g) => ir.nodes[recOf(ir, g)].instance;
 const P = (...gs) => gs;
@@ -225,14 +227,14 @@ check("the root entries merge into one path [] override with the look only; the 
   same(Object.keys(o).sort(), ["fields", "path"]);
   same(Object.keys(o.fields).sort(), ["fills", "opacity"]);
   same([fill(BASE.ir, o.fields.fills), o.fields.opacity], [[{ type: "SOLID", color: { r: 0, g: 0, b: 1 } }], 0.5]);
-  same(BASE.stats.m2a.overrides.rootBox, { echo: 0, differs: 1 });
-  same(notesOf(BASE.ir, M2A.iEntries, schema.CODE.OVERRIDE_FIELD_DROPPED).map((x) => x.detail),
+  same(LAST.stats.m2a.overrides.rootBox, { echo: 0, differs: 1 });
+  same(notesOf(LAST.ir, M2A.iEntries, schema.CODE.OVERRIDE_FIELD_DROPPED).map((x) => x.detail),
     ["no-equivalent: pluginData 1, vectorPaints 1", "not-on-type: fillPaints 1", "layer-not-carried: fillPaints 1", "root-box: size 1"]);
-  same(notesOf(BASE.ir, M2A.iEntries, schema.CODE.OVERRIDE_PATHS_MERGED).map((x) => x.detail), ["2 paths, 2 conflicting fields (--override-merge last)"]);
+  same(notesOf(BASE.ir, M2A.iEntries, schema.CODE.OVERRIDE_PATHS_MERGED).map((x) => x.detail), ["2 paths, 2 conflicting fields (--override-merge " + schema.SETTING_DEFAULTS.overrideMerge + ")"]);
 });
 check("Entries: the merged Bg fill (last: yellow), the echoed opacity, the nested INSTANCE target's fill and style, the stale path", () => {
   const I = BASE.ir;
-  same(fill(I, ovAt(I, M2A.iEntries, P(M2A.rowBg)).fields.fills), [{ type: "SOLID", color: { r: 1, g: 1, b: 0 } }]);
+  same(fill(LAST.ir, ovAt(LAST.ir, M2A.iEntries, P(M2A.rowBg)).fields.fills), [{ type: "SOLID", color: { r: 1, g: 1, b: 0 } }]);
   truth(!ovAt(I, M2A.iEntries, P(M2A.rowGroupRect)), "the echoed opacity is written");
   truth(!ovAt(I, M2A.iEntries, P(M2A.rowGroup)) && !ovAt(I, M2A.iEntries, P(M2A.rowFlatL1)), "a not-on-type or layer-not-carried entry is written");
   const lead = ovAt(I, M2A.iEntries, P(M2A.rowLead));
@@ -295,7 +297,7 @@ check("derived (D10): sparse as stored, lines, oracleSides, an empty entry not w
 check("--override-merge: Entries' Bg fill is yellow under last, green under first and outer; the root size an echo under first", () => {
   const bgOf = (r) => fill(r.ir, ovAt(r.ir, M2A.iEntries, P(M2A.rowBg)).fields.fills)[0].color;
   const first = read({ overrideMerge: "first" }), outer = read({ overrideMerge: "outer" });
-  same([bgOf(BASE), bgOf(first), bgOf(outer)], [{ r: 1, g: 1, b: 0 }, { r: 0, g: 1, b: 0 }, { r: 0, g: 1, b: 0 }]);
+  same([bgOf(LAST), bgOf(first), bgOf(outer)], [{ r: 1, g: 1, b: 0 }, { r: 0, g: 1, b: 0 }, { r: 0, g: 1, b: 0 }]);
   same([first.stats.m2a.overrides.rootBox, outer.stats.m2a.overrides.rootBox], [{ echo: 1, differs: 0 }, { echo: 0, differs: 1 }]);
   same(Object.keys(ovAt(first.ir, M2A.iEntries, []).fields).sort(), ["fills", "opacity"], "first, path []:");
 });
@@ -346,6 +348,7 @@ const balances = (st, label) => {
   if (bad.length) throw new Error(label + ": " + bad.join(", "));
 };
 check("G1, G2 and G6 add up under the defaults and under every other setting value; no unknown field", () => {
+  balances(LAST.stats, "last");
   balances(BASE.stats, "defaults");
   same(BASE.stats.m2a.overrides.pixsoFields.dropped.unknown, {});
   same([BASE.stats.m2a.derived.entries, BASE.stats.m2a.derived.unresolved], [139, 0]);

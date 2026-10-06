@@ -227,6 +227,7 @@ const FIELD_DEFAULTS = Object.assign({}, DEFAULTS, { textRanges: [] });
 // The instance's own stored look (D11): the Pixso fields, and the Figma fields they make.
 const OWN_SOURCE = ["fillPaints", "strokePaints", "effects", "opacity", "blendMode", "inheritFillStyleID", "inheritStrokeStyleID", "inheritEffectStyleID"];
 const OWN_FIGMA = ["fills", "fillStyle", "strokes", "strokeStyle", "effects", "effectStyle", "opacity", "blendMode"];
+const OWN_SET = new Set(OWN_FIGMA);
 const STYLE_FIELDS = ["fillStyle", "strokeStyle", "effectStyle"];
 const STYLE_SOURCE = { fillStyle: ["inheritFillStyleID", "fillPaints"], strokeStyle: ["inheritStrokeStyleID", "strokePaints"], effectStyle: ["inheritEffectStyleID", "effects"] };
 
@@ -270,7 +271,22 @@ function quietOf(cx) {
 
 // The Figma look of a stored (or composed) Pixso node as an IR record of `type` would carry it, raw
 // (not interned): what tools/pix/ir/nodes.mjs propsOf writes, for the props an override can carry.
-export function lookOf(q, n, type, parentNode) {
+// need (optional): a Set of the Figma fields wanted; the translators whose fields none of them is are
+// skipped (the box is always written). The result holds at least every wanted field the full look holds.
+const SECTIONS = {
+  child: ["constraints", "layoutPositioning", "layoutAlign", "layoutGrow", "layoutSizingHorizontal", "layoutSizingVertical", "minWidth", "maxWidth", "minHeight", "maxHeight"],
+  text: ["characters", "fontName", "fontSize", "letterSpacing", "lineHeight", "paragraphIndent", "paragraphSpacing", "textAlignHorizontal", "textAlignVertical",
+    "textAutoResize", "textCase", "textDecoration", "textTruncation", "maxLines", "leadingTrim", "hangingPunctuation", "hangingList", "textStyle", "textRanges"],
+  blend: ["opacity", "blendMode", "effects", "exportSettings"],
+  strokes: ["fills", "strokes", "strokeWeight", "strokeAlign", "strokeJoin", "strokeCap", "strokeMiterLimit", "dashPattern", "strokeWeights"],
+  corners: ["cornerRadius", "cornerRadii", "cornerSmoothing"],
+  frame: ["clipsContent", "layoutMode", "layoutWrap", "primaryAxisSizingMode", "counterAxisSizingMode", "primaryAxisAlignItems", "counterAxisAlignItems",
+    "counterAxisAlignContent", "paddingLeft", "paddingRight", "paddingTop", "paddingBottom", "itemSpacing", "counterAxisSpacing", "itemReverseZIndex",
+    "strokesIncludedInLayout", "overflowDirection", "layoutGrids", "gridStyle"],
+};
+SECTIONS.drawn = STYLE_FIELDS.concat(SECTIONS.strokes, ["effects"], SECTIONS.text);
+export function lookOf(q, n, type, parentNode, need) {
+  const want = (s) => !need || SECTIONS[s].some((f) => need.has(f));
   const known = KNOWN_PROPS[type] || {};
   const props = {};
   const put = (k, v) => {
@@ -285,27 +301,29 @@ export function lookOf(q, n, type, parentNode) {
   }
   if (n.visible === false) put("visible", false);
   if (n.locked) put("locked", true);
-  childLayoutProps(q, n, put, parentNode, type !== "INSTANCE" && isAutoLayout(q, n));
+  if (want("child")) childLayoutProps(q, n, put, parentNode, type !== "INSTANCE" && isAutoLayout(q, n));
   if (type === "INSTANCE") return props;
-  const drawn = drawnStyles(q, n);
+  const drawn = want("drawn") ? drawnStyles(q, n) : { n };
   for (const k of STYLE_FIELDS) if (drawn[k] !== undefined) put(k, drawn[k]);
   const d = drawn.n;
   if (type === "SECTION") { put("fills", paintsOf(q, d.fillPaints)); return props; }
   if (type === "SLICE") { put("exportSettings", exportSettingsOf(q, d.exportSettings)); return props; }
-  if (isFin(d.opacity)) put("opacity", r6(Math.max(0, Math.min(1, d.opacity))));
-  put("blendMode", q.en("PixsoNode", "blendMode")(d.blendMode) || "PASS_THROUGH");
-  put("effects", effectsOf(q, d.effects));
-  if ((d.exportSettings || []).length) put("exportSettings", exportSettingsOf(q, d.exportSettings));
+  if (want("blend")) {
+    if (isFin(d.opacity)) put("opacity", r6(Math.max(0, Math.min(1, d.opacity))));
+    put("blendMode", q.en("PixsoNode", "blendMode")(d.blendMode) || "PASS_THROUGH");
+    put("effects", effectsOf(q, d.effects));
+    if ((d.exportSettings || []).length) put("exportSettings", exportSettingsOf(q, d.exportSettings));
+  }
   if (type === "GROUP") return props;
   const sides = RECT_LIKE.has(type);
-  strokeProps(q, d, type, put, { sides });
-  cornerProps(q, d, type, put, { sides });
-  if (type === "FRAME" || type === "COMPONENT") frameLayoutProps(q, d, put, q.childrenOf(d));
+  if (want("strokes")) strokeProps(q, d, type, put, { sides });
+  if (want("corners")) cornerProps(q, d, type, put, { sides });
+  if (type === "FRAME" || type === "COMPONENT") { if (want("frame")) frameLayoutProps(q, d, put, q.childrenOf(d)); }
   else if (type === "ELLIPSE" && d.arcData) {
     const a0 = isFin(d.arcData.startingAngle) ? d.arcData.startingAngle : 0, a1 = isFin(d.arcData.endingAngle) ? d.arcData.endingAngle : a0 + 2 * Math.PI;
     const hole = isFin(d.arcData.innerRadius) ? d.arcData.innerRadius : 0;
     if (!(Math.abs(a1 - a0 - 2 * Math.PI) < 1e-5 && !(hole > 0))) put("arcData", { startingAngle: r6(a0), endingAngle: r6(a1), innerRadius: r6(hole) });
-  } else if (type === "TEXT") textProps(q, d, put);
+  } else if (type === "TEXT" && want("text")) textProps(q, d, put);
   return props;
 }
 
@@ -318,7 +336,13 @@ function readOf(cx) {
   const plan = new Map();
   const walk = (p) => { plan.set(guidStr(p.n.guid), p); for (const k of p.kids || []) walk(k); };
   for (const pg of cx.planned || []) for (const t of pg.tops) walk(t);
-  X = { q, sink, plan, fieldOf: cx.en("ComponentPropRef", "componentPropNodeField"), bases: new Map(), allowed: new Map() };
+  // The context styles are registered through for real: notes at the instance and path being written
+  // (X.where), the translators' counters in the quiet copy. One per read, so styles.mjs builds its
+  // overrideKey index once.
+  const ocx = Object.create(cx);
+  ocx.note = (code, detail) => cx.noteAt(code, { node: X.where.node, path: X.where.path, detail });
+  ocx.stats = q.stats;
+  X = { q, sink, ocx, where: null, plan, fieldOf: cx.en("ComponentPropRef", "componentPropNodeField"), bases: new Map(), allowed: new Map() };
   READS.set(cx, X);
   countNotCarried(cx, X);
   return X;
@@ -598,7 +622,7 @@ export function instanceData(cx, n, i, master, indexOf) {
     for (const k of lookKeys) Cn[k] = spec.fields[k];
     const { F: Fb, features: fb } = baseLook(X, spec.base);
     X.sink.features = [];
-    const Fc = lookOf(q, Cn, spec.base.type, spec.base.parent);
+    const Fc = lookOf(q, Cn, spec.base.type, spec.base.parent, set);
     const fc = X.sink.features;
     X.sink.features = null;
     newFeatures(fb, fc, spec.isRoot ? undefined : spec.path);
@@ -673,10 +697,8 @@ export function instanceData(cx, n, i, master, indexOf) {
           const need = STYLE_FIELDS.filter((s) => own(written, s));
           const mini = { guid: composed.guid };
           for (const s of need) for (const k of STYLE_SOURCE[s]) if (composed[k] !== undefined) mini[k] = composed[k];
-          const ocx = Object.create(cx);
-          ocx.note = (code, detail) => cx.noteAt(code, { node: i, path, detail });
-          ocx.stats = q.stats;
-          styleIdx = drawnStyles(ocx, mini);
+          X.where = { node: i, path };
+          styleIdx = drawnStyles(X.ocx, mini);
         }
         if (styleIdx[f] !== undefined) o[f] = styleIdx[f];
         continue;
@@ -725,7 +747,7 @@ export function instanceData(cx, n, i, master, indexOf) {
   if (OWN_SOURCE.some((k) => n[k] !== undefined)) {
     const ownNode = Object.assign({}, rootComposed);
     for (const k of OWN_SOURCE) if (n[k] !== undefined) ownNode[k] = n[k];
-    const Fo = lookOf(q, ownNode, "COMPONENT", null);
+    const Fo = lookOf(q, ownNode, "COMPONENT", null, OWN_SET);
     const Fr = rootComposed === baseRoot.node ? baseLook(X, baseRoot).F : lookOf(q, rootComposed, "COMPONENT", null);
     const diffs = OWN_FIGMA.filter((f) => canon(pv(Fo, f) === undefined ? null : pv(Fo, f)) !== canon(pv(Fr, f) === undefined ? null : pv(Fr, f)));
     if (diffs.length) {
