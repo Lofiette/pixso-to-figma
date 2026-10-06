@@ -34,6 +34,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { performance } from "node:perf_hooks";
+import { VERSION as IR_VERSION } from "./ir/schema.mjs";
 import { buildPlugin, generatePlugin, forbiddenIn, DIST_DIR } from "./build-plugin.mjs";
 import { startJobServer, newSecrets, JOB_KINDS, IMAGE_TRANSPORTS as IR_TRANSPORTS } from "./jobserver.mjs";
 import { p4Images } from "./plugin-probe.mjs";
@@ -353,7 +354,7 @@ function bareHost(opts) {
 
 // A valid task of the IR path (tools/ir/task.mjs): the fonts preflight, the smallest there is.
 const FONTS_TASK = () => ({ format: "pix2fig.task", version: 1, op: "fonts", runId: "0123456789abcdef", taskNo: 1, of: 1,
-  snapshot: "pix:" + "0".repeat(62) + "a1", irVersion: 2,
+  snapshot: "pix:" + "0".repeat(62) + "a1", irVersion: IR_VERSION,
   settings: { textFit: "widen", layoutOrder: "creation", textRead: "measure", fallbackFont: { family: "Inter", style: "Regular" } },
   page: null, roots: [], nodes: [], notes: [], values: {}, fonts: [{ family: "Inter", style: "Regular" }], images: [], expect: null });
 

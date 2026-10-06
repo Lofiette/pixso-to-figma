@@ -117,7 +117,7 @@
 // codes      the task's (read-stage) notes, the build report's codes, and the judge's own:
 //   ROOT_NOT_FOUND per root not found, VECTOR_GEOMETRY_DIFFERS, TEXT_LINES_DIFFER.
 import { CODE, VECTOR_TYPES, ORACLE_CLASSES, BOOLEAN_ORACLE_CLASSES } from "./schema.mjs";
-import { BUILT_TYPE } from "./task.mjs";
+import { BUILT_TYPE, taskType } from "./task.mjs";
 import { geometryBounds, pathBounds, unionBounds, inBox } from "./pathgeom.mjs";
 import { drawnBox, kidsIndex } from "./operands.mjs";
 
@@ -301,7 +301,8 @@ export function judgeTask(args) {
   for (const t of recs) {
     if (!isObj(t) || !Number.isInteger(t.i)) throw argError("a task record has no index");
     const r = ir.nodes[t.i];
-    if (!isObj(r) || r.guid !== t.guid || r.type !== t.type) throw argError("task record " + t.i + " is not the IR record of that index");
+    // The task writes a record's type as taskType() of the IR's (docs/M2A.md D13: a set as its FRAME).
+    if (!isObj(r) || r.guid !== t.guid || taskType(r.type) !== t.type) throw argError("task record " + t.i + " is not the IR record of that index");
     rec.set(t.i, t);
     irRec.set(t.i, r);
   }

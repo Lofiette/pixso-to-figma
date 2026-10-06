@@ -1,9 +1,10 @@
-# The intermediate representation (IR), version 2
+# The intermediate representation (IR), version 3
 
-Status: **M1, format of record.** Specified from `docs/REWRITE.md` §4–§8 and, for version 2, `docs/M1.md` §2 and
-§5.1. The validator is `tools/ir/schema.mjs` with the per-type prop tables of `tools/ir/props.mjs`, called through
-`tools/ir/validate.mjs`; its tests are `tools/test-ir.mjs`, and the complete example at the end of this file is one of
-those tests. Every value in this document is synthetic. §15 lists what changed from version 1.
+Status: **M1 and M2a, format of record.** Specified from `docs/REWRITE.md` §4–§8, for version 2 from `docs/M1.md` §2
+and §5.1, and for version 3 from `docs/M2A.md` §2 and §5.1. The validator is `tools/ir/schema.mjs` with the per-type
+prop tables of `tools/ir/props.mjs`, called through `tools/ir/validate.mjs`; its tests are `tools/test-ir.mjs`, and
+the complete example at the end of this file is one of those tests. Every value in this document is synthetic. §15
+lists what changed in versions 2 and 3.
 
 ## 1. What it is
 
@@ -72,8 +73,8 @@ IR is a documented format and not the channel. Tasks (at most 4 MB each) are cut
 - **Closed records.** Every record has a fixed set of keys, and an unknown key is an error, so a misspelt key cannot
   be silently ignored. Since version 2 `props` are closed too: `KNOWN_PROPS` in `tools/ir/props.mjs` lists, per node
   type, the props it may carry and the kind of each (`num`, `int`, `bool`, `str`, `enum:A|B|…`, `value`, `style`, or
-  `own` for an IR-own prop with its own rule here), and text range `fields` are closed to `RANGE_FIELDS`. Override
-  `fields` stay an open set of Figma property names until M2a.
+  `own` for an IR-own prop with its own rule here), and text range `fields` are closed to `RANGE_FIELDS`. Since
+  version 3 override `fields` are closed too, to `OVERRIDE_FIELDS` and to their target's props (§9).
 
 ## 3. Top level
 
@@ -97,7 +98,7 @@ Every table may be empty; `header` is required.
 | key | value |
 |---|---|
 | `format` | always `"pix2fig.ir"` |
-| `version` | `2` |
+| `version` | `3` |
 | `source` | the source snapshot |
 | `scope` | what was read |
 | `capabilities` | what the source provides |
@@ -148,8 +149,22 @@ it, and records the outcome in its own state (`docs/M1.md` D9, SOURCE_IDENTITY_M
 | `booleans` | `auto`, `native`, `flatten` | `--booleans` | `auto` (`docs/M1.md` D5) |
 | `spaceEvenlySingle` | `between`, `center` | `--space-evenly-single` | `between` until P18 (`docs/M1.md` D14) |
 | `kitmaps` | `"default"` (the per-user folder) or the directory given | `--kitmaps` | `"default"` (decision 4) |
+| `variantSets` | `parse`, `frames` | `--variant-sets` | `parse` (`docs/M2A.md` D2, D13; `frames` is M1's D7) |
+| `variantGrammar` | `names`, `vocabulary` | `--variant-grammar` | `names` (D2) |
+| `axisOrder` | `vocabulary`, `names` | `--axis-order` | `vocabulary` (D2) |
+| `swapDangling` | `skip`, `strict` | `--swap-dangling` | `skip` (D5, D7 rule A) |
+| `swapReset` | `on`, `off` | `--swap-reset` | `on` (D7 rule B) |
+| `swapFallback` | `derived`, `off` | `--swap-fallback` | `derived` (D7 rule C) |
+| `swapDefault` | `layer`, `definition` | `--swap-default` | `layer` (D5) |
+| `rejectedProps` | `copy`, `none` | `--rejected-props` | `copy` (D3) |
+| `defaultAssignments` | `keep`, `drop` | `--default-assignments` | `keep` (D6) |
+| `overrideMerge` | `last`, `first`, `outer` | `--override-merge` | `outer`, from part C's measurement (D8, D17) |
+| `echo` | `drop`, `keep` | `--echo` | `drop` (D9) |
+| `instanceOwn` | `overrides`, `own` | `--instance-own` | `overrides` (D11) |
+| `derivedGeometry` | `changed`, `all`, `none` | `--derived-geometry` | `changed` (D10) |
 
-`SETTING_DEFAULTS` in the schema holds the defaults of this table.
+`SETTING_DEFAULTS` in the schema holds the defaults of this table, and `M2A_SETTINGS` lists the thirteen keys version
+3 added (the D-numbers are `docs/M2A.md`'s).
 
 ## 5. Pages
 
@@ -238,8 +253,12 @@ Version 2's decisions about what a record is (`docs/M1.md` §2):
   `VECTOR` record from its stored fill geometry with the boolean's own paints, its operands are not carried, and a
   `BOOLEAN_FLATTENED` note gives the operation and the folded count. `native` keeps every boolean, `flatten` none. A
   boolean with no operand and no geometry is not carried (`GEOMETRY_INVALID`).
-- **State groups (D7)** are `FRAME` records holding standalone `COMPONENT` records (`set: null`, no properties),
-  until M2a parses variants.
+- **State groups (D7; version 3: `docs/M2A.md` D2).** A state group whose member names parse into one set of axes
+  is a `COMPONENT_SET` record with a `sets` entry, its props those of the `FRAME` it was in version 2 (auto layout
+  included). One that does not parse stays a `FRAME` record holding standalone `COMPONENT` records, with a
+  `VARIANT_SET_REJECTED` note on it. Under `variantSets: frames` every state group is the version 2 `FRAME` with
+  standalone components and no note (M1's D7). The planner writes a `COMPONENT_SET` record into tasks as a `FRAME`
+  until M2b builds sets (`taskType()` in `tools/ir/task.mjs`, `docs/M2A.md` D13).
 - **Side strokes (D15).** No `border*Weight` field means four sides at `strokeWeight`; any field present means a
   missing side is 0. Where the stroke-area path shows which sides Pixso draws, the reader writes `oracleSides`, and
   where the rule and the path disagree the IR follows the path and notes `SIDE_RULE_UNPROVEN`. A stroke whose every
@@ -261,7 +280,7 @@ The IR's own `props`:
 | `lines` | the number of lines Pixso drew, from its stored baselines (decision 9); a text with none has no `lines` and a `TEXT_LINES_UNKNOWN` note |
 | `inkBounds` | `[x, y, width, height]` of the rendered ink, in the node's own frame (capability `inkBounds`) |
 | `fillStyle`, `strokeStyle`, `textStyle`, `effectStyle`, `gridStyle` | index into `styles`, of type PAINT, PAINT, TEXT, EFFECT and GRID |
-| `componentPropertyReferences` | `{ characters \| visible \| mainComponent: property id }`, bound to TEXT, BOOLEAN and INSTANCE_SWAP properties of the enclosing definition's family |
+| `componentPropertyReferences` | `{ characters \| visible \| mainComponent: property id }`, bound to TEXT, BOOLEAN and INSTANCE_SWAP properties of the enclosing definition's family, always by the **root** definition's id: a Pixso binding through a variant-local alias is written with the id its alias chain ends in (`docs/M2A.md` D3, D4), and a binding that cannot be carried is a `PROPERTY_REF_DROPPED` note |
 
 A node that references a fill, stroke or effect style draws the **style's** current value: Pixso keeps the node's own
 paints as a cache that goes stale when the style changes (a render pair of P, 2026-10-05: a section whose own fill is
@@ -294,7 +313,8 @@ definition ids repeat across owners (REWRITE.md §3).
 
 A state group whose member names do not parse (a duplicate coordinate, a duplicate axis, a different axis count) is
 not a set: its record stays a `FRAME`, its members are standalone components, and a `VARIANT_SET_REJECTED` note
-names it.
+names its record by `node`, the detail starting with the class (§13). Under `rejectedProps: copy` each member
+declares the state group's roots as its own family's (same ids); under `none` it declares none (`docs/M2A.md` D3).
 
 **`components`**: one entry per `COMPONENT` record.
 
@@ -309,11 +329,16 @@ names it.
 | `ancestorPath` | deleted masters only: the names of the old path, from `ancestorPathBeforeDeletion` |
 
 A member declares no properties: type, name and default always come from the root definition on the set, never from
-the variant-local aliases newer Pixso writes.
+the variant-local aliases newer Pixso writes. A root that Pixso keeps on a member of an accepted set is declared on
+the set (`docs/M2A.md` D3, "member-owned roots").
 
 **Property definition**: `{ id, name, type, default, preferredValues? }`. `type` is `BOOLEAN`, `TEXT` or
-`INSTANCE_SWAP`; variants are axes, not a property type. `default` is a boolean, a string or a master reference
-(§9) respectively; `preferredValues` (INSTANCE_SWAP only) is an array of master references.
+`INSTANCE_SWAP`; variants are axes, not a property type. A family declares its **roots** only, in Pixso's
+`sortPosition` order, then by id. `default` is a boolean, a string or a master reference (§9) respectively; an
+INSTANCE_SWAP default must resolve. `preferredValues` (INSTANCE_SWAP only, version 3) is an array of key references
+in Figma's own shape, `{ type, componentKey, guid? }`: `type` is `COMPONENT` or `COMPONENT_SET`, `componentKey` is 40
+lowercase hex, and `guid`, when the key's copy is in this IR, is the guid of that `COMPONENT` or `COMPONENT_SET`
+record. A key whose copy is not in the file is kept by key alone, for M3's kit map, and is never refused.
 
 **Library identity**: `{ publishFile, publishID?, componentKey?, sharedSymbolVersion? }`.
 - `publishFile` is the library's Pixso file key and is required.
@@ -331,10 +356,12 @@ An `INSTANCE` record's `instance`:
 | key | |
 |---|---|
 | `master` | the master reference |
-| `properties` | `[{ family, id, value }]`: assignments to the master's family |
-| `overrides` | `[{ path, fields?, swap?, properties? }]` |
+| `properties` | `[{ family, id, value }]`: assignments to the master's family, by root id |
+| `overrides` | `[{ path, at?, fields?, swap?, properties? }]`, below |
 | `overrideBasis` | `"authored"` or `"resolved"`; required when there are overrides, and needs the matching capability |
-| `derived` | `[{ path, size: [w, h], transform: [a, b, tx, c, d, ty], fillGeometry?, strokeGeometry? }]`: Pixso's resolved geometry of each sublayer (capability `derivedBoxes`); the verifier's oracle, and the geometry and vector paths of any fallback frame (REWRITE.md §3). `fillGeometry` and `strokeGeometry` are `values` indexes of lists, as on nodes, and are written when the source stores paths for that sublayer |
+| `derived` | `[{ path, at?, size?, transform?, fillGeometry?, strokeGeometry?, lines?, oracleSides? }]`: Pixso's resolved geometry of each sublayer (capability `derivedBoxes`); the verifier's oracle, and the geometry and vector paths of any fallback frame (REWRITE.md §3). Below |
+| `exposed` | `true` only, for a nested instance inside a `COMPONENT` record whose properties its instances expose (Pixso's `propsAreBubbled`, Figma's `isExposedInstance`; version 3) |
+| `scale` | the uniform scale factor when it is not 1: a finite number above 0 (Pixso's `uniformScaleFactor`; version 3) |
 
 **Master reference**: `{ guid?, library? }`. It resolves:
 1. to a definition in this IR, when `guid` is the guid of a `COMPONENT` record; or else
@@ -342,23 +369,56 @@ An `INSTANCE` record's `instance`:
    `componentKey`), which the kit map resolves later.
 
 Anything else is a dangling reference and the IR is refused. The same rule applies to swap targets and to
-INSTANCE_SWAP values and defaults. An instance may not sit inside its own master.
+INSTANCE_SWAP values and defaults (preferred values are key references, §8). An instance may not sit inside its own
+master.
 
 **Property values** are assigned to the master's family. An assignment whose definition cannot be reached from the
 instance's current family is stale: the reader drops it and writes a `STALE_ASSIGNMENT` note, and never matches it by
 name.
 
-**Overrides** are the live ones only:
-- `path` is a guidPath with swaps resolved, and its first guid is a layer inside the master;
-- `fields` holds Figma properties, interned like node props;
-- `swap` is a master reference;
-- `properties` holds assignments to a nested instance.
+**Overrides** are the live ones only (version 3: `docs/M2A.md` D7-D11, D17):
+- `path` is a guidPath of **local guids** with swaps resolved (outer swaps win), and its first guid is a layer inside
+  the master. `path` `[]` is the instance itself: at most one such entry, with no `at`, no `swap` (the master is
+  `master`) and no `properties` (those are the instance's `properties`); its `fields` are the instance's **look**
+  only, `ROOT_OVERRIDE_FIELDS` in `props.mjs`: what a `COMPONENT` has and an `INSTANCE` record does not. The box,
+  child layout, `visible`, `locked` and `name` are the record's own props.
+- `at` is the IR record index of each path element, as many as the path has: `nodes[at[k]].guid` is `path[k]`,
+  `at[0]` lies inside the master, every element but the last is an `INSTANCE` record, and every later element lies
+  inside a `COMPONENT` record. It is required when the master is a record in this IR and every element has a record;
+  a path through an element with no record (a folded boolean operand) has none, so neither the planner nor the plugin
+  ever resolves a path. Only a derived entry may start at a layer with no record (it is then kept without `at`); an
+  override's first element is always a record of the master, because a field on a layer that is not carried is
+  dropped (`OVERRIDE_FIELD_DROPPED` `layer-not-carried`).
+- `fields` holds Figma properties, interned like node props, closed to `OVERRIDE_FIELDS` (`props.mjs`) and, where `at`
+  names the target, to the target type's props plus `name`; an `INSTANCE` target takes a `COMPONENT`'s props (its
+  look is its master root's). A `textRanges` field is checked as on a record, against the override's own
+  `characters` or the target's. Each field has a class in `OVERRIDE_FIELD_CLASS`: `applies` (P13), `refused` (size,
+  position, rotation, constraints: kept, and counted `OVERRIDE_FIELD_UNSUPPORTED` by the planner, decision 1) or
+  `unprobed` (until M2b's P13b).
+- `swap` is a master reference. Besides the swaps of live entries, the reader writes a **pinned** swap, to the
+  symbol Pixso drew, on a nested instance whose symbol the kept data would not give: a hop rule C forced whose
+  ignored assignment sits on an instance inside a master (kept there, where Pixso applied it), and a swap Pixso
+  drew from an assignment the IR drops (`docs/M2A.md` D7). A pinned swap joins the live entry of its path, or is an
+  override of its own with `path` and `at` only;
+- `properties` holds assignments to the nested instance the path ends in: each names a family in this IR, and that
+  of the entry's `swap` when the swap is to a record here.
 
-Before writing, the reader drops two kinds of entry. An entry whose path is absent from `derivedSymbolData` is
-provably stale (`OVERRIDE_STALE`). A field that only echoes the master's value is dropped too (`OVERRIDE_ECHO`). Size,
-position, rotation and constraint fields stay in the IR even though Figma cannot apply them to instance sublayers
-(REWRITE.md §9, P13): the planner counts them as `OVERRIDE_FIELD_UNSUPPORTED` and applies decision 1. One entry per
-path.
+Before writing, the reader drops: an entry whose path is absent from `derivedSymbolData`, which is provably stale
+(`OVERRIDE_STALE`, class `not-derived`; or `unresolved`, in it but not resolving); a field that only echoes the value
+the target already has (`OVERRIDE_ECHO`, one note per instance); and a field it does not carry (`OVERRIDE_FIELD_DROPPED`,
+one note per instance and class), including one whose only effect is to remove a prop the target has (a style
+detached or naming none, `maxLines` cleared) when no written field carries the removal (`no-equivalent`). Entries of one path are merged into one (`OVERRIDE_PATHS_MERGED`); an assignment
+that cannot be reached is a `STALE_ASSIGNMENT`, and a swap value naming nothing the IR can reference a
+`SWAP_VALUE_DANGLING`. Size, position, rotation and constraint fields stay in the IR even though Figma cannot apply
+them to instance sublayers (REWRITE.md §9, P13). One entry per path. A note about an entry names the instance by
+`node` and the entry by `path`, `[]` for the instance's own override.
+
+**Derived entries** are Pixso's resolved boxes as stored, **sparse**: `size` and `transform` only where Pixso stores
+them (absent means the master layer's, I), `lines` from the sublayer's stored baselines, `oracleSides` from its
+stroke-area path (the side oracle of D15, inside instances), `fillGeometry` and `strokeGeometry` (values indexes of
+lists, as on nodes) under `derivedGeometry` (`changed`: only where they differ from the target layer's own). `path`
+is never `[]`, `at` is as on overrides, every entry carries at least one key besides `path` and `at`, and there is
+one entry per path.
 
 ## 10. Styles
 
@@ -398,11 +458,13 @@ values) is listed, because every font is loaded before the first text write.
 ## 13. Notes and the reason-code vocabulary
 
 `notes`: `[{ code, node?, guid?, path?, detail? }]`. `node` is a record index; `guid` names a source node with no
-record (a rejected set, an unsupported node); `path` is a guidPath inside an instance; `detail` is free text, except
-that a `VECTOR_ORACLE_DIFFERS` detail starts with its class (`ORACLE_CLASSES` in the schema), optionally followed by
-`: ` and text, and names a network-built `VECTOR` record; the class `boolean-operands` (`BOOLEAN_ORACLE_CLASSES`)
-names a `BOOLEAN_OPERATION` record with its stored result instead. An IR's notes carry **read-stage codes only**; the other
-stages go to the run's own reports.
+record (an unsupported node); `path` is a guidPath inside an instance (`[]` for the instance's own override, the entry
+with `path` `[]`), and a note with a `path` names that `INSTANCE` record by `node`; `detail` is free text, except that a code with classes (`NOTE_CLASSES` in the schema) has a detail
+that starts with one of its classes, optionally followed by `: ` and text. The classes are listed in the table below,
+in the order the reader decides in. A `VECTOR_ORACLE_DIFFERS` note names a network-built `VECTOR` record (its
+classes `ORACLE_CLASSES`), except that the class `boolean-operands` (`BOOLEAN_ORACLE_CLASSES`) names a
+`BOOLEAN_OPERATION` record with its stored result instead; a `VARIANT_SET_REJECTED` note names the state group's
+`FRAME` record. An IR's notes carry **read-stage codes only**; the other stages go to the run's own reports.
 
 Code writes a code as `CODE.X` (the frozen map in the schema), never as a quoted string, through one helper per
 side that throws on an unknown code: the reader's `note()`, the plugin's `ctx.code()` and the runner's `count()`.
@@ -423,16 +485,21 @@ from the preflight and the kit-map resolution, and *build* codes come from Figma
 | `PIXSO_UNAVAILABLE` | run | the Pixso channel's circuit breaker: the object whose call did not reach Pixso fails, and if Pixso is not back within 10 minutes the run stops and the rest are skipped; a re-run resumes | named here (§6) |
 | `EXTRACT_FAILED` | run | Pixso answered and the object's extraction still failed; the whole error is in its `extract-error.log` | named here (§6) |
 | `NO_ID` | run | reading the file gave the object no id, so it cannot be extracted; it is skipped and counted as a loss | named here (§6) |
-| `VARIANT_SET_REJECTED` | read | the member names of a state group do not parse into one set of axes; the members become standalone components | §3 |
-| `STALE_ASSIGNMENT` | read | a property assignment unreachable from the instance's current family; dropped | §3 |
+| `VARIANT_SET_REJECTED` | read | the member names of a state group do not parse into one set of axes; the record stays a FRAME and the members become standalone components. Classes: `no-equals`, `duplicate-axis`, `axis-count`, `duplicate-coordinate`, `vocabulary`, `empty`, `not-symbol` | §3 |
+| `STALE_ASSIGNMENT` | read | a property assignment unreachable from the instance's current family; dropped, one note per assignment. Classes: `no-definition`, `other-family`, `no-root`, `undeclared`, `nested` (in a live entry, followed by `: ` and the class against the nested instance's family), `ignored` (rule C) | §3 |
 | `STYLE_MISSING_IN_SOURCE` | read | a style reference that resolves to no style definition of its kind in the file, or to one with no value there; the node's own values kept, unbound (§7) | §3 |
 | `STYLE_VALUE_DIFFERS` | read | the node's own value differs from its resolved style's by more than 1/255 per channel or unit; Pixso draws the style's, so the style's value is written and the style bound (§7) | §3 |
 | `VECTOR_FROM_GEOMETRY` | read | fill geometry but no region: built from the stored fill and stroke geometry | §3 |
-| `OVERRIDE_STALE` | read | an override entry whose path is absent from `derivedSymbolData`; dropped | named here (§3) |
-| `OVERRIDE_ECHO` | read | an override field equal to the master's value; dropped | named here (§3, P9b) |
+| `OVERRIDE_STALE` | read | an override entry whose path is absent from `derivedSymbolData`; dropped, one note per path. Classes: `not-derived`, `unresolved` (in it, but not resolving) | named here (§3) |
+| `OVERRIDE_ECHO` | read | override fields equal to the value the target has without them; dropped, one note per instance with the count and the field names | named here (§3, P9b) |
+| `PROPERTY_REF_DROPPED` | read | a layer's binding to a component property that is not carried; never matched by name; one note per record and class, with the count. Classes: `fill-style`, `outside-definition`, `no-definition`, `other-family`, `no-root`, `undeclared`, `type-mismatch` | named here (§3) |
+| `SWAP_VALUE_DANGLING` | read | an INSTANCE_SWAP value or default, or a swap target, naming no component the IR can reference; dropped. Classes: `assignment`, `default`, `swap` (a detail `: not carried` for a stored symbol with no record and no library identity) | named here (§3) |
+| `SWAP_ASSIGNMENT_IGNORED` | read | a swap assignment Pixso's derived data shows was not applied (rule C); the declared symbol is used and the assignment dropped, or, when an instance inside a master holds it, the hop pinned with a swap override; one note per instance with the counts | named here (§3) |
+| `OVERRIDE_PATHS_MERGED` | read | override entries of one path merged into one (`overrideMerge`); one note per instance with the conflicting field count | named here (§3) |
+| `OVERRIDE_FIELD_DROPPED` | read | an override field not carried; one note per instance and class, the detail the class, then `: ` and the fields with counts. Classes: `no-equivalent`, `not-on-type`, `layer-not-carried`, `root-box`, `unknown` | named here (§3) |
 | `NODE_TYPE_UNSUPPORTED` | read | a source node type the IR has no type for; it and its subtree are not carried | named here (§7, §8) |
 | `TEXT_LINES_UNKNOWN` | read | a buildable text with no stored baselines; it has no `lines` | named here (§3) |
-| `SOURCE_FEATURE_UNSUPPORTED` | read | a Pixso feature Figma lacks, named in the detail, which starts with the feature from an open list (CONNECTLINE, LINE with height, SECTION strokes, SECTION corner radius, RIGHT_ANGLE, vibrance, hue filter, dashCap, deformationTransform, fontVariations, GRID, counter alignment <X>, strokeCap <X>, effect <TYPE>, export format <X>, paint type <X>, image paint without an image, text without a font name, inverse winding, open region loop, operand strokes under `--booleans native`, an operand without fill geometry, boolean without stored geometry, built natively, no stored geometry (a STAR or POLYGON), layoutGrids, fontVariantNumeric, fontVariantPosition, OpenType features), optionally followed by `: ` and text; dropped or converted, and counted per feature in `stats.unsupported`. The judge excuses a vector's paths only for the features that change the drawing (`judge.mjs` SFU_GEOMETRY, docs/M1.md §8.3) | named here (§7) |
+| `SOURCE_FEATURE_UNSUPPORTED` | read | a Pixso feature Figma lacks, named in the detail, which starts with the feature from an open list (CONNECTLINE, LINE with height, SECTION strokes, SECTION corner radius, RIGHT_ANGLE, vibrance, hue filter, dashCap, deformationTransform, fontVariations, GRID, counter alignment <X>, strokeCap <X>, effect <TYPE>, export format <X>, paint type <X>, image paint without an image, text without a font name, inverse winding, open region loop, operand strokes under `--booleans native`, an operand without fill geometry, boolean without stored geometry, built natively, no stored geometry (a STAR or POLYGON), layoutGrids, fontVariantNumeric, fontVariantPosition, OpenType features, COLOR property), optionally followed by `: ` and text; dropped or converted, and counted per feature in `stats.unsupported`. The judge excuses a vector's paths only for the features that change the drawing (`judge.mjs` SFU_GEOMETRY, docs/M1.md §8.3) | named here (§7) |
 | `GEOMETRY_INVALID` | read | a NaN size, transform or path, or a boolean with no operand and no geometry; the box comes from the geometry or the children, or the node is not carried | named here (§7) |
 | `IMAGE_HASH_MISMATCH` | read | an archive image entry whose SHA-1 is not its name; treated as missing | named here (§4) |
 | `VECTOR_ORACLE_DIFFERS` | read | the stored network and the stored fill geometry disagree in a pre-registered class (`region-no-fill`, `network-bounds`, `winding`), or a boolean's stored result is out of date against its operands (`boolean-operands`) | named here (§3) |
@@ -494,17 +561,23 @@ at most 200 errors are listed. `validateIR` without the tables throws: a caller 
   a network or on a natively built type; geometry values and networks of the shapes in §6, with closed loops;
 - text: ranges inside `characters`, ascending, not splitting a surrogate pair, with `RANGE_FIELDS` of their kinds;
 - definitions: one entry per component and set record, axes, unique variant coordinates, members as children of
-  their set, properties only on the family root, and property references bound to the right type;
+  their set, properties only on the family root, property references bound to the right type, and preferred values
+  as key references whose `guid` names a record of their type;
 - instances: master references, swaps and INSTANCE_SWAP values resolve; assignments match the master's family and
-  type; the first hop of each override and of each derived box is a layer of the master; one override entry per
-  path; and no instance sits inside its own master;
+  type, and an override's assignments name a family in this IR (its swap's, when the swap is local); the first hop
+  of each override and of each derived box is a layer of the master, and `at`, where required or given, indexes
+  every element as §9 says; override fields are closed to `OVERRIDE_FIELDS` and to the target's props, the
+  instance's own override to its look; one override entry and one derived entry per path, and every derived entry
+  carries something; `exposed` only inside a `COMPONENT` record, `scale` above 0 and not 1; and no instance sits
+  inside its own master;
 - styles: signatures, and identity unique per styleKey;
 - images: every IMAGE paint has a hash and the hash is listed; fonts: every `fontName` is listed;
-- notes: codes from the vocabulary, read-stage only, and the `VECTOR_ORACLE_DIFFERS` class;
+- notes: codes from the vocabulary, read-stage only, the class of every code that has classes, the record a
+  `VECTOR_ORACLE_DIFFERS` or `VARIANT_SET_REJECTED` note names, and the instance a note with a `path` names;
 - capabilities: the content claims nothing the header does not declare.
 
 It does not repeat what the reader computes and tests on its own: variant parsing, swap-aware path resolution beyond
-the first hop, and the stale and echo classification (M2a).
+what `at` states, and the stale and echo classification (`docs/M2A.md`, parts A-C).
 
 ## 15. Changing the format
 
@@ -524,28 +597,49 @@ are closed, a new key changes it too. A change updates this document, `tools/ir/
 - the settings `booleans` and `spaceEvenlySingle`;
 - the codes `TEXT_LINES_UNKNOWN` to `ROOT_NOT_FOUND` in §13; IR notes carry read-stage codes only.
 
+**Version 3** (M2a, `docs/M2A.md` D16), one bump for all of M2a; no version 2 IR or run folder is migrated:
+- the thirteen header settings of §4 (`M2A_SETTINGS`), each required;
+- accepted state groups as `COMPONENT_SET` records with `sets` entries; bindings and assignments by root id;
+- overrides: `at`, the instance's own override with `path` `[]` (its look only), `fields` closed to
+  `OVERRIDE_FIELDS` and to the target's props, `OVERRIDE_FIELD_CLASS`, assignments in an override naming a family in
+  this IR;
+- derived entries: sparse (`size` and `transform` optional), `at`, `lines`, `oracleSides`, one per path, never empty;
+- instance data: `exposed` and `scale`;
+- preferred values as key references `{ type, componentKey, guid? }`;
+- the codes `PROPERTY_REF_DROPPED` to `OVERRIDE_FIELD_DROPPED` in §13, and frozen detail classes (`NOTE_CLASSES`) for
+  them and for `VARIANT_SET_REJECTED`, `STALE_ASSIGNMENT` and `OVERRIDE_STALE`; a note with a `path` names its
+  instance by `node`.
+
 ## 16. Complete example
 
 A design file with one page and an internal canvas. The canvas holds a library variant set copied from a library
-(two members, a TEXT property) and a soft-deleted own component with a BOOLEAN property. The page, with a white
-background, holds an instance of one member with a property value, a fill override and its derived box, a rectangle
-whose image is missing from the archive and whose border Pixso draws on the bottom side only, a text bound to a library
-paint style with one coloured range, and a vector built from its stored geometry. Three notes record what the reader
-dropped or decided. `tools/test-ir.mjs` validates this block.
+(two members, a TEXT property; an accepted state group, so a `COMPONENT_SET` with one axis) and a soft-deleted own
+component with a BOOLEAN property and an INSTANCE_SWAP property whose preferred values are key references, one to a
+library copy in this file (with its `guid`) and one to a set that is not (by key alone). Each member's label is bound
+to the root's id, although Pixso bound the Hover member's label through a variant-local alias (`docs/M2A.md` D3).
+The page, with a white background, holds an instance of one member with a property value, its own override (path
+`[]`: its opacity), a fill override on the label with `at`, and a sparse derived entry for the label (its size and
+line count only: its transform is the master layer's); a rectangle whose image is missing from the archive and
+whose border Pixso draws on the bottom side only; a text bound to a library paint style with one coloured range; and
+a vector built from its stored geometry. Five notes record what the reader dropped or decided, each class-bearing
+one starting with its class. `tools/test-ir.mjs` validates this block.
 
 <!-- ir-example: valid -->
 ```json
 {
   "header": {
     "format": "pix2fig.ir",
-    "version": 2,
+    "version": 3,
     "source": { "kind": "pix", "sha256": "00000000000000000000000000000000000000000000000000000000000000a1", "fileKey": null, "documentName": "Synthetic example" },
     "scope": { "kind": "file" },
     "capabilities": { "authoredOverrides": true, "resolvedOverrides": false, "overrideKeys": true, "publishIds": true,
       "symbolVersions": true, "derivedBoxes": true, "inkBounds": false, "renders": false },
     "settings": { "mode": "design", "overrides": "fidelity", "drift": "link", "deleted": "publish",
       "resync": "pixso-unless-edited", "textFit": "widen", "booleans": "auto", "spaceEvenlySingle": "between",
-      "kitmaps": "default" }
+      "variantSets": "parse", "variantGrammar": "names", "axisOrder": "vocabulary", "swapDangling": "skip",
+      "swapReset": "on", "swapFallback": "derived", "swapDefault": "layer", "rejectedProps": "copy",
+      "defaultAssignments": "keep", "overrideMerge": "last", "echo": "drop", "instanceOwn": "overrides",
+      "derivedGeometry": "changed", "kitmaps": "default" }
   },
   "pages": [
     { "guid": "0:1", "name": "Page 1", "internal": false, "background": 0 },
@@ -571,9 +665,9 @@ dropped or decided. `tools/test-ir.mjs` validates this block.
         "master": { "guid": "2:23", "library": { "publishFile": "SyntheticLibKey0000002", "publishID": "5:23",
           "componentKey": "c0ffee0000000000000000000000000000000002", "sharedSymbolVersion": "4" } },
         "properties": [{ "family": "2:20", "id": "Label#0:1", "value": "Buy" }],
-        "overrides": [{ "path": ["2:24"], "fields": { "fills": 1 } }],
+        "overrides": [{ "path": ["2:24"], "at": [8], "fields": { "fills": 1 } }, { "path": [], "fields": { "opacity": 0.5 } }],
         "overrideBasis": "authored",
-        "derived": [{ "path": ["2:24"], "size": [88, 20], "transform": [1, 0, 16, 0, 1, 10] }]
+        "derived": [{ "path": ["2:24"], "at": [8], "size": [88, 20], "lines": 1 }]
       } },
     { "parent": 0, "guid": "1:12", "type": "RECTANGLE", "name": "Photo",
       "props": { "relativeTransform": [1, 0, 16, 0, 1, 72], "width": 100, "height": 80, "fills": 2, "strokes": 4,
@@ -627,7 +721,10 @@ dropped or decided. `tools/test-ir.mjs` validates this block.
     { "node": 7, "set": 0, "variant": { "State": "Hover" },
       "library": { "publishFile": "SyntheticLibKey0000002", "publishID": "5:23",
         "componentKey": "c0ffee0000000000000000000000000000000002", "sharedSymbolVersion": "4" } },
-    { "node": 9, "set": null, "properties": [{ "id": "Dot#0:2", "name": "Dot", "type": "BOOLEAN", "default": true }],
+    { "node": 9, "set": null, "properties": [{ "id": "Dot#0:2", "name": "Dot", "type": "BOOLEAN", "default": true },
+        { "id": "Icon#0:3", "name": "Icon", "type": "INSTANCE_SWAP", "default": { "guid": "2:21" },
+          "preferredValues": [{ "type": "COMPONENT", "componentKey": "c0ffee0000000000000000000000000000000002", "guid": "2:23" },
+            { "type": "COMPONENT_SET", "componentKey": "c0ffee0000000000000000000000000000000003" }] }],
       "deleted": true, "ancestorPath": ["Old page", "Badges"] }
   ],
   "styles": [
@@ -637,9 +734,11 @@ dropped or decided. `tools/test-ir.mjs` validates this block.
   "images": [{ "hash": "da7a000000000000000000000000000000000001", "present": false, "format": "png" }],
   "fonts": [{ "family": "Inter", "style": "Regular" }],
   "notes": [
-    { "code": "STALE_ASSIGNMENT", "node": 1, "detail": "an assignment to a property of another family" },
-    { "code": "OVERRIDE_STALE", "node": 1, "path": ["2:99"], "detail": "path absent from derivedSymbolData" },
-    { "code": "VECTOR_FROM_GEOMETRY", "node": 11, "detail": "a network with no region, built from its stored geometry" }
+    { "code": "STALE_ASSIGNMENT", "node": 1, "detail": "other-family: an assignment to a property of another family" },
+    { "code": "OVERRIDE_STALE", "node": 1, "path": ["2:99"], "detail": "not-derived: path absent from derivedSymbolData" },
+    { "code": "VECTOR_FROM_GEOMETRY", "node": 11, "detail": "a network with no region, built from its stored geometry" },
+    { "code": "OVERRIDE_ECHO", "node": 1, "detail": "1 field: fills" },
+    { "code": "OVERRIDE_FIELD_DROPPED", "node": 1, "detail": "no-equivalent: pluginData 1" }
   ]
 }
 ```

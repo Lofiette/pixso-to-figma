@@ -6,6 +6,13 @@
 // unsupported type, a degenerate box or boolean, an operand folded into a flattened boolean, an
 // instance whose master cannot be named, or a node outside the chosen scope. emit() then writes the
 // records parent-first, siblings in position order, and their props.
+//
+// The M2a seam (docs/M2A.md §5.3), in emit(): a record's IR type is the family index's recordType()
+// of its planned type (an accepted state group's FRAME becomes a COMPONENT_SET), while its props and
+// its meta.stateGroup are computed for the planned type, so a set keeps its FRAME's props, auto layout
+// included (R2). Each record's componentPropertyReferences are part B's bindingsOf(); a COMPONENT_SET
+// record gets a `sets` entry (components.mjs setEntry) and its members name it (componentEntry). An
+// INSTANCE record gets { master } here; its full data is written by the instance pass in index.mjs.
 import { CODE } from "../../ir/schema.mjs";
 import { KNOWN_PROPS, DEFAULTS, NEVER_OMIT } from "../../ir/props.mjs";
 import { canonicalJSON } from "../../ir/schema.mjs";
@@ -18,7 +25,8 @@ import { frameLayoutProps, childLayoutProps, isAutoLayout } from "./layout.mjs";
 import { textProps, checkTextData } from "./text.mjs";
 import { vectorProps, geometryOf, geometryBox, networkToIR, networkBox } from "./vector.mjs";
 import { booleanClass, classBReason, flattens } from "./booleans.mjs";
-import { componentEntry, masterRef } from "./components.mjs";
+import { componentEntry, masterRef, setEntry } from "./components.mjs";
+import { bindingsOf } from "./properties.mjs";
 import { drawnStyles } from "./styles.mjs";
 
 const NEVER = new Set(NEVER_OMIT);
@@ -168,14 +176,18 @@ export function dropUnresolved(cx, planned) {
 
 // ---------- phase 2: records ----------
 export function emit(cx, planned, out) {
-  const { records, meta, components } = out;
+  const { records, meta, components, sets } = out;
+  if (!cx.setIndex) cx.setIndex = new Map();   // state group guid -> index into sets
   const B = cx.stats.booleans;
   const one = (p, parent, pageIndex, parentNode, internal) => {
     const n = p.n, i = records.length;
     const rec = { parent };
     if (parent === -1) rec.page = pageIndex;
     rec.guid = guidStr(n.guid);
-    rec.type = p.type;
+    // The family index decides a state group's type (docs/M2A.md D2); everything below that computes
+    // props or populations uses the planned type p.type, so a COMPONENT_SET is its planned FRAME there.
+    const type = cx.families ? cx.families.recordType(n, p.type) : p.type;
+    rec.type = type;
     rec.name = typeof n.name === "string" ? n.name : "";
     rec.props = {};
     records.push(rec);
@@ -186,8 +198,11 @@ export function emit(cx, planned, out) {
     // placeholder draws nothing in M1, so an INSTANCE resolves none.
     const drawn = p.type === "INSTANCE" ? { n } : drawnStyles(cx, n);
     propsOf(cx, p, rec, parentNode, internal, drawn);
-    if (p.type === "COMPONENT") components.push(componentEntry(cx, i, n, internal));
-    if (p.type === "INSTANCE") rec.instance = { master: p.master };
+    const refs = bindingsOf(cx, n, i);
+    if (refs) rec.props.componentPropertyReferences = refs;
+    if (type === "COMPONENT_SET") { cx.setIndex.set(rec.guid, sets.length); sets.push(setEntry(cx, i, n)); }
+    if (type === "COMPONENT") components.push(componentEntry(cx, i, n, internal));
+    if (type === "INSTANCE") rec.instance = { master: p.master };
     if (p.pix === "BOOLEAN_OPERATION") { if (p.flatten) B.flattened++; else if (p.type === "BOOLEAN_OPERATION") B.native++; }
     if (p.flatten) B.foldedNodes += p.folded;
     meta[i].lostBorder = isLostBorder(cx, drawn.n, p.pix);

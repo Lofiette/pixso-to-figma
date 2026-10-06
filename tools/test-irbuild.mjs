@@ -90,7 +90,7 @@ function mkTask(o) {
   const roots = o.roots || nodes.filter((n) => !inTask.has(n.parent)).map((n) => ({ i: n.i, attachTo: n.parent === -1 || (page && page.service) ? "page" : { i: n.parent, guid: "1:" + (G + n.parent) }, place: null }));
   const placeholders = nodes.filter((n) => n.type === "INSTANCE").length;
   const op = o.op || "build";
-  return { format: "pix2fig.task", version: 1, op, runId: o.runId || RUN, taskNo: o.taskNo || 1, of: o.of || 9, snapshot: o.snapshot || SNAP, irVersion: 2,
+  return { format: "pix2fig.task", version: 1, op, runId: o.runId || RUN, taskNo: o.taskNo || 1, of: o.of || 9, snapshot: o.snapshot || SNAP, irVersion: schema.VERSION,
     settings: Object.assign(SETTINGS(), o.settings || {}), page, roots, nodes, notes: o.notes || [], values, fonts: o.fonts || fonts,
     images: o.images || [], expect: op === "build" || op === "verify" ? { count: nodes.length, nonInstance: nodes.length - placeholders, placeholders } : null };
 }
@@ -236,7 +236,7 @@ const mixedNodes = () => [
   const cmp = findTree(tr, ctx.S.nodes["12"]);
   check(cmp.type === "COMPONENT" && (cmp.sharedPluginData.pix2fig || {}).pxDef === "1:112", "a COMPONENT record is a component stamped pxDef (its guid)");
   const rs = r0.sharedPluginData.pix2fig || {};
-  check(rs.pxSrc === "1:100" && rs.pxIdx === "0" && rs.pxRun === RUN && rs.pxSnap === SNAP && rs.pxIr === "2" && rs.pxState === "built",
+  check(rs.pxSrc === "1:100" && rs.pxIdx === "0" && rs.pxRun === RUN && rs.pxSnap === SNAP && rs.pxIr === String(schema.VERSION) && rs.pxState === "built",
     "the root carries pxSrc, pxIdx, pxRun, pxSnap, pxIr 2 and pxState built", JSON.stringify(rs));
   const states = E.D.writes.filter((w) => w.id === r0.id && w.prop === "setSharedPluginData()" && w.value[1] === "pxState").map((w) => w.phase + ":" + w.value[2]);
   check(same(states, ["create:partial", "stamp:built"]), "a root is stamped partial as soon as it is made, and built in the stamp phase", states.join(","));
@@ -762,7 +762,7 @@ for (const [verdict, expectCode, detail] of [["throw", 1, /refused/], ["drop", 1
   const p = E.D.node(ctx.S.nodes["1"]), child = E.D.node(c2.S.nodes["2"]);
   const st = (n, k) => n.getSharedPluginData("pix2fig", k);
   check(child.parent.id === p.id && child.relativeTransform[0][2] === 5 && st(p, "pxIdx") === "1" && st(p, "pxSrc") === "1:101" && st(p, "pxSnap") === SNAP &&
-    st(p, "pxIr") === "2" && st(child, "pxState") === "built" && R.roots[0].i === 2,
+    st(p, "pxIr") === String(schema.VERSION) && st(child, "pxState") === "built" && R.roots[0].i === 2,
     "a split root is built into its parent from the earlier task, which is stamped as a task-boundary parent (pxSrc, pxIdx, pxSnap, pxIr)");
   // After a plugin restart the session is gone; the boundary stamps find the parent.
   const E3 = env();
@@ -770,7 +770,7 @@ for (const [verdict, expectCode, detail] of [["throw", 1, /refused/], ["drop", 1
   const { ctx: c3 } = await build(E3, t1);
   const fresh = loadPluginBundle({ figma: E3.D.figma, host: Object.assign(defaultHost(), { phase: E3.D.setPhase }) }).PXF_IR;
   const parent1 = E3.D.node(c3.S.nodes["1"]);
-  for (const [k, v] of [["pxIdx", "1"], ["pxSnap", SNAP], ["pxIr", "2"], ["pxRun", RUN], ["pxSrc", "1:" + (G + 1)]]) parent1.setSharedPluginData("pix2fig", k, v);
+  for (const [k, v] of [["pxIdx", "1"], ["pxSnap", SNAP], ["pxIr", String(schema.VERSION)], ["pxRun", RUN], ["pxSrc", "1:" + (G + 1)]]) parent1.setSharedPluginData("pix2fig", k, v);
   const c4 = fresh.makeCtx(E3.D.figma, t2, { id: "r" });
   await fresh.ops.build(c4, t2);
   check(E3.D.node(c4.S.nodes["2"]).parent.id === parent1.id, "after a restart, the split root's parent is found by its stamps");
@@ -782,7 +782,7 @@ for (const [verdict, expectCode, detail] of [["throw", 1, /refused/], ["drop", 1
   const E4 = env();
   const { ctx: c5 } = await build(E4, t1);
   const wrong = E4.D.node(c5.S.nodes["1"]);
-  for (const [k, v] of [["pxIdx", "1"], ["pxSnap", SNAP], ["pxIr", "2"], ["pxRun", RUN], ["pxSrc", "9:999"]]) wrong.setSharedPluginData("pix2fig", k, v);
+  for (const [k, v] of [["pxIdx", "1"], ["pxSnap", SNAP], ["pxIr", String(schema.VERSION)], ["pxRun", RUN], ["pxSrc", "9:999"]]) wrong.setSharedPluginData("pix2fig", k, v);
   const fresh2 = loadPluginBundle({ figma: E4.D.figma, host: Object.assign(defaultHost(), { phase: E4.D.setPhase }) }).PXF_IR;
   const e2 = await fresh2.ops.build(fresh2.makeCtx(E4.D.figma, t2, { id: "s8" }), t2).then(() => null, (x) => x);
   check(t2.roots[0].attachTo.guid === "1:" + (G + 1) && e2 && e2.refused && /built parent 1 of a split root is not found/.test(e2.message) && wrong.children.length === 0,

@@ -7,6 +7,15 @@
 //     [--no-pixso] [--missing-fonts ask|substitute] [--fallback-font Family/Style] [--max-task-mb n]
 //     [--liveness-warn-s n] [--liveness-fail-s n] [--ceiling-ms-per-node n] [--only <taskNo>] [--dry] [--yes]
 //     [--data <dir>] [--from-ir <ir.json> [--stats <stats.json>]]
+//     [--variant-sets parse|frames] [--variant-grammar names|vocabulary] [--axis-order vocabulary|names]
+//     [--swap-dangling skip|strict] [--swap-reset on|off] [--swap-fallback derived|off] [--swap-default layer|definition]
+//     [--rejected-props copy|none] [--default-assignments keep|drop] [--override-merge last|first|outer]
+//     [--echo drop|keep] [--instance-own overrides|own] [--derived-geometry changed|all|none]
+//
+// The thirteen M2a flags (docs/M2A.md §3) are the component reader's settings: each goes to the reader,
+// into the IR header, and into the run folder's settings hash, so a run under IR version 3 never
+// resumes a folder of version 2. A folder whose states.json records another IR version is refused,
+// naming the commit that can resume it (M1_COMMIT in tools/m2a-accept.mjs).
 //
 // Every policy is a setting with the default of docs/M1.md §3 (SETTINGS below). --dry reads, plans,
 // runs the image chain's offline link and prints the preflight and the balance, without Figma.
@@ -15,9 +24,11 @@
 //
 // Everything it writes goes to the run folder <data>/runs/<sha256 prefix>-<settings hash>, outside
 // the repository (assertOutsideRepo): ir.json, stats.json, plan.json, images.json, states.json,
+// run.json (the .pix it read, for tools/m2a-accept.mjs --twice),
 // reports/<taskNo>-<op>.json, judge/<taskNo>.json, and the MCP scratch and image cache. A second run
 // with the same file and settings resumes: built tasks stay built, failed and skipped ones run again.
-// tools/m1-accept.mjs reads the run folder and prints the verdict.
+// tools/m1-accept.mjs reads the run folder and prints the verdict; tools/m2a-accept.mjs prints M2a's
+// gates (docs/M2A.md §8), whose short form the preflight prints as its "M2a" block.
 //
 // Exit codes: 0 every task built (or --dry), 1 refused or broken, 2 the run stopped (missing fonts,
 // a stalled plugin) or a task failed; run again to resume.
@@ -25,7 +36,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { CODE, SETTINGS as IR_SETTINGS, canonicalJSON, fnv1a64 } from "./ir/schema.mjs";
+import { CODE, M2A_SETTINGS, SETTINGS as IR_SETTINGS, SETTING_DEFAULTS, SETTING_FLAGS, VERSION as IR_VERSION, canonicalJSON, fnv1a64 } from "./ir/schema.mjs";
 import { TASK_SETTINGS, maxTaskChars } from "./ir/task.mjs";
 import { validate } from "./ir/validate.mjs";
 import { assertOutsideRepo } from "./ir/outside-repo.mjs";
@@ -35,6 +46,7 @@ import { checkIdentity } from "./ir/identity.mjs";
 import { makeMcpClient } from "./ir/mcp-readonly.mjs";
 import { defaultDataDir, dropUnjudged, loadStates, newStates, probeStatus, resumeStates, runTasks, saveStates } from "./ir/runstate.mjs";
 import * as judge from "./ir/judge.mjs";
+import { M1_COMMIT, gateLines, m2aGates } from "./m2a-accept.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -60,6 +72,8 @@ export const SETTINGS = {
   "--from-ir": ["fromIr", (v) => v, null],
   "--stats": ["statsFile", (v) => v, null],
 };
+// docs/M2A.md §3: the thirteen component reader settings, each with its stated default.
+for (const k of M2A_SETTINGS) SETTINGS[SETTING_FLAGS[k]] = [k, IR_SETTINGS[k], SETTING_DEFAULTS[k]];
 const SWITCHES = { "--no-pixso": "noPixso", "--dry": "dry", "--yes": "yes" };
 function posNum(v, f) { const n = Number(v); if (!(n > 0)) throw new RangeError(f + " is a positive number"); return n; }
 
@@ -94,11 +108,13 @@ export function parseArgs(argv) {
 // and the run folder describe the IR, not the command line's defaults. A flag given that
 // contradicts one is refused; one not given takes the header's value. Returns the refusal, or null.
 export const READER_FLAGS = { booleans: "--booleans", spaceEvenlySingle: "--space-evenly-single", textFit: "--text-fit", scope: "--scope" };
+for (const k of M2A_SETTINGS) READER_FLAGS[k] = SETTING_FLAGS[k];
 export function adoptIrSettings(o, header) {
   const hs = (header && header.settings) || {};
   const sc = header && header.scope;
   const fromHeader = { booleans: hs.booleans, spaceEvenlySingle: hs.spaceEvenlySingle, textFit: hs.textFit,
     scope: sc && sc.kind === "pages" && Array.isArray(sc.ids) ? "pages:" + sc.ids.join(",") : sc && sc.kind === "file" ? "file" : undefined };
+  for (const k of M2A_SETTINGS) fromHeader[k] = hs[k];
   for (const k of Object.keys(READER_FLAGS)) {
     const v = fromHeader[k];
     if (v === undefined) continue;
@@ -108,13 +124,32 @@ export function adoptIrSettings(o, header) {
   return null;
 }
 
-// The settings recorded in states.json, and the run folder's name.
+// The reader's settings of a parsed command line, as pixToIR takes them (mode is recorded only, and
+// pix-run reads every file in the reader's default mode).
+export function readerSettingsOf(o) {
+  const s = { booleans: o.booleans, spaceEvenlySingle: o.spaceEvenlySingle, textFit: o.textFit, scope: o.scope };
+  for (const k of M2A_SETTINGS) s[k] = o[k];
+  return s;
+}
+
+// The settings recorded in states.json, and the run folder's name. The M2a settings are in it
+// (docs/M2A.md §6 D), so a version 3 run never shares a folder with a version 2 one.
 export function runSettings(o) {
   const [family, style] = o.fallbackFont.split("/");
-  return { source: o.source, scope: o.scope, m1Scope: o.m1Scope, booleans: o.booleans, spaceEvenlySingle: o.spaceEvenlySingle, textFit: o.textFit,
+  const s = { source: o.source, scope: o.scope, m1Scope: o.m1Scope, booleans: o.booleans, spaceEvenlySingle: o.spaceEvenlySingle, textFit: o.textFit,
     layoutOrder: o.layoutOrder, textRead: o.textRead, images: o.images, noPixso: o.noPixso, missingFonts: o.missingFonts,
     fallbackFont: { family, style }, maxTaskMb: o.maxTaskMb, livenessWarnS: o.livenessWarnS, livenessFailS: o.livenessFailS,
     ceilingMsPerNode: o.ceilingMsPerNode };
+  for (const k of M2A_SETTINGS) s[k] = o[k];
+  return s;
+}
+
+// A run folder written under another IR version cannot be resumed (nor overwritten) by this one: the
+// refusal, or null. states.json records the IR version its run read.
+export function refuseOtherVersion(states) {
+  if (!states || states.irVersion === undefined || states.irVersion === IR_VERSION) return null;
+  return "the run folder holds a run of IR version " + states.irVersion + "; this build reads version " + IR_VERSION +
+    " and does not resume it. Resume it from a checkout of commit " + M1_COMMIT + " (M1, IR version 2), or run with other settings or another --data folder";
 }
 export function runDirName(sha256, settings) {
   return String(sha256).slice(0, 12) + "-" + fnv1a64(canonicalJSON(settings)).slice(0, 8);
@@ -154,6 +189,15 @@ export function balanceLines(B) {
   ];
 }
 
+// The "M2a" block of the preflight: the gates of docs/M2A.md §8 that one read can answer (G8 needs
+// --twice and G4 the owner's --expect file, both m2a-accept's), and where the full report is.
+export function m2aBlock(ir, stats, balance, runDir) {
+  const gates = m2aGates(ir, stats, { balance });
+  const failed = gates.filter((g) => g.status === "FAIL").map((g) => g.id);
+  return ["M2a (" + (failed.length ? "FAIL: " + failed.join(", ") : "no gate fails") + ")"].concat(gateLines(gates).map((l) => "  " + l),
+    ["  full acceptance: node tools/m2a-accept.mjs " + JSON.stringify(runDir) + " [--expect <file>] [--twice]"]);
+}
+
 // The judge the run calls per verify task: part C's judgeTask on the IR, with part A's lost-border
 // population (stats.populations.lostBorder), which only the reader can name (docs/M1.md §8.3); null
 // while the judge is not in the build.
@@ -186,7 +230,7 @@ export async function main(argv) {
       if (o.statsFile) stats = JSON.parse(readFileSync(o.statsFile, "utf8"));
     } else {
       const { pixToIR } = await loadReader();
-      const r = pixToIR(buffer, { settings: { booleans: o.booleans, spaceEvenlySingle: o.spaceEvenlySingle, textFit: o.textFit, scope: o.scope } });
+      const r = pixToIR(buffer, { settings: readerSettingsOf(o) });
       ir = r.ir; stats = r.stats;
     }
   } catch (e) { say("pix-run: the source cannot be read: " + ((e && e.message) || e) + (e && e.code ? " (" + e.code + ")" : "")); return 1; }
@@ -196,10 +240,13 @@ export async function main(argv) {
   const settings = runSettings(o);
   const sha = ir.header.source.sha256 || createHash("sha256").update(JSON.stringify(ir.header.source)).digest("hex");
   const runDir = join(dataDir, "runs", runDirName(sha, settings));
+  const other = refuseOtherVersion(loadStates(join(runDir, "states.json")));
+  if (other) { say("pix-run: " + other); return 1; }
   try {
     assertOutsideRepo(runDir);
     jsonOut(join(runDir, "ir.json"), ir);
     if (stats) jsonOut(join(runDir, "stats.json"), stats);
+    jsonOut(join(runDir, "run.json"), { format: "pix2fig.run", version: 1, irVersion: ir.header.version, sha256: sha, pix: o.file ? resolve(o.file) : null, fromIr: !!o.fromIr });
   } catch (e) { say("pix-run: " + e.message); return 1; }
   say("run folder: " + runDir);
 
@@ -227,6 +274,7 @@ export async function main(argv) {
     outOfScope: Object.keys(plan.scope.outOfScope).reduce((m, k) => { m[k] = plan.scope.outOfScope[k].length; return m; }, {}),
     records: plan.tasks.filter((t) => t.op === "build").reduce((m, t) => { m[t.taskNo] = t.nodes.map((n) => n.i); return m; }, {}) });
   for (const l of preflightLines(plan, table, identity, settings)) say(l);
+  for (const l of m2aBlock(ir, stats, plan.balance, runDir)) say(l);
   const pixsoState = { used: !!client && !!identity && !identity.transport, identity: identity ? identity.detail : null, q5: !!(identity && identity.q5) };
   const fresh = newStates({ snapshot: plan.tasks[0].snapshot, irVersion: ir.header.version, runId: plan.tasks[0].runId, settings,
     probes: probeStatus(verdicts), pixso: pixsoState, balance: plan.balance, ledger: plan.ledger });

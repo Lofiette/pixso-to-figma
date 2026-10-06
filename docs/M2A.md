@@ -1,7 +1,9 @@
 # M2a: the component IR, offline
 
-Status: **plan, second edition (2026-10-06): the first edition with a review folded in (§13 lists each issue and what
-changed).** It implements the M2a row of `docs/REWRITE.md` §10: "IR for
+Status: **built and accepted offline (2026-10-06) on branch `claude/m2a`: P0, then parts A-D merged and integrated by
+part E; every gate of §8 passes on D, K, M and P with the plan's numbers, and §14 records what was built where it differs
+from this plan. A review of the build (§15) fixed six findings; the gates pass with the same numbers.** The plan is the second edition (2026-10-06): the first edition with a review folded in (§13 lists
+each issue and what changed). It implements the M2a row of `docs/REWRITE.md` §10: "IR for
 components, offline (needs no Figma): family validation, property roots, swap-aware guidPath resolver, stale and echo
 classification". It follows REWRITE §3, §4, §7, §8 and §11, and builds on M1 as merged (`docs/M1.md`, §15.8-§15.11
 for the live session). Like M1, it starts with a serial contract part (P0) that bumps the IR to version 3, then runs
@@ -48,14 +50,18 @@ from them alone.
   cannot be reached from the instance's family (its symbol, or that symbol's state group): either the definition id is
   in no definition in the file (`no-definition`: 124 / 315 / 96 / 321), or it exists only on other owners
   (`other-family`: 6 / 1 719 / 826 / 1 530). Totals 130 / 2 034 / 922 / 1 851. Assignments **inside override
-  entries** are a separate population (D6) and are not in REWRITE's 130 and 2 034.
+  entries** are a separate population (D6) and are not in REWRITE's 130 and 2 034. **As built (B, E):** "reached from
+  the instance's family" means defined on the instance's master SYMBOL or on that symbol's state group, not on any
+  other member of the group; it is exactly this rule that gives 130 / 2 034 / 922 / 1 851. `no-root` and
+  `undeclared` (D3) are counted apart and are not in these totals (0 / 0 / 0 / 0 and 0 / 4 / 16 / 20).
 - **Path space**: guidPath elements are **local guids** of the stored copies, never `overrideKey`s. Every hop of every
   live entry matches by local guid; looking hops up by `overrideKey` makes 7 stale K overrides resolve, wrongly.
 
 ### 0.3 Where the two measurements disagree, and why
 
 The second measurement did not reproduce REWRITE's denominators or stale-assignment counts. Each difference is a
-definition, not a fact about the files; part C (or B) reconciles each in its pull request and E records the result here.
+definition, not a fact about the files; part C (or B) reconciles each in its pull request and E records the result here
+(§14.6 gives the outcome of each row: every first-measurement number reproduces, with the definitions stated there).
 
 | quantity | first (REWRITE's definitions) | second | cause |
 |---|---|---|---|
@@ -213,7 +219,14 @@ four `border*Weight` and `borderStrokeWeightsIndependent`, `componentPropAssignm
 `textDecoration`, `textTruncation`, `toggledOffOTFeatures`, `toggledOnOTFeatures`, `variableConsumptionMap`,
 `variableModeBySetMap`, `vectorPaints`, `vectorStyles`, `visible`. P also: `variableConsumptionMap` 5 293,
 `overrideLevel` 5 186, `fontVariations` 4 482, `pluginData` 3 894 and `stackChildCounterSizing` 61 651. D8's
-translation table (§5.1) is built from this list, and a field outside it is never silently ignored.
+translation table (§5.1) is built from this list, and a field outside it is never silently ignored. **P0 (C):** the
+list is 98 fields on D, K, M and P together (the `stack*` fields are `stackCounterAlignContent`,
+`stackCounterAlignItems`, `stackCounterSizing`, `stackCounterSpacing`, the four `stackPadding*`,
+`stackPrimaryAlignItems`, `stackPrimarySizing`, `stackSpacing`; the `fontVariant*` ones `fontVariantNumericFigure`,
+`fontVariantNumericFraction`, `fontVariantNumericSpacing`, `fontVariantPosition`). The Сова UI kit (U, 181 344 entries)
+adds four: `exportNameByVariantProp`, `groupIncludeInvisible`, `showInSlice`, `textAlignVertical`;
+`OVERRIDE_SOURCE_FIELDS` gives them fates too, so U does not fail G6 with `unknown`. Derived paths are unique per
+instance in all five files (0 duplicates), so the IR keeps one derived entry per path.
 
 **Overrides on nested instances (C, review).** Non-root entries whose path is in `derivedSymbolData` and whose last
 element is a nested INSTANCE: 640 / 4 074 / 20 618 / 43 761; of them, carrying a look field (paints, a fill, stroke or
@@ -246,16 +259,16 @@ four: `componentOverrideHierarchy` (197), `variableSymbolID` (226), `simplifyIns
 | D5 | **INSTANCE_SWAP values.** Two predicates, both in `propindex.mjs` (P0) so that the resolver, B and C cannot disagree: `symbolKnown(guid)` (a SYMBOL is stored in the file: what rule A and the resolver follow) and `refOf(guid)` (the master reference the IR can write: a COMPONENT record, else a library identity, else null; M1's `masterRef`). In the IR: an assignment whose value names no SYMBOL in the file is dropped with SWAP_VALUE_DANGLING `assignment` (36 / 4 / 137 / 264); one that names a SYMBOL the IR cannot reference (stored, but no record and no library identity, e.g. out of scope or not carried) is dropped with the same code and class, detail `: not carried` (0 expected, I). The same holds for a default (`default`) and for an override's `overriddenSymbolID` (`swap`: the swap is dropped, its entry's other fields stay). **Defaults** (`--swap-default layer`): a root's default is the declared symbol of the INSTANCE layers bound to it, where they all agree; otherwise the definition's `initialValue` when it names a SYMBOL; otherwise the property is not declared and its bindings drop (PROPERTY_REF_DROPPED `undeclared`), noted SWAP_VALUE_DANGLING `default`. A default taken from the layers that differs from `initialValue` is counted (`stats.m2a.properties.swapDefaultFromLayer`), and so are roots whose bound layers disagree (`swapDefaultLayersDisagree`, with the number of bound layers whose declared symbol is not the default: Figma's default replaces them in the main component, so each is a visible change M2b's render pair must judge). `--swap-default definition` uses `initialValue` first. **Preferred values** become key references `{type: COMPONENT\|COMPONENT_SET, componentKey, guid?}` (Figma's own shape): `guid` is filled when the key names a library copy (or, for STATE_GROUP, a set) in the file; keys not in the file are kept by key for M3's kit map, never refused. `stringValues` (preferred values of a TEXT property) have no Figma equivalent: dropped and counted (`preferred.stringValuesDropped`) | measured: using `initialValue` when nothing is assigned breaks 4 336 D and 263 K derived entries, because the bound layer's declared symbol already holds the default; Figma requires a resolvable default |
 | D6 | **Assignments.** An instance's `properties` hold assignments to its master's family by root id, the value read from the slot of the **root's** type (BOOLEAN `boolValue`, TEXT `textValue.characters`, INSTANCE_SWAP `guidValue`; a TEXT value with a non-empty style table, 0 measured, keeps its characters and is counted `assignments.richTextFlattened`). Every assignment of a carried INSTANCE record, or of one of its override entries, ends in exactly one class, the first that applies: **dropped with its entry** (the entry is stale: OVERRIDE_STALE's detail counts them, 0 / 6 / 41 / 1 128); STALE_ASSIGNMENT `no-definition`, `other-family`, `no-root`, `undeclared` (on an instance), or `nested` with that class after `: ` (in a live entry, judged against the **effective** family of the nested instance the entry targets, after swaps, D7: 4 / 75 (I) / 839 / 293); STALE_ASSIGNMENT `ignored` (rule C, D7); SWAP_VALUE_DANGLING `assignment` (D5); **merged away** (a duplicate path's earlier or later value lost to D17, counted in OVERRIDE_PATHS_MERGED); **kept**. Never matched by name; one STALE_ASSIGNMENT note per assignment. An assignment equal to the root's default is kept (`--default-assignments keep`; writing it is harmless, P9b) or dropped and counted (`drop`) | REWRITE §3; validator refuses cross-family assignments; G7 needs one class per assignment |
 | D7 | **The resolver** (below this table). Local guids only; outer swaps win; rules A, B and C | §1.3: exact on all four with A and B, and on P's derived entries with C |
-| D8 | **Overrides.** Root entries (D 2 106, K 20 530, M 15 053, P 35 095; an instance with both an empty-path and a `[symbolID]` entry merges them by D17) become at most one override with `path` [] per instance: the look of the instance itself. A root entry's **box, child-layout, `name`, `visible` and `locked` fields** (`size`, `transform`, constraints, `minSize`/`maxSize`, `stackChild*`, `autoLayoutAbsolutePos`) are the INSTANCE record's own, which it already carries from the stored node: equal to the record, they are echoes (D9); different, the record wins and OVERRIDE_FIELD_DROPPED `root-box` counts them. They never enter the `path` [] override, where `width`/`height` would be counted OVERRIDE_FIELD_UNSUPPORTED on tens of thousands of instances whose size Figma sets directly (root `size`: D 1 425, K 18 326, M 9 729, P 19 105). A root entry's `componentPropAssignment` joins `instance.properties` (the entry's value wins over the node's), and its `overriddenSymbolID`, equal to `symbolID`, is a no-op dropped and counted, else SWAP_VALUE_DANGLING `swap` with detail `: root swap` (both 0 measured). Non-root entries are kept only when live; stale ones get OVERRIDE_STALE (class `not-derived`, or `unresolved` for a path in derived that does not resolve, 0 with A and B); C also counts stale entries whose path does resolve (`resolvedNotDerived`, 0 with A and B), which G2 needs. Duplicate paths merge into one entry (`--override-merge`, D17), noted OVERRIDE_PATHS_MERGED once per instance with the conflicting field count. **Translation is closed on both sides.** `OVERRIDE_SOURCE_FIELDS` (`overrides.mjs`, frozen by P0 from §1.3's census, C completes the translators) gives every Pixso field one fate: translated by the M1 translator that reads it on a node (paints, strokes and side weights, corners, effects, opacity and blend, `visible`, `locked`, `name`, `textData` → `characters` plus `textRanges`, the text style fields, `size` → `width`/`height`, transform → `relativeTransform`, `stack*` → frame layout, `stackChild*`, constraints, `minSize`/`maxSize`, `autoLayoutAbsolutePos` → child layout, `frameMaskDisabled` → `clipsContent`, `exportSettings`, the `inherit*StyleID` fields → style references); **consumed** (`guidPath`, `overrideLevel` by the merge, `overriddenSymbolID` → `swap`, `componentPropAssignment` → `properties`, the `*Independent` flags by the side and corner translators); or **dropped** with OVERRIDE_FIELD_DROPPED class `no-equivalent` and the field (`vectorPaints` and `vectorStyles` (region fills cannot be overridden on a sublayer, I), `variableConsumptionMap` and `variableModeBySetMap` (M5), `fontVariations`, `fontVersion`, the `fontVariant*` and OT-feature fields, `layoutGrids` (M1 carries none), `pluginData`, `prototypeInteractions`, the `overlay*` fields, `export*` options, `proportionsConstrained`, `dashCap`). A Pixso field outside the table is dropped with class `unknown` and **fails G6**: a new file cannot lose a field silently. The Figma fields produced are closed to `OVERRIDE_FIELDS` and to the target (§5.1); a field the target type does not take is dropped with class `not-on-type` (a fill on a GROUP, characters on a non-TEXT). A style reference resolves as on nodes (IR.md §7: the style's value wins, STYLE_VALUE_DIFFERS / STYLE_MISSING_IN_SOURCE with the note's `path`). Fonts and images an override uses join the IR's `fonts` and `images` through the same `cx`. An entry left with nothing to apply is dropped (`stats.m2a.overrides.emptyAfterTranslation`) | REWRITE §3; IR.md §9 "one entry per path"; P13; §1.3's census |
-| D9 | **Echo** (`--echo drop`). A field of a live entry is an echo when its translated value equals, as canonical JSON with IR rounding, the value the target layer has without this entry: the layer's record value (with DEFAULTS for an absent prop), changed by the overrides of the masters' own nested instances along the path (unless a swap reset them, rule B). For a field **bound to a property** (`characters`, `visible` on a layer whose `componentPropertyReferences` names a declared root; `swap` never, below) the baseline is the property's effective value at that layer (an outer entry's assignment, else the owning instance's, else the root's default), not the layer's record value; a field override whose value differs from that effective value is counted (`overrides.boundConflicts`), because M2b writes properties before field deltas and the order decides what Figma shows. A **swap** is never an echo: a no-op swap to the declared symbol still resets the nested instance's own overrides (rule B), so it is kept and counted (`swaps.noOp`). For a root entry, the box fields compare with the INSTANCE record (D8). Echo fields are dropped, one OVERRIDE_ECHO note per instance (detail: count and field names; per field counts in stats). `--echo keep` keeps them and counts the same | P9b: an equal write creates no override, so dropping is safe, and it saves writes |
+| D8 | **Overrides.** Root entries (D 2 106, K 20 530, M 15 053, P 35 095; an instance with both an empty-path and a `[symbolID]` entry merges them by D17) become at most one override with `path` [] per instance: the look of the instance itself. A root entry's **box, child-layout, `name`, `visible` and `locked` fields** (`size`, `transform`, constraints, `minSize`/`maxSize`, `stackChild*`, `autoLayoutAbsolutePos`) are the INSTANCE record's own, which it already carries from the stored node: equal to the record, they are echoes (D9); different, the record wins and OVERRIDE_FIELD_DROPPED `root-box` counts them. They never enter the `path` [] override, where `width`/`height` would be counted OVERRIDE_FIELD_UNSUPPORTED on tens of thousands of instances whose size Figma sets directly (root `size`: D 1 425, K 18 326, M 9 729, P 19 105). A root entry's `componentPropAssignment` joins `instance.properties` (the entry's value wins over the node's), and its `overriddenSymbolID`, equal to `symbolID`, is a no-op dropped and counted, else SWAP_VALUE_DANGLING `swap` with detail `: root swap` (both 0 measured). Non-root entries are kept only when live; stale ones get OVERRIDE_STALE (class `not-derived`, or `unresolved` for a path in derived that does not resolve, 0 with A and B); C also counts stale entries whose path does resolve (`resolvedNotDerived`, 0 with A and B), which G2 needs. Duplicate paths merge into one entry (`--override-merge`, D17), noted OVERRIDE_PATHS_MERGED once per instance with the conflicting field count. **Translation is closed on both sides.** `OVERRIDE_SOURCE_FIELDS` (`overrides.mjs`, frozen by P0 from §1.3's census, C completes the translators) gives every Pixso field one fate: translated by the M1 translator that reads it on a node (paints, strokes and side weights, corners, effects, opacity and blend, `visible`, `locked`, `name`, `textData` → `characters` plus `textRanges`, the text style fields, `size` → `width`/`height`, transform → `relativeTransform`, `stack*` → frame layout, `stackChild*`, constraints, `minSize`/`maxSize`, `autoLayoutAbsolutePos` → child layout, `frameMaskDisabled` → `clipsContent`, `exportSettings`, the `inherit*StyleID` fields → style references); **consumed** (`guidPath`, `overrideLevel` by the merge, `overriddenSymbolID` → `swap`, `componentPropAssignment` → `properties`, the `*Independent` flags by the side and corner translators); or **dropped** with OVERRIDE_FIELD_DROPPED class `no-equivalent` and the field (`vectorPaints` and `vectorStyles` (region fills cannot be overridden on a sublayer, I), `variableConsumptionMap` and `variableModeBySetMap` (M5), `fontVariations`, `fontVersion`, the `fontVariant*` and OT-feature fields, `layoutGrids` (M1 carries none), `pluginData`, `prototypeInteractions`, the `overlay*` fields, `export*` options, `proportionsConstrained`, `dashCap`). A Pixso field outside the table is dropped with class `unknown` and **fails G6**: a new file cannot lose a field silently. The Figma fields produced are closed to `OVERRIDE_FIELDS` and to the target (§5.1); a field the target type does not take is dropped with class `not-on-type` (a fill on a GROUP, characters on a non-TEXT). A style reference resolves as on nodes (IR.md §7: the style's value wins, STYLE_VALUE_DIFFERS / STYLE_MISSING_IN_SOURCE with the note's `path`). Fonts and images an override uses join the IR's `fonts` and `images` through the same `cx`. An entry left with nothing to apply is dropped (`stats.m2a.overrides.emptyAfterTranslation`). *Review (§15):* a translated field whose only effect is to remove a prop the target has (a style detached or naming none, `maxLines` cleared, per-side weights made uniform) has no field value to write: uniform sides and corners are written through `strokeWeight` and `cornerRadius`, a style or `maxLines` removal is carried by a written `fills`, `strokes`, `effects`, text field or `textTruncation`, and any other is dropped `no-equivalent`, never counted translated with nothing written | REWRITE §3; IR.md §9 "one entry per path"; P13; §1.3's census |
+| D9 | **Echo** (`--echo drop`). A field of a live entry is an echo when its translated value equals, as canonical JSON with IR rounding, the value the target layer has without this entry: the layer's record value (with DEFAULTS for an absent prop), changed by the overrides of the masters' own nested instances along the path (unless a swap reset them, rule B; *review, §15:* their duplicate entries merged by D17, as the IR writes them). For a field **bound to a property** (`characters`, `visible` on a layer whose `componentPropertyReferences` names a declared root; `swap` never, below) the baseline is the property's effective value at that layer (an outer entry's assignment, else the owning instance's, else the root's default; *review, §15:* only an assignment the IR keeps, its id defined on the owning symbol or its state group, §0.2), not the layer's record value; a field override whose value differs from that effective value is counted (`overrides.boundConflicts`), because M2b writes properties before field deltas and the order decides what Figma shows. A **swap** is never an echo: a no-op swap to the declared symbol still resets the nested instance's own overrides (rule B), so it is kept and counted (`swaps.noOp`). For a root entry, the box fields compare with the INSTANCE record (D8). Echo fields are dropped, one OVERRIDE_ECHO note per instance (detail: count and field names; per field counts in stats). `--echo keep` keeps them and counts the same | P9b: an equal write creates no override, so dropping is safe, and it saves writes |
 | D10 | **Derived entries** are carried as stored, sparse: `size` and `transform` only when stored (absent means "the master layer's", I, part C measures it, §6 C), `lines` from baselines where the entry stores them, `oracleSides` from `strokePaddingPath` (M1 D15's oracle, inside instances), and geometry under `--derived-geometry changed`: `fillGeometry` and `strokeGeometry` only where they differ from the target layer's own stored geometry. Each entry and each override carries `at`: the IR record index of every path element, so neither the planner nor the plugin needs a resolver. An element with no record (a folded operand, a degenerate node) gives no `at`: a derived entry is then kept without it and counted; an override field on it is dropped with OVERRIDE_FIELD_DROPPED `layer-not-carried`. A derived entry left with no key to write (sparse, and its geometry unchanged) is not written and is counted `derived.empty`; G1 counts resolution from the stats, so `entries = written + empty` | M2b's verifier compares every sublayer; the 2 975 lost borders inside instances need the oracle; P's IR size (§11) |
 | D11 | **Instance extras.** `exposed: true` for `propsAreBubbled` (Figma's `isExposedInstance`); `scale` for `uniformScaleFactor` ≠ 1 (P10 decides how M2b uses it). The instance's own stored look is **not** carried beside its root override (`--instance-own overrides`): the record keeps box and child layout (KNOWN_PROPS.INSTANCE unchanged), the look is master root plus the `path` [] override, and own props that differ from that are counted (`stats.m2a.instances.ownDiffers`, I). `--instance-own own` writes those differences into the `path` [] override instead | Pixso's node paints are a cache (M1 §15.9 for styles); which one Pixso draws is a render-pair question for M2b |
 | D12 | **Scope.** Under `--scope pages:`, the closure that pulls in each instance's master (M1) also pulls in swap targets, INSTANCE_SWAP values and defaults, and the masters of nested instances along live paths | no dangling reference in a scoped IR |
-| D13 | **The M1 path keeps working on IR v3.** The planner writes a COMPONENT_SET record into tasks **as type FRAME** (`taskType()` in `task.mjs`: COMPONENT_SET → FRAME until M2b, every other type as is), and the judge compares a task record's type with `taskType()` of the IR record's. `BUILT_TYPE` is unchanged, so a task that carries a COMPONENT_SET is still refused. Mapping `BUILT_TYPE.COMPONENT_SET` to FRAME instead would not do: the bundled builder writes auto layout only for records of IR type FRAME or COMPONENT, and 19 / 75 / 57 / 58 state groups have auto layout (§0.4). Both population codes treat a COMPONENT_SET like the state-group frame; tasks carry no `instance`. Proof: the tasks made from the fixture's v3 IR equal, record for record, those made from its `--variant-sets frames` IR. M2b drops the mapping and adds `BUILT_TYPE.COMPONENT_SET` | M1's gates must still pass, with the same build; M2b builds components |
+| D13 | **The M1 path keeps working on IR v3.** *As built (E): the M1 planner also leaves M2a's notes about components, properties and overrides (`schema.isComponentNote`) and the `componentPropertyReferences` bindings out of tasks, so the tasks of a `parse` IR equal those of a `frames` IR byte for byte, not only record for record; the identity sample ignores those notes too.* The planner writes a COMPONENT_SET record into tasks **as type FRAME** (`taskType()` in `task.mjs`: COMPONENT_SET → FRAME until M2b, every other type as is), and the judge compares a task record's type with `taskType()` of the IR record's. `BUILT_TYPE` is unchanged, so a task that carries a COMPONENT_SET is still refused. Mapping `BUILT_TYPE.COMPONENT_SET` to FRAME instead would not do: the bundled builder writes auto layout only for records of IR type FRAME or COMPONENT, and 19 / 75 / 57 / 58 state groups have auto layout (§0.4). Both population codes treat a COMPONENT_SET like the state-group frame; tasks carry no `instance`. Proof: the tasks made from the fixture's v3 IR equal, record for record, those made from its `--variant-sets frames` IR. M2b drops the mapping and adds `BUILT_TYPE.COMPONENT_SET` | M1's gates must still pass, with the same build; M2b builds components |
 | D14 | **Library identity is unchanged** (IR.md §8). P's 802 user-page `overrideKey`s are carried on their records as today; their meaning is M3's | REWRITE §5 |
 | D15 | **Note volume.** A note is per record, per path or per assignment as stated above, except OVERRIDE_ECHO (per instance), PROPERTY_REF_DROPPED (per record and class) and OVERRIDE_FIELD_DROPPED (per instance and class, the fields and counts in the detail), whose counts sit in the detail and in `stats.m2a` | P alone would add about 70 000 echo notes, and its dropped fields (`pluginData`, `variableConsumptionMap`, `fontVariations`) about 13 000 more |
 | D16 | **IR version 3**, one bump for all of M2a, in P0; the validator knows only 3. Existing v2 run folders are not migrated (§11) | IR.md §15 |
-| D17 | **Duplicate merge** (`--override-merge last`): entries of one path merge in stored order, a later field value winning. `first` keeps the earliest; `outer` lets the lowest `overrideLevel` win, then the latest. Part C measures which rule agrees with `derivedSymbolData` on P's `size` (337) and `textData` (1 074) conflicts, the only conflicting fields derived can check, and E sets the default from that count before acceptance | 81 294 conflicting field values in P, unverified (I) |
+| D17 | *Default set by E: `outer` (§14.4).* **Duplicate merge** (`--override-merge last` in the first plan): entries of one path merge in stored order, a later field value winning. `first` keeps the earliest; `outer` lets the lowest `overrideLevel` win, then the latest. Part C measures which rule agrees with `derivedSymbolData` on P's `size` (337) and `textData` (1 074) conflicts, the only conflicting fields derived can check, and E sets the default from that count before acceptance | 81 294 conflicting field values in P, unverified (I) |
 
 **D7: the resolver** (`tools/pix/ir/resolve.mjs`). Input: an instance node and a guidPath. Start at the instance's
 `symbolData.symbolID`. A root entry (path `[symbolID]`, or empty) addresses the instance itself and resolves. Otherwise
@@ -264,7 +277,8 @@ an instance boundary is tolerated; never measured). Every element but the last m
 **effective symbol** is decided in this order:
 
 1. an `overriddenSymbolID` on an entry of **any** instance of the chain (instances inside masters count) whose path,
-   relative to that instance, equals this node's path; the **outermost** wins;
+   relative to that instance, equals this node's path; the **outermost** wins (*review, §15:* within one instance, the
+   entry the D17 merge keeps, so the walk and the swap the IR writes agree);
 2. for each `componentPropRef` on the node with field OVERRIDDEN_SYMBOL_ID and a `defID` other than 0:0, an assignment
    to the same definition, matched by raw id or by alias root (D3); the pools, in order: the outer override entries
    addressed to the owning instance, innermost layer first, then the owning instance's own `componentPropAssignment`.
@@ -282,8 +296,13 @@ user pages, 5 internal), each a swap property assigned from an inner layer's ove
 structural rule separates them from 64 accepted cases of the same shape. Each such instance gets one
 SWAP_ASSIGNMENT_IGNORED note with the count, and the ignored assignment itself is **dropped from the IR**
 (STALE_ASSIGNMENT `ignored`): kept, it would make M2b swap a layer Pixso did not swap, under paths and `at` indices
-resolved for the declared symbol. Applied without the derived guard it would make 1 stale override resolve in D and 1
-in K, so it is never applied to a path absent from derived.
+resolved for the declared symbol. *Review (§15):* in P all 36 ignore one of two assignments that sit on entries of one
+instance inside a master, where Pixso applied them, so they stay in the IR there and `ignored` is 0; each of the 18
+instances whose derived data shows the declared symbol pins its hops with swap overrides to it instead
+(`overrides.swaps.pinned`; the note says so). A swap rule 2 takes from an assignment the IR drops (§0.2's "reached"
+reads only the master and its state group, rule 2 the whole definition scope) is pinned the same way where no kept
+assignment gives that symbol. Applied without the derived guard it would make 1 stale override resolve in D and 1 in
+K, so it is never applied to a path absent from derived.
 
 **Rules a reader must not adopt** (each measured to break entries): taking an INSTANCE_SWAP definition's `initialValue`
 when nothing is assigned (4 336 D and 263 K derived entries break); looking elements up by `overrideKey` (7 stale K
@@ -310,13 +329,18 @@ Owner decision: every policy is a setting with a stated default (REWRITE §11). 
 | INSTANCE_SWAP default | `--swap-default` | `layer`, `definition` | `layer` | D5 | |
 | rejected-set properties | `--rejected-props` | `copy`, `none` | `copy` | D3 | `none`: rejected members declare nothing |
 | assignments equal to the default | `--default-assignments` | `keep`, `drop` | `keep` | D6 | |
-| duplicate paths | `--override-merge` | `last`, `first`, `outer` | `last`, until part C's measurement (D17) | D8, D17 | |
+| duplicate paths | `--override-merge` | `last`, `first`, `outer` | `outer`, from part C's measurement (D17, §14.4) | D8, D17 | |
 | echo fields | `--echo` | `drop`, `keep` | `drop` | D9 | |
 | the instance's own look | `--instance-own` | `overrides`, `own` | `overrides` | D11 | |
 | derived geometry | `--derived-geometry` | `changed`, `all`, `none` | `changed` | D10 | |
 
 Not settings, because a measurement rules the alternative out: guidPaths in local guids (never `overrideKey`), outer
 swaps winning over inner ones, definitions keyed by (family, id) and never by name, type and default from the root.
+
+The header keys (P0, `schema.M2A_SETTINGS`, in this table's order) are the flags in camel case: `variantSets`,
+`variantGrammar`, `axisOrder`, `swapDangling`, `swapReset`, `swapFallback`, `swapDefault`, `rejectedProps`,
+`defaultAssignments`, `overrideMerge`, `echo`, `instanceOwn`, `derivedGeometry`. The reader takes each under the same
+name (`readerSettings`); `pix-to-ir` and `pix-run` flags are part D's.
 
 ## 4. Data flow
 
@@ -423,9 +447,11 @@ families.mjs   (A)  familyIndex(cx) -> { setOf(symbolGuid) -> stateGroupGuid|nul
                     rejected: Map(groupGuid -> class), recordType(n, planned) -> "COMPONENT_SET"|planned }
                     stub: no group accepted, none rejected, no notes (M1's D7, as `--variant-sets frames`)
 propindex.mjs  (P0, implemented) propIndex(cx) -> { scopeOf(symbolGuid) -> stateGroupGuid|symbolGuid,
-                    defsOf(ownerGuid), rootOf(scopeGuid, defId) -> def|null,
-                    why(scopeGuid, defId) -> "root"|"alias"|"no-definition"|"other-family"|"no-root",
-                    symbolKnown(guid) -> bool, refOf(guid) -> masterRef|null }   (D3, D5)
+                    defsOf(ownerGuid), rootOf(scopeGuid, defId, from?) -> def|null,
+                    why(scopeGuid, defId, from?) -> "root"|"alias"|"no-definition"|"other-family"|"no-root",
+                    symbolKnown(guid) -> bool, refOf(guid) -> masterRef|null,
+                    chain(scopeGuid, defId, from?) -> {def, why, hops}, owners }   (D3, D5; `from`, the
+                    symbol the id is read from, `chain` and `owners` added by P0, §13 P0-1)
 properties.mjs (B)  propertiesOf(cx, familyGuid) -> [definition]; bindingsOf(cx, n, i) -> componentPropertyReferences|null;
                     assignments(cx, symbolGuid, raw[], {nested, ignored: Set(defId)}) ->
                       {kept:[{family,id,value}], dropped:[{code, class, defId}]}   (every raw assignment in exactly one)
@@ -473,7 +499,8 @@ Pixso's names and real numbering kept different from the real files as today: `p
 - **entries**: a root entry `[symbolID]` and an empty-path one on the same instance, with a `size` equal to the
   record's and one different, and a fill; duplicate paths with a conflicting field and differing `overrideLevel`; echo
   fields (direct, and through a master's nested-instance override); dropped fields (`vectorPaints`, `pluginData`); a
-  field outside `OVERRIDE_SOURCE_FIELDS` (must fail G6); a fill override on a GROUP layer (`not-on-type`); a fill and
+  field outside `OVERRIDE_SOURCE_FIELDS` (must fail G6; a plant, `M2A_PLANTS.unknownOverrideField`, not a case of
+  the base fixture, which must pass every gate, §7, §13 P0-5); a fill override on a GROUP layer (`not-on-type`); a fill and
   a style override on a nested INSTANCE layer (carried); a `characters` override on a text bound to a TEXT property
   that is also assigned; a no-op swap (kept); a text override with a style table; a size override; a style reference
   in an override; an override on a folded boolean operand;
@@ -492,7 +519,11 @@ to run under `--variant-sets frames` (§9).
 
 `tools/selftest.mjs` gets section 10: `test-m2a-families.mjs` (A), `test-m2a-props.mjs` (B), `test-m2a-instances.mjs`
 (C), `test-m2a-run.mjs` (D) and `test-m2a-e2e.mjs` (E), each committed by P0 as a stub printing `pending: part X`
-with the checks it must hold listed in its header.
+with the checks it must hold listed in its header. Section 10 runs `test-m2a-contract.mjs` (P0's, kept: the seam,
+never a part's decisions) first. A stub never passes: it exits 2 while its part's code is still P0's stub (each stub
+module exports `STUB`; D's evidence is `tools/m2a-accept.mjs`, E's that A-D have all landed), which selftest prints as
+pending without failing, and it exits 1 once the part's code is in but the stub is still there, which fails selftest
+(§13 P0-6).
 
 **P0 is done when** selftest passes with the stubs, the reader on the fixture writes a valid v3 IR equal to M1's
 apart from the version and the header settings, M1's e2e (`test-m1-e2e.mjs`) passes unchanged on it, the tasks from
@@ -619,7 +650,7 @@ with their entries. "Source" says where m2a-accept reads the answer: the IR cann
 | G3 families | accepted + rejected ≠ state groups, or a rejected set's member is not standalone (by class printed) | stats, IR | 64 / 67 | 308 / 312 | 221 / 227 | 348 / 359 |
 | G4 stale assignments | `no-definition` + `other-family` on instances differ from `--expect`; `no-root`, `undeclared`, `nested`, `ignored` printed | stats | 130 (124 + 6), nested 4 | 2 034 (315 + 1 719), nested 75 (I) | 922 (96 + 826), nested 839 | 1 851 (321 + 1 530), nested 293 |
 | G5 property types | `declaredNotRoot` ≠ 0; a declared type is not its root's; a kept binding whose field is not its root's type | stats, IR | 0 | 0 | 0 | 0 (94 dropped `type-mismatch`) |
-| G6 override balances | entries: entries ≠ root + live + stale, live ≠ distinct live paths + merged away, distinct live paths ≠ written + empty after translation and echo; Pixso fields: total ≠ translated + consumed + dropped by class; any `unknown` field; Figma fields: produced ≠ carried + echo | stats | adds up | adds up | adds up | adds up |
+| G6 override balances | entries: entries ≠ root + live + stale, live ≠ distinct live paths + merged away, distinct live paths ≠ written + empty after translation and echo, the IR's non-root overrides ≠ written + pinned (§15); Pixso fields: total ≠ translated + consumed + dropped by class; any `unknown` field; Figma fields: produced ≠ carried + echo | stats | adds up | adds up | adds up | adds up |
 | G7 assignment and binding balances | assignments ≠ the sum of D6's classes (each assignment in exactly one); refs ≠ kept + dropped by class (D4's order) | stats | adds up | adds up | adds up | adds up |
 | G8 determinism | `--twice`: two reads give IRs that differ in one byte (the renumbered fixture is E's test) | IR | — | — | — | — |
 | G9 M1 unchanged | the M1 balance does not add up on IR v3 (M1's e2e and the equal-tasks check are selftest's) | stats | — | — | — | — |
@@ -640,7 +671,9 @@ on a busy machine, against the 0.7 / 4.6 / 3.1 / about 11 s quoted before).
 |---|---|---|---|---|---|---|
 | tools/ir/schema.mjs, tools/ir/validate.mjs, tools/test-ir.mjs, docs/IR.md | ✎ | | | | | ✎ after merge |
 | tools/ir/props.mjs | ✎ first version | | | ✎ | | |
-| tools/ir/task.mjs, tools/ir/judge.mjs, tools/test-m1-contract.mjs, tools/selftest.mjs | ✎ (`taskType`, D13) | | | | | |
+| tools/ir/task.mjs, tools/ir/judge.mjs, tools/ir/identity.mjs, tools/test-m1-contract.mjs, tools/selftest.mjs | ✎ (`taskType`, D13; §13 P0-7) | | | | | |
+| tools/test-m2a-contract.mjs, tools/test/m2a-stub.mjs | ✎ | | | | | ✎ after merge |
+| M1's tests that wrote the IR version as a literal 2 (test-irbuild, test-irverify, test-m1-e2e, test-pixrun, test-plugin); test-pix (the fixture's node counts) | ✎ version and counts only | | | | | |
 | tools/ir/not-codes.json | ✎ | | | | | ✎ |
 | tools/pix/ir/index.mjs, tools/pix/ir/nodes.mjs, tools/test-irread.mjs | ✎ seam | | | | | ✎ after merge |
 | tools/pix/fixture.mjs | ✎ cases | | | | | ✎ after merge |
@@ -729,6 +762,9 @@ New probes M2b must run, which this plan's inferences rest on:
   that are empty or repeat within a family (Figma suffixes property names; M2b maps root ids to Figma's keys).
 - To M3: preferred values by key and P's user-page `overrideKey`s (§1.4).
 - To M5: `variableConsumptionMap` in overrides (dropped and counted here).
+- To M2b, from the build (§14): U's 2 derived entries that resolve nowhere and 50 stale entries that resolve (§14.7),
+  for a render pair before the resolver's rules are trusted on new files; the instance pass's time (§14.1); sharing
+  `nodes.mjs` `propsOf` with `overrides.mjs` `lookOf` (equal on all five files today, §14.4).
 - Q5 and P9 against guidPaths after a swap in **Pixso's** API ids remain unmeasured offline; M4 needs them, M2a does
   not.
 
@@ -761,3 +797,293 @@ read-only probes of D, K, M and P (counts only; scripts outside the repository).
 | R20 | silent change of content | D5's finding (Pixso draws the bound layer, not `initialValue`) was not asked for TEXT and BOOLEAN roots, nor for INSTANCE_SWAP roots whose bound layers disagree; TEXT `stringValues` vanished | D5, §6 B: `swapDefaultLayersDisagree`, `boundLayerDiffers`, `stringValuesDropped`; render pair in §10 |
 | R21 | contradicts a measurement | the streamed-writer contingency and the quoted reader times | §11: v2 IR 4.3 / 32.5 / 15.9 / 32.2 MB; §8: times from the same run |
 | R22 | numbers vs order | §1.1's split by class came from another class order and has no `no-equals` | §1.1, §6 A: totals gate, split recorded under D2's order |
+
+### P0's findings (2026-10-06), folded into this edition
+
+Implementing §5 met these. Counts are D / K / M / P, then the Сова UI kit (**U**, 181 344 override entries, an extra
+check only) where it differs; scripts outside the repository, as for §1.
+
+| # | finding | resolution |
+|---|---|---|
+| P0-1 | One definition id sits on several owners of one scope: with the same parent 99 / 365 / 4 438 / 8 391 (the same-id model, harmless); with **different parents** 0 / 0 / 0 / 81 (U 250); as a root on one member and an alias on another 0 / 0 / 3 / 12 (U 6). Read without knowing which member it sits on, 0 / 0 / 3 / 16 bindings (U 35) reach another root, and P's `type-mismatch` is 92 instead of §1.2's 94 | `propindex.mjs` `rootOf`, `why` and `chain` take `from`, the symbol the id is read from (a bound layer's enclosing SYMBOL, an instance's master), and prefer its own definition, then the scope owner's, then one with no parent, then the first stored. With it P gives 94. The fixture holds such an id (Chip's 5:913) and the contract test pins both readings (§5.3) |
+| P0-2 | The override census of §1.3 is 98 fields on D, K, M and P; U adds four (`exportNameByVariantProp`, `groupIncludeInvisible`, `showInSlice`, `textAlignVertical`). Entries 9 185 / 63 936 / 68 984 / 148 848 confirm §1.3 | `OVERRIDE_SOURCE_FIELDS` gives all 102 and `guidPath` a fate (70 translated, 7 consumed, 26 dropped), so U does not fail G6 with `unknown`; the contract test holds the list |
+| P0-3 | Definitions are owned by SYMBOLs and state-group FRAMEs in D, K, M and P; U has 5 INSTANCE owners | `scopeOf`: any other owner is its own scope. Such definitions are no family's roots; B decides and counts them |
+| P0-4 | Derived paths are unique per instance in all five files (0 duplicates; derived entries 35 808 / 160 982 / 86 941 / 342 679, U 320 160) | the validator refuses a second derived entry for one path, as it does for overrides |
+| P0-5 | §5.4 asked for "a field outside `OVERRIDE_SOURCE_FIELDS` (must fail G6)" as a fixture case, while §7 wants `m2a-accept` on the fixture's run folder to pass every gate | it is a plant, `M2A_PLANTS.unknownOverrideField` (`makeFixture("valid", { mutate })`), as M1's damaged variants are; E's planted-fault test uses it |
+| P0-6 | §5.5's stubs "print pending", which alone would let a part merge its code with its test still a stub | each stub exits 2 (selftest prints it as pending and passes) while its part's code is P0's stub, and exits 1 (selftest fails) once that code has landed without the test (§5.5) |
+| P0-7 | M1's identity sample (`identity.mjs` `sampleGuids`) picks its candidates by `BUILT_TYPE` of the IR type, so a COMPONENT_SET record would leave the sample and shift every later pick; the file is not in §5.2's list | it uses `taskType` too, and its Pixso type check takes FRAME or COMPONENT_SET for either IR type; the contract test checks that the sample does not depend on `--variant-sets` (§9 row updated) |
+| P0-8 | D12 pulls in "the masters of nested instances along live paths", which only C's resolver can tell | the closure follows every override entry, live or stale, and every assignment and definition default: a superset, at worst one more top-level object. C may narrow it |
+| P0-9 | §5.1 leaves a few checks implicit | the validator also requires: a note with a `path` names an INSTANCE record; `exposed` only on an instance inside a COMPONENT record; VARIANT_SET_REJECTED names a FRAME record. An override's `properties` without a `swap` must name families in the IR; the effective family of the target is C's to apply (STALE_ASSIGNMENT `nested`), not the validator's. `props.mjs` exports `ROOT_OVERRIDE_FIELDS` (COMPONENT's props less INSTANCE's: the `path` [] look) |
+| P0-10 | P0's done-when, measured | on D, K, M, P and U, the P0 reader writes an IR equal to M1's apart from the header's version and settings, the tasks equal M1's apart from `irVersion`, and `pix-run --dry --no-pixso` prints M1's balances, identical; the four M2a phases take at most 92 ms (the definition index, on U) |
+
+## 14. As built (part E, 2026-10-06)
+
+Branch `claude/m2a`: P0 (`claude/m2a-p0`), then parts A, B, C and D merged with `--no-ff`, then part E. Counts are
+D / K / M / P, then the Сова UI kit (**U**, an extra check with no plan numbers) where it is given; scripts and outputs
+stay outside the repository.
+
+### 14.1 Acceptance (default settings, `m2a-accept --expect <private file> --twice`)
+
+`pix-run --dry --no-pixso` wrote the five run folders; `m2a-accept` read them with the owner's `--expect` file (§8's
+numbers, keyed by each file's SHA-256, outside the repository). **Verdict: PASS on D, K, M and P**; U fails G1 and G2
+on the anomalies of §14.7, as part C reported. The U column and the pinned swaps are as re-measured after the review
+(§15); every other number is unchanged by it.
+
+| gate | D | K | M | P | plan | U |
+|---|---|---|---|---|---|---|
+| G1 derived resolve (via rule C) | 35 808 / 35 808 | 160 982 / 160 982 | 86 941 / 86 941 | 342 679 / 342 679 (36) | equal | 319 838 / 319 840 (19): FAIL |
+| … written + empty | 32 051 + 3 757 | 160 962 + 20 | 23 185 + 63 756 | 115 436 + 227 243 | — | 115 089 + 204 749 |
+| G2 live / stale; `resolvedNotDerived`, `inDerivedUnresolved` | 6 353 / 726; 0, 0 | 42 456 / 950; 0, 0 | 52 982 / 949; 0, 0 | 107 190 / 6 563; 0, 0 | equal | 116 557 / 21 855; 50, 2: FAIL |
+| G3 accepted / groups; members of rejected sets | 64 / 67; 66 | 308 / 312; 97 | 221 / 227; 192 | 348 / 359; 436 | equal | 632 / 655; 952 |
+| G4 `no-definition` + `other-family` on instances | 124 + 6 | 315 + 1 719 | 96 + 826 | 321 + 1 530 | equal | 420 + 2 123 (printed) |
+| … nested: `no-definition` + `other-family`; `undeclared` | 4; 0 | 75; 1 | 839; 2 | 293; 0 | 4 / 75 (I) / 839 / 293 | 813 in all |
+| … `no-root` / `undeclared` / `ignored` on instances | 0 / 0 / 0 | 0 / 4 / 0 | 0 / 16 / 0 | 0 / 20 / 0 | printed | 39 / 19 / 1 |
+| G5 roots declared; `declaredNotRoot`; dropped `type-mismatch` | 473; 0; 0 | 898; 0; 0 | 1 233; 0; 0 | 2 276; 0; 94 | 0 / 0 / 0 / 94 | 5 889; 0; 118 |
+| G6 entries = root + empty path + live + stale | 9 185 = 1 849 + 257 + 6 353 + 726 | 63 936 = 20 530 + 0 + 42 456 + 950 | 68 984 = 15 053 + 0 + 52 982 + 949 | 148 848 = 35 095 + 0 + 107 190 + 6 563 | adds up | adds up |
+| … live = paths + merged away; paths = written + empty | 6 353 + 0; 2 655 + 3 698 | 42 456 + 0; 24 731 + 17 725 | 52 966 + 16; 15 816 + 37 150 | 103 756 + 3 434; 38 919 + 64 837 (+ 37 pinned, §15) | adds up | adds up (+ 27 pinned) |
+| … Pixso fields (translated + consumed + dropped); `unknown` | 21 735; 0 | 186 698; 0 | 228 101; 0 | 511 231; 0 | adds up; 0 | 650 475; 0 |
+| … Figma fields = carried + echo | 10 318 = 4 625 + 5 693 | 112 399 = 40 387 + 72 012 | 121 771 = 28 420 + 93 351 | 260 416 = 72 548 + 187 868 | adds up | 355 886 = 87 493 + 268 393 |
+| G7 assignments (kept) | 1 276 (1 142) | 10 963 (8 843) | 7 527 (5 570) | 25 804 (22 318) | adds up | 22 824 (15 995) |
+| … bindings = kept + dropped; of them `fill-style` | 1 983 = 882 + 1 101; 1 101 | 8 829 = 3 596 + 5 233; 5 232 | 31 746 = 14 270 + 17 476; 17 370 | 63 225 = 27 684 + 35 541; 34 903 | adds up; equal | 68 817 = 30 247 + 38 570 |
+| G8 two reads, one IR (SHA-256) | PASS | PASS | PASS | PASS | — | PASS |
+| G9 M1 balance | adds up | adds up | adds up | adds up | — | adds up |
+| G10 IR v3 validates | PASS | PASS | PASS | PASS | — | PASS |
+
+**Nested stale assignments reconciled.** The plan's 4 / 75 / 839 / 293 are `no-definition` + `other-family` in live
+entries. The reader also finds 0 / 1 / 2 / 0 nested `undeclared` (a root it does not declare, D3), which the planning
+scripts did not classify, so `m2a-accept` prints nested 4 / 76 / 841 / 293. K's 75 is now C (it was I).
+
+**M1 unchanged.** On all five files `pix-run --dry --no-pixso` on this branch prints the same preflight as the M1
+close-out (cfa3e65), line for line: populations, lost-border population, task count and largest task, fonts, images
+and the three balance lines. Only the settings line (which gains the thirteen M2a keys) and the new M2a block differ.
+P's largest task is 3 940 544 of 4 194 304 characters, as on M1. selftest passes, `test-m1-e2e` included.
+
+**Determinism.** G8 passed on all five (`--twice`: a second read of the `.pix` gives the same `ir.json` bytes). The e2e
+test reads the fixture under the defaults and each of the fifteen non-default setting values twice and renumbered,
+with the same IR each time.
+
+**Size and time** (`stats.ms` of the same runs): the IR is 8.5 / 57.8 / 25.4 / 62.1 MB (U 76.5), against M1's 4.3 /
+32.5 / 15.9 / 32.2. The IR phase takes 4.3 / 26.1 / 15.8 / 36.0 s (U 41.0). Of that, the instance pass is 3.1 / 16.6 /
+11.1 / 27.2 s (U 30.1) and the other three M2a phases at most 0.3 s; the resolver runs lazily inside the instance pass.
+M1's IR phase on the same files was 0.7 / 4.4 / 2.5 / 4.3 s (part D's runs). No gate reads time (§8); M2b should
+profile the instance pass before it adds a build on top.
+
+### 14.2 Commits of part E
+
+- `0df201e` Fix the seams between the M2a parts and apply their requests (§14.3, §14.4).
+- `21c6531` Write part E's end-to-end test of M2a (§7's e2e):
+  - the fixture under the defaults and each of the fifteen non-default setting values: valid, deterministic,
+    renumbering-proof;
+  - the bundled plugin on the double builds and judges the `parse` and `frames` IRs as on M1, with tasks equal byte
+    for byte;
+  - `m2a-accept` passes every gate on each run folder, except that `--swap-reset off` and `--swap-fallback off` fail G1
+    alone, on the one derived entry each rule resolves;
+  - a planted fault per gate fails that gate alone; the validator's derived first-hop rule.
+- The commit that adds this section:
+  - the parts' pending checks are made unconditional (C's three checks that waited for B, and D's fixture checks that
+    expected G6 to fail while C was a stub);
+  - selftest section 10 fails on any exit but 0, and P0's stub helper `tools/test/m2a-stub.mjs` is removed;
+  - the results go into this file, REWRITE §3 and §10, IR.md §9 and STATE.
+
+### 14.3 Bugs found and fixed at the seams
+
+- **Every non-default `--default-assignments` read threw** (`overrides.mjs`). C wrote a note for each drop that
+  `assignments()` returned, including B's code-less drops (merged, default, with the entry), which only count. C's code
+  now writes STALE_ASSIGNMENT and SWAP_VALUE_DANGLING notes with the detail `assignments()` returns and skips the
+  code-less ones.
+- **`overrides.root` counted empty-path entries too** (C), while §0.2, `m2a-accept`'s G6 and the `--expect` numbers
+  count `[symbolID]` entries only, with `emptyPath` apart. D's G6 failed by 257.
+- **Tasks were not equal under `parse` and `frames`** (A's request 1, B's 4, C's 5). The M1 planner copied every note on
+  a record into tasks, so VARIANT_SET_REJECTED (on the set under `parse`), PROPERTY_REF_DROPPED and the per-instance
+  notes changed tasks. `componentPropertyReferences`, which the M1 builder does not write, grew P's largest task by
+  3 393 characters.
+  - `schema.isComponentNote` names M2a's notes about components, properties and overrides.
+  - `plan.mjs` leaves those notes and the bindings out of tasks.
+  - `identity.mjs` does not read those notes as a record drawn differently.
+- **A note on the instance's own override** (`path` []) was refused by the validator. It is now accepted, and IR.md §13
+  says so.
+- **G6's Figma-field balance under `--echo keep`** expected produced = carried, while C counts produced = carried + echo
+  under either value. `m2a-accept` now checks that, and that the IR's override fields equal carried (plus the echoes
+  under `keep`).
+
+### 14.4 Requests from the parts
+
+| part | request | outcome |
+|---|---|---|
+| A | D13 says "record for record", but tasks carried rejection notes | applied: tasks are now equal byte for byte (§14.3); D13 annotated |
+| A | record the D2 choices the plan left open | applied, §14.5 |
+| A | G3 under `--variant-sets frames` holds as 0 = 0 (every counter 0, `groups` included) | recorded: `m2a-accept` reads `frames` and passes G3 on it (e2e) |
+| A | record §1.1's split by class under D2's order | applied: `no-equals` / `duplicate-axis` / `axis-count` / `duplicate-coordinate` are D 0 / 1 / 0 / 2, K 0 / 2 / 1 / 1, M 0 / 0 / 1 / 5, P 0 / 0 / 2 / 9; U `axis-count` 5, `duplicate-coordinate` 17, `not-symbol` 1 |
+| B | the fixture's `boundLayerDiffers` comment says visible 1, text 1 | applied (visible 2, text 3), `21c6531` |
+| B | record what "reached from the instance's family" means | applied, §0.2 |
+| B | record the `viaAlias` and P `aliases` differences | applied, §14.6 |
+| B | leave `componentPropertyReferences` out of M1 tasks | applied (§14.3) |
+| C | let a derived entry start at a layer with no record | applied: it is kept without `at` (D10). The validator allows it for derived entries only; an override's first element still needs a record (IR.md §9) |
+| C | `OVERRIDE_SOURCE_FIELDS`: `inheritGridStyleID` dropped `no-equivalent`; `inheritTextStyleID` also to the font fields; `stackChildPrimarySizing` → `layoutGrow`, `stackChildCounterSizing` → `layoutAlign` | applied in the table; C's local workaround removed |
+| C | D17's default `outer` (or `first`) | applied: `outer`. On P's 6 conflicting texts, derived agrees with `outer` and `first` 6 of 6 and with `last` 0 of 6; `outer` equals `last` where no entry has an `overrideLevel`, as in D and K. Measured on P: `last` writes 3 fewer overrides and 16 more `root-box` drops than `outer`, and `first` equals `outer` |
+| C | export `nodes.mjs` `propsOf`, so `lookOf` stops mirroring it | **rejected for M2a.** `propsOf` writes a whole record with side effects (notes, features, interned values, the planned box), so sharing it needs a quiet mode in M1's reader. E measured the mirror instead: `lookOf` on every carried non-instance record equals the record's props, field for field, on all five files (0 differences in 84 897 / 806 490 / 355 064 / 732 871 / 921 730 compared props). Handed to M2b (§12) |
+| C | filter M2a's notes out of tasks | applied (§14.3) |
+| C | the assignment-count protocol between B and C (G7) | checked: G7 adds up on all five files and under every fixture setting |
+| C | record the numbers, the U anomalies and the folded-operand rule | applied: §14.6, §14.7, D10 |
+| D | record the definitions `m2a-accept` uses | applied, §14.8 |
+| D | `assignments.dangling` = `swapDangling.assignment`; `bindings.kept`, `derived.written` and `overrides.written` equal the IR's counts | checked: G7, G1 and G6 hold them, and they pass on all five files |
+| D | G3's notes and stats agree | checked: G3 passes on all five files and under every fixture setting |
+| D | e2e runs `m2a-accept` on the fixture, and with `M2A_PLANTS.unknownOverrideField` | applied in `21c6531` (the plant fails G6 alone) |
+| D | document `run.json` and the `--expect` format | applied, §14.8 |
+
+### 14.5 Families (part A)
+
+D2's open choices, as built (`families.mjs` header):
+- `empty` is decided first, because the name classes need a member.
+- A pair with an empty axis counts as `no-equals`.
+- `valuesAppended` counts only axes the vocabulary lists.
+- Vocabulary values that no member uses are left out of `axes` (P 22, U 17).
+- `vocabularyOrder + namesOrder = accepted`: 64 + 0, 308 + 0, 221 + 0, 342 + 6.
+
+Measured:
+- The vocabulary's axis order differs from the first member's name order in 17 / 115 / 0 / 0 accepted sets.
+- `valuesAppended` is 0 on D, K, M and P (U 1).
+- Under `--variant-grammar vocabulary`, P accepts 342 of 359 (the 6 extra rejections are `vocabulary`), and members of
+  rejected sets become 587.
+- Sets with a library identity: 62 / 180 / 226 / 347.
+- The families phase takes at most 0.4 s.
+
+### 14.6 §0.3 reconciled
+
+| quantity | outcome |
+|---|---|
+| non-root entries not in derived | the first measurement's 726 / 950 / 949 / 6 563 reproduce; the second's numbers exceed them by exactly the `[symbolID]` root counts (1 849 / 20 530 / 15 053 / 35 095) |
+| stale assignments on instances | the first's 130 / 2 034 / 922 / 1 851 reproduce with §0.2's "reached" (the master symbol or its state group), `no-root` and `undeclared` apart |
+| stale assignments in live overrides | the first's 4 / 75 / 839 / 293 reproduce as `no-definition` + `other-family` (§14.1); K's 75 is C; the second's K 4 stays unexplained |
+| refs whose field disagrees with the root's type | 0 / 0 / 0 / 94 (`type-mismatch`: chains in full, read from the symbol the id sits on, P0-1) |
+| refs naming no definition | D4's classes: `no-definition` 0 / 1 / 106 / 212, `other-family` 0, `no-root` 0 / 0 / 0 / 8, `undeclared` 0 / 0 / 0 / 324 (INSTANCE_SWAP roots whose bound layers disagree and whose default names no symbol, so D5 declares nothing) |
+| swaps to a variant of the same set | the first's split (to the same set 28 / 309 / 714 / 2 117, no-op 22 / 112 / 163 / 30, unresolved 24 / 135 / 0 / 5) reproduces exactly when every swap entry is counted (C); among the swaps of live entries, `sameSet` is 16 / 297 / 714 / 2 043 |
+| families accepted in P | 348 / 359 under `names` (the default), 342 under `vocabulary` |
+| member aliases in P | 54 727 includes the 130 state-group aliases (B) |
+| bindings resolved through an alias | 824 / 3 492 / 14 169 / 27 931, against the plan's 650 / 3 294 / 13 882 / 27 412. B counts every binding whose id is an alias on the layer's own symbol (P: 334 of two hops); the planning-era rule could not be reproduced from the plan's definitions. Not gated |
+| `overrideLevel` | only in override entries: M 34 entries (values 1-3), P 5 186 (values 1-4); D17 reads it |
+
+Other measurements the parts recorded (counts only):
+- **Stored derived box against the layer's own:**
+  - size equal in 24 471 of 29 963 / 109 467 of 154 532 / 2 725 of 17 305 / 42 290 of 92 075 entries;
+  - transform equal in 25 082 of 31 921 / 118 226 of 160 809 / 522 of 8 262 / 6 873 of 23 871.
+
+  This supports "absent means the master's" (D10) for M and P only.
+- **Derived text entries with baselines:** 3 482 of 3 489 / 19 616 of 19 624 / all 6 649 / all 51 760.
+- **Swap defaults:** `swapDefaultLayersDisagree` is M 5 roots (48 layers) and P 6 (180). Undeclared swap defaults
+  (SWAP_VALUE_DANGLING `default`) are 6 / 1 / 4 / 12.
+- **`boundLayerDiffers`:** visible P 160 (U 196), text 0.
+- **Root box, echo / `root-box`:** 2 164 / 22, 24 168 / 255, 19 691 / 413, 39 445 / 4 913.
+- **Bound conflicts:** 3 / 276 / 2 / 429.
+- **Written overrides** are above part C's own report (K 24 731 against 24 214). B's property values now give the bound
+  fields' echo baseline (D9), and C's branch measured with B's stub.
+
+### 14.7 U (extra check)
+
+The kit adds no field outside `OVERRIDE_SOURCE_FIELDS`, and every balance adds up. G1 and G2 fail:
+- 2 derived entries end on a layer of another symbol under a nested swap, so they resolve nowhere (4 before the
+  review: 2 sat under a path with two swap entries, which resolve once the walk takes the swap the D17 merge keeps,
+  §15);
+- 50 stale entries resolve although derived has no entry for their path (mostly entries carrying only
+  `stackChildCounterSizing`).
+
+Both are left for M2b's render pairs (§12). The reader's rules stand on D, K, M and P, where both counts are 0.
+
+### 14.8 Definitions `m2a-accept` uses, and the run folder
+
+- `overrides.root` counts `[symbolID]` entries only, and `emptyPath` the empty-path ones. So entries = root +
+  emptyPath + nonRoot (§1.3's row), and nonRoot = live + stale.
+- `overrides.written` counts the live paths written; the IR's non-root overrides are written + `overrides.pinned` (the
+  overrides written only to pin a hop, §15); the `path` [] override is in neither.
+- `instances.instances` equals the IR's INSTANCE record count; G6 fails when the counters cover fewer.
+- `fields.produced` = carried + echo under either `--echo` value. The IR's override fields = carried, plus the echoes
+  under `keep`.
+- `assignments.total` = kept + droppedWithEntry + merged + dangling + defaultDropped + Σ stale (D6), with dangling =
+  `swapDangling.assignment`. `bindings.total` = kept + Σ dropped (D4), with kept = the IR's
+  `componentPropertyReferences`.
+- `derived.entries` = written + empty when every entry resolves; written = the IR's derived entries.
+- **`run.json`** is new in the run folder, written by `pix-run`: `{format: "pix2fig.run", version: 1, irVersion,
+  sha256, pix, fromIr}`. `pix` is the path of the `.pix` the IR was read from, so that `--twice` can re-read it with
+  the reader settings from the IR header. It stays on the owner's machine with the rest of the run folder.
+- **The `--expect` file** lives outside the repository (`assertOutsideRepo` refuses it inside): `{"format":
+  "pix2fig.m2a-expect", "version": 1, "files": {"<the .pix's SHA-256>": {"label": "D", "numbers": {"G4.noDefinition":
+  124, …}}}}`.
+  - Every number names a gate metric (`m2a-accept.mjs` `METRICS`) and is compared with it; an unknown metric is
+    refused.
+  - A file not in it prints as "unlabelled", and its G4 reads n/a.
+- A run folder of IR version 2 is refused before anything is written, naming the M1 commit that can resume it
+  (cfa3e65).
+
+### 14.9 What M2b can rely on
+
+- **Families:**
+  - every accepted set is a COMPONENT_SET record with a `sets` entry whose axes and values are in D2's order;
+  - every member's `variant` names one value per axis, and no two members share a coordinate;
+  - every rejected group is a FRAME with one VARIANT_SET_REJECTED note, and its members are standalone components;
+  - sets carry library identity as components do.
+- **Properties:**
+  - roots only, keyed by (family, root id), each with its root's type, name and a default that resolves (an
+    INSTANCE_SWAP root with no default the IR can reference is not declared);
+  - member-owned roots are lifted to the set; preferred values are `{type, componentKey, guid?}`;
+  - every kept binding names a declared root of the layer's family, with the field of that root's type;
+  - every assignment on an instance or an override names its target's family by root id, with a value of the root's
+    type. Nothing is matched by name.
+- **Overrides:**
+  - every override is live (its path resolves and is in derived), one per path, or a pinned swap (§15) that makes the
+    IR show the symbol Pixso drew where the kept data would give another;
+  - `at` holds record indices along the post-swap path, so M2b computes Figma ids without a resolver;
+  - fields are closed to `OVERRIDE_FIELDS` and the target's type, each with its P13 class, and echoes are gone
+    (`--echo drop`);
+  - the instance's own look is the `path` [] override, and its box is the record's.
+- **Derived entries** carry Pixso's stored box sparsely, `lines`, `oracleSides`, and geometry where it changed, each
+  with `at` where every element has a record.
+- **Every loss is counted**, with a note class and in `stats.m2a`. The balances G6 and G7 add up, and nothing about
+  components reaches M1's tasks.
+- **Not settled offline** (§10, §12): rules A, B and C; the D17 default beyond P's 6 texts; "absent derived means the
+  master's"; the echo baseline of bound fields; U's 52 anomalies; the instance pass's time; `lookOf` mirroring
+  `propsOf` (equal today, measured, not shared code).
+
+## 15. Review of the build (2026-10-06)
+
+A skeptical review of branch `claude/m2a` against this plan and REWRITE §3 and §10, hunting for overrides or
+assignments dropped without a code, a resolver that resolves a path to what Pixso did not draw, a family accepted with
+a broken axis, type mismatches between definitions and bindings, nondeterminism, M1 regressions and hygiene. Every
+finding was reproduced on the files (counts only; the probes stay outside the repository), and every fix carries a
+fixture test that fails on the code before it (plants in `tools/test-m2a-instances.mjs`, and
+`M2A_PLANTS.ruleCInMaster` for P's shape of rule C). Counts are D / K / M / P, then U.
+
+| # | severity | finding | fix |
+|---|---|---|---|
+| V1 | medium | **Rule C's ignored assignment stayed in the IR.** In P all 36 resolutions through rule C ignore one of two assignments that sit on entries of one instance inside a master, not on the instance itself; the fixture's case had them on the instance. Pixso applied them in the master, so they stay there, `ignored` was 0, and the 18 instances (13 on user pages) would have shown a swap Pixso did not draw, above derived `at` indices resolved for the declared symbol | each such instance pins the hop with a swap override to the declared symbol (D7 rule C's review note; the SWAP_ASSIGNMENT_IGNORED note says so): 36 in P, 18 in U. `overrides.swaps.pinned` counts pins, `overrides.pinned` the overrides written only for one, and G6 reads the IR's non-root overrides as written + pinned |
+| V2 | medium | **Rule 2 and assignments() disagree on what an assignment reaches.** Rule 2 matches a swap assignment by its root anywhere in the definition scope, and the derived paths below such a hop resolve only under the swap; assignments() keeps only §0.2's "reached" ids (the master and its state group) and drops the rest `other-family`. Where no kept assignment gives the same symbol, M2b would build another one there: P 1 hop, U 8 (in M and K a kept assignment gives the same symbol) | pinned the same way; G4's counts do not change. `properties.mjs` exports `keeps()`, B's rule without its counters |
+| V3 | medium | **Duplicate entries read in stored order where the IR merges them by D17.** The echo baseline through a master's instance laid its entries latest-wins (P: 55 paths inside masters where that is not what `outer` keeps), so an outer override equal to the latest value was dropped as an echo though M2b builds the merged one; rule 1 took a holder's last swap entry while the IR writes the merged one (U: 2 paths, which derived resolves only under `outer`'s choice, so U's unresolved derived entries fall from 4 to 2; 0 in D, K, M, P); rule 2 read each duplicate entry as its own pool (0 in the five files) | all three read one path's entries in merge order. U's two swaps are the first evidence for D17's default beyond P's 6 texts: derived agrees with `outer` on both |
+| V4 | low | **A removal vanished without a code.** A translated field whose only effect is to remove a prop the target has (a style detached or naming none, `maxLines` cleared, per-side weights made uniform) produced no Figma field: 4 / 243 / 241 / 775 removals, most of them carried by a written companion field | uniform sides and corners are written through `strokeWeight` and `cornerRadius`; a style or `maxLines` removal counts as carried when `fills`, `strokes`, `effects`, a text field or `textTruncation` is written; any other drops its Pixso field `no-equivalent` (D8's review note): 2 / 44 / 1 / 84, U 327 (`inheritFillStyleID`, `inheritStrokeStyleID`, `inheritEffectStyleID`, `maxLines`) |
+| V5 | low | **The bound-field baseline read dropped assignments.** It took any assignment whose id reaches the root in the scope, including ids assignments() drops `other-family` (read 0 / 15 / 4 / 3 times; no echo arose from them on the files) | the baseline uses assignments()'s reach (D9's review note) |
+| V6 | low | **Rule C on one hop, the same assignment applied on another.** In U one instance's own swap assignment is ignored on one nested instance and applied on another bound to the same property; dropping it (`ignored`) took the swap from the second hop, whose override kept `at` indices in the swapped symbol. A path through a hop rule C draws declared could also resolve under the ignored swap (0 in the five files) | a hop decided by a dropped assignment, or through a binding the IR drops, is pinned (U 1; D, K, M, P none); a path that resolves only under a swap rule C ignored at an earlier hop does not resolve |
+
+Checked and found sound: no instance has stored children, so a path never matches a layer inside a nested instance;
+`at` agrees with what M2b will see on every override and derived entry of all five files after the fixes (an
+independent walk of the IR: swap override, then swap property, then the declared master, with rule B; it found V6's
+override on U); no assignment or swap of a live entry is
+dropped without a note on any of the five files; accepted sets have no empty value, no repeated axis and no value with
+`=`; G5 holds by construction and on the files. `pix-run --dry --no-pixso` prints the same preflight and balances as
+master on D, K, M and P, two reads give the same IR bytes on all five, and selftest passes.
+
+Left open, each a decision rather than a defect:
+- **Empty variant values** (`Size=`) are accepted; 0 in the five files. Whether Figma takes an empty value is P22's.
+- **Another member's lifted root.** An assignment to a member-owned root that another member of the set owns is
+  stale `other-family` by §0.2 (D 3 of 6, K 30 of 1 719). It is bound only in that member, so nothing drawn changes,
+  but Figma's set has the property and keeps a value across a variant switch.
+- **No-op translations.** A translated field whose Figma fields are absent on both sides (a root `inheritFillStyleID`
+  naming no style on a master root that has none: P 15 244) is counted translated and writes nothing; it changes
+  nothing, so it is not a loss, but G6 cannot tell it from one.
+
+Commits of the review, on top of `e1b8145`: `0192405` (V1), `0c51b9b` (V4), `34e2ea6` (V5), `382068b` (V2), `8943c3d`
+and `2f0959a` (V3), `5be412a` (V6), and the commit that adds this section.
+
+**Master's U fixes merged** (PR #8, `docs/M1.md` §15.13), in the merge commit after `747e308`. IR version 3 keeps what
+they added to version 2: the `boolean-operands` class of VECTOR_ORACLE_DIFFERS (in `NOTE_CLASSES` after the vector
+classes; the validator holds such a note to a BOOLEAN_OPERATION record with its stored result), the reader's
+`vectors.vertexRadiusZero`, `thinStrokes` and `staleBooleans`, and the judge's `booleanOperands` class. After the merge
+`m2a-accept --expect --twice` prints the same gates and numbers on all five files as before it, and
+`pix-run --dry --no-pixso` prints the same preflight and balances as master (`5dfdb4c`) on all five.

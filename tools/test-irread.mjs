@@ -29,7 +29,7 @@ if (typeof zlib.zstdCompressSync !== "function") {
   console.log("FAIL the reader's checks need Node 22.15 or newer (built-in zstd); this is node " + process.version);
   process.exit(1);
 }
-const { makeFixture, IDS, encodeVectorNetwork, encodePath } = await import("./pix/fixture.mjs");
+const { makeFixture, IDS, M2A, encodeVectorNetwork, encodePath } = await import("./pix/fixture.mjs");
 const { pixToIR, decodeVectorNetwork } = await import("./pix/ir/index.mjs");
 const { validate } = await import("./ir/validate.mjs");
 const { CODE, REASON_CODES, canonicalJSON } = await import("./ir/schema.mjs");
@@ -54,7 +54,10 @@ const eq = (a, b, what) => { try { deepStrictEqual(a, b); } catch (e) { throw ne
 
 const fx = makeFixture();
 const read = (settings) => pixToIR(fx.pix, { settings });
-const R = { auto: read(), native: read({ booleans: "native" }), flatten: read({ booleans: "flatten" }), center: read({ spaceEvenlySingle: "center" }), between: read({ spaceEvenlySingle: "between" }) };
+// frames: M1's D7 (no variant sets), the reading M1's component checks below hold under since IR
+// version 3 parses sets (docs/M2A.md D2, §5.4).
+const R = { auto: read(), native: read({ booleans: "native" }), flatten: read({ booleans: "flatten" }), center: read({ spaceEvenlySingle: "center" }), between: read({ spaceEvenlySingle: "between" }),
+  frames: read({ variantSets: "frames" }) };
 const { ir, stats } = R.auto;
 const idx = (I, guid) => I.nodes.findIndex((n) => n.guid === guid);
 const rec = (guid, I = ir) => { const i = idx(I, guid); if (i < 0) throw new Error("no record for " + guid); return I.nodes[i]; };
@@ -76,8 +79,8 @@ check("a schema that numbers every enum differently gives the same IR (names, ne
   const strip = (x) => { const c = JSON.parse(JSON.stringify(x)); delete c.header.source.sha256; return JSON.stringify(c); };
   return strip(r) === strip(ir);
 });
-check("the header: format, version 2, pix source, file scope, the settings", () => {
-  eq(ir.header.format, "pix2fig.ir"); eq(ir.header.version, 2); eq(ir.header.source.kind, "pix");
+check("the header: format, version 3, pix source, file scope, the settings", () => {
+  eq(ir.header.format, "pix2fig.ir"); eq(ir.header.version, 3); eq(ir.header.source.kind, "pix");
   eq(ir.header.scope, { kind: "file" });
   eq([ir.header.settings.booleans, ir.header.settings.spaceEvenlySingle, ir.header.settings.textFit], ["auto", "center", "widen"]);
   eq(R.flatten.ir.header.settings.booleans, "flatten");
@@ -94,7 +97,7 @@ check("IR notes carry read-stage codes only", () => ir.notes.every((n) => REASON
 
 // ---------- 2. pages, populations and the balance ----------
 check("pages in position order; the DIRECTORY's canvas is a page, the folder is not", () => {
-  eq(ir.pages.map((p) => [p.guid, p.internal]), [["0:1", false], [IDS.casesPage, false], ["0:2", true]]);
+  eq(ir.pages.map((p) => [p.guid, p.internal]), [["0:1", false], [IDS.casesPage, false], [M2A.page, false], ["0:2", true]]);
   eq(stats.notCarried.directories, 1);
   return !ir.nodes.some((n) => n.guid === IDS.directory);
 });
@@ -105,23 +108,30 @@ check("style definitions are not node records and are counted", () => {
 });
 check("the balance: stored = records + pages + directories + style definitions + not carried + folded", () => {
   const nc = stats.notCarried;
-  eq(nc, { pages: 3, directories: 1, documents: 0, styleDefinitions: 2, variables: 0, unsupported: 1, foldedOperands: 5, degenerate: 2, outOfScope: 0 });
+  // The M2a cases (docs/M2A.md §5.4) add a page, a symbol that is not carried (a non-finite
+  // transform: degenerate) and a class B boolean whose two operands fold.
+  eq(nc, { pages: 4, directories: 1, documents: 0, styleDefinitions: 2, variables: 0, unsupported: 1, foldedOperands: 7, degenerate: 3, outOfScope: 0 });
   const sum = Object.values(nc).reduce((a, b) => a + b, 0);
-  eq([stats.stored, ir.nodes.length, stats.records + sum], [89, 75, 89]);
-  return "89 = 75 + " + sum;
+  eq([stats.stored, ir.nodes.length, stats.records + sum], [183, 165, 183]);
+  return "183 = 165 + " + sum;
 });
 check("the populations, as root records and record counts", () => {
   const P = stats.populations, n = (k) => P[k].length;
   eq([n("userTop"), n("userMasters"), n("mastersNoInstance"), n("mastersWithInstanceInternal"), n("internalLoose"), n("stateGroupsInternal"), n("lostBorder")],
-    [30, 0, 5, 1, 0, 1, 3]);
-  eq(P.mastersNoInstance.map((i) => ir.nodes[i].guid), ["1:11", "1:14", "1:20", "1:22", "1:40"]);
-  eq(P.mastersWithInstanceInternal.map((i) => ir.nodes[i].guid), ["1:30"]);
-  eq(P.lostBorder.map((i) => ir.nodes[i].guid), [IDS.ring, IDS.dashed, IDS.noPath]);
+    [44, 2, 21, 7, 0, 8, 4]);
+  // M1's, then the M2a cases': icons, the library set's members, the rejected and vocabulary sets' members.
+  eq(P.mastersNoInstance.map((i) => ir.nodes[i].guid), ["1:11", "1:14", "1:20", "1:22", "1:40", M2A.circle, M2A.square, M2A.triangle, M2A.spacer,
+    M2A.libTagLight, M2A.libTagDark, M2A.rejNoEqualsA, M2A.rejNoEqualsB, M2A.rejDupAxisA, M2A.rejDupAxisB, M2A.rejAxisCountA, M2A.rejAxisCountB,
+    M2A.rejDupCoordA, M2A.rejDupCoordB, M2A.vocabA, M2A.vocabB]);
+  eq(P.mastersWithInstanceInternal.map((i) => ir.nodes[i].guid), ["1:30", M2A.chipS, M2A.chipHoverS, M2A.chipM, M2A.chipL, M2A.row, M2A.card]);
+  eq(P.stateGroupsInternal.map((i) => ir.nodes[i].guid), ["1:10", M2A.libTag, M2A.chip, M2A.rejNoEquals, M2A.rejDupAxis, M2A.rejAxisCount, M2A.rejDupCoord, M2A.vocab]);
+  eq(P.userMasters.map((i) => ir.nodes[i].guid), [M2A.toggleOff, M2A.toggleOn]);
+  eq(P.lostBorder.map((i) => ir.nodes[i].guid), [IDS.ring, IDS.dashed, IDS.noPath, M2A.rowBg]);
   eq(stats.lostBorderSections, 1);
   const C = stats.populationCounts;
-  eq(C.mastersNoInstance, { records: 12, nonInstance: 12, instances: 0 });
-  eq(C.mastersWithInstanceInternal, { records: 4, nonInstance: 2, instances: 2 });
-  eq(C.userTop.instances, 3);
+  eq(C.mastersNoInstance, { records: 43, nonInstance: 43, instances: 0 });
+  eq(C.mastersWithInstanceInternal, { records: 38, nonInstance: 27, instances: 11 });
+  eq(C.userTop.instances, 16);
   eq(C.userTop.records + C.mastersNoInstance.records + C.mastersWithInstanceInternal.records + C.stateGroupsInternal.records + C.internalLoose.records, ir.nodes.length);
   for (const k of ["userTop", "mastersNoInstance"]) for (const i of P[k]) if (k === "userTop" ? ir.nodes[i].parent !== -1 : ir.nodes[i].type !== "COMPONENT") throw new Error(k + " holds " + i);
 });
@@ -130,7 +140,9 @@ check("the unsupported node type is not carried, noted by guid", () => {
   eq(n.map((x) => [x.guid, x.node]), [[IDS.unsupported, undefined]]);
   return n[0].detail;
 });
-check("components: standalone entries; a library copy keeps its identity, an own internal master is deleted", () => {
+// Under --variant-sets frames: M1's D7, which docs/M2A.md D13 keeps as a setting.
+check("components (--variant-sets frames): standalone entries; a library copy keeps its identity, an own internal master is deleted", () => {
+  const ir = R.frames.ir, rec = (g) => ir.nodes[idx(ir, g)];
   const c = (g) => ir.components.find((x) => ir.nodes[x.node].guid === g);
   eq(c("1:40").library, { publishFile: "fixturelibraryfilekey00", publishID: "50:7", componentKey: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c", sharedSymbolVersion: "fixture-version-3" });
   eq([c("1:30").set, c("1:30").deleted, c("1:11").set], [null, true, null]);
@@ -139,8 +151,9 @@ check("components: standalone entries; a library copy keeps its identity, an own
   return !ir.notes.some((n) => n.code === CODE.VARIANT_SET_REJECTED) && ir.sets.length === 0;
 });
 check("instances are placeholders naming their master's record, with no child records", () => {
-  eq(rec("1:60").instance, { master: { guid: "1:30" } });
-  eq(rec("1:62").instance, { master: { guid: "1:40" } });
+  // The master only: the rest of an instance's data is M2a's (docs/M2A.md D6-D11).
+  eq(rec("1:60").instance.master, { guid: "1:30" });
+  eq(rec("1:62").instance.master, { guid: "1:40" });
   eq(Object.keys(rec("1:61").props).sort(), ["height", "relativeTransform", "width"]);
   return !ir.nodes.some((n) => n.parent >= 0 && ir.nodes[n.parent].type === "INSTANCE");
 });
@@ -171,7 +184,8 @@ check("a dashed border and a border with no stroke-area path have no oracle", ()
   return codesOf(IDS.dashed).includes(CODE.SOURCE_FEATURE_UNSUPPORTED);
 });
 check("the side census: population, checked, agree, unproven, and why there is no oracle", () => {
-  eq(stats.sides, { population: 7, checked: 4, agree: 3, unproven: 1, noOracle: { noPath: 2, dashed: 1, small: 0 } });
+  // The M2a cases add one: Row's background, a stroked rectangle with no stroke-area path.
+  eq(stats.sides, { population: 8, checked: 4, agree: 3, unproven: 1, noOracle: { noPath: 3, dashed: 1, small: 0 } });
 });
 check("an absent strokeAlign on a visible stroke is decided by the stroke-area path's reach", () => {
   const r = pixToIR(mutated((v, at) => { delete at(IDS.ring).strokeAlign; at(IDS.ring).strokePaddingPath[0].blobIndex = 30; }));
@@ -559,21 +573,22 @@ check("auto: class A booleans native (a nested one too), class B flattened with 
   eq([b.type, val(b.props.fills)[0].type, idx(ir, IDS.boolBLine1), idx(ir, IDS.boolBInner)], ["VECTOR", "SOLID", -1, -1]);
   const n = notesOf(IDS.boolB);
   eq(n.map((x) => x.code), [CODE.BOOLEAN_FLATTENED]);
-  eq(stats.booleans, { native: 3, flattened: 1, foldedNodes: 5, degenerate: 1 });
+  // M1's class B boolean (5 folded nodes) and Row's in the M2a cases (2 folded operands).
+  eq(stats.booleans, { native: 3, flattened: 2, foldedNodes: 7, degenerate: 1 });
   return n[0].detail;
 });
 check("flatten: every outermost boolean is one VECTOR; nested ones fold", () => {
   const I = R.flatten.ir;
   eq([rec(IDS.boolA, I).type, rec(IDS.boolXor, I).type, rec(IDS.boolB, I).type, idx(I, IDS.boolNested)], ["VECTOR", "VECTOR", "VECTOR", -1]);
-  eq(I.notes.filter((n) => n.code === CODE.BOOLEAN_FLATTENED).length, 3);
-  eq(R.flatten.stats.booleans, { native: 0, flattened: 3, foldedNodes: 12, degenerate: 1 });
+  eq(I.notes.filter((n) => n.code === CODE.BOOLEAN_FLATTENED).length, 4);
+  eq(R.flatten.stats.booleans, { native: 0, flattened: 4, foldedNodes: 14, degenerate: 1 });
 });
 check("native: no boolean flattened; class B keeps its operands and notes the lost operand strokes", () => {
   const I = R.native.ir;
   eq(I.notes.filter((n) => n.code === CODE.BOOLEAN_FLATTENED).length, 0);
   eq([rec(IDS.boolB, I).type, rec(IDS.boolBLine1, I).type, rec(IDS.boolBInner, I).type], ["BOOLEAN_OPERATION", "LINE", "BOOLEAN_OPERATION"]);
   eq(notesOf(IDS.boolB, I).map((n) => n.detail), ["operand strokes"]);
-  eq(R.native.stats.booleans, { native: 5, flattened: 0, foldedNodes: 0, degenerate: 1 });
+  eq(R.native.stats.booleans, { native: 6, flattened: 0, foldedNodes: 0, degenerate: 1 });
 });
 check("a boolean with no operand and no geometry is not carried (GEOMETRY_INVALID)", () => {
   eq(idx(ir, IDS.boolEmpty), -1);
@@ -661,12 +676,13 @@ check("layout grids are counted SOURCE_FEATURE_UNSUPPORTED on the frame that has
 check("values are interned once each, compared as canonical JSON", () => new Set(ir.values.map((v) => canonicalJSON(v))).size === ir.values.length);
 
 // ---------- 12. scope ----------
-check("--scope pages: one top-level object; the master an instance names joins it", () => {
+check("--scope pages: one top-level object; the master an instance names joins it, and the symbol its override swaps to (docs/M2A.md D12)", () => {
   const one = pixToIR(fx.pix, { settings: { scope: "pages:" + IDS.sides } });
   eq(one.ir.nodes.filter((n) => n.parent === -1).map((n) => n.guid), [IDS.sides]);
   eq(one.ir.header.scope, { kind: "pages", ids: [IDS.sides] });
   const card = pixToIR(fx.pix, { settings: { scope: "pages:1:60" } });
-  eq(card.ir.nodes.filter((n) => n.parent === -1).map((n) => n.guid), ["1:60", "1:20", "1:30"]);
+  // Card (1:30) and its nested icons' Star (1:20) as in M1; Heart (1:22), which the instance's override swaps to, since IR version 3.
+  eq(card.ir.nodes.filter((n) => n.parent === -1).map((n) => n.guid), ["1:60", "1:20", "1:22", "1:30"]);
   const nc = Object.values(card.stats.notCarried).reduce((a, b) => a + b, 0);
   eq(card.stats.records + nc, card.stats.stored);
   return card.stats.notCarried.outOfScope + " stored nodes out of scope";
@@ -688,7 +704,7 @@ try {
       JSON.parse(r2.stdout).records === R.native.ir.nodes.length) ok("pix-to-ir writes the IR outside the repository, and the stats beside it");
   else fail("pix-to-ir outside the repository: exit " + r2.status + ", " + JSON.stringify((r2.stderr || "").slice(0, 300)));
   const r3 = run(file, "--stats-only");
-  if (r3.status === 0 && JSON.parse(r3.stdout).stored === 89) ok("pix-to-ir --stats-only prints counts and writes nothing");
+  if (r3.status === 0 && JSON.parse(r3.stdout).stored === 183) ok("pix-to-ir --stats-only prints counts and writes nothing");
   else fail("pix-to-ir --stats-only: exit " + r3.status);
   const bad = join(tmp, "truncated.pix");
   writeFileSync(bad, makeFixture("truncated").pix);
