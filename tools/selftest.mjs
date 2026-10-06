@@ -174,7 +174,7 @@ try { console.log(""); execFileSync("node", [join(HERE, "test-plugin.mjs")], { s
 // and exit 0; each part replaces only its own file, in this order: the reader (A), the double (E),
 // the builder (B), verify and the judge (C), the planner and acceptance (D), end to end (F).
 const M1_TESTS = [["test-m1-contract.mjs", "P0"], ["test-irread.mjs", "A"], ["test-double.mjs", "E"], ["test-irbuild.mjs", "B"],
-  ["test-irverify.mjs", "C"], ["test-pixrun.mjs", "D"], ["test-m1-e2e.mjs", "F"]];
+  ["test-irverify.mjs", "C"], ["test-pixrun.mjs", "D"], ["test-m1-e2e.mjs", "F"], ["test-iraudit.mjs", "the render audit"]];
 for (const [t, part] of M1_TESTS) {
   console.log("");
   try { execFileSync(process.execPath, [join(HERE, t)], { stdio: "inherit" }); }
