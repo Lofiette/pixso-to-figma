@@ -25,7 +25,9 @@
 // is its own job, and what it may remove is an earlier run's build of the task's top-level roots,
 // whole, split pieces attached by later tasks included; such a build holds at most every IR record
 // under those roots (removing nodes is not cheaper than making them, I), so
-// cleanCeilingMs = CEILING_BASE_MS + ceilingMsPerNode × that count. A split piece is not top-level, so
+// cleanCeilingMs = CEILING_BASE_MS + ceilingMsPerNode × that count. That is one earlier copy: the clean
+// removes every other run's copy it finds, and each run's clean leaves none behind, but a file holding
+// several (built before the clean existed) needs a larger --ceiling-ms-per-node. A split piece is not top-level, so
 // the clean of a later task of a chain removes nothing and counts 0 for it.
 //
 // Which records are built. Every record is claimed by exactly one population (POPULATIONS):
