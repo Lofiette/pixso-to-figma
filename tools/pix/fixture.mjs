@@ -916,7 +916,9 @@ function m2aNodes({ E, T, solid, geom, B, INTERNAL, DIR, STYLE }) {
   //   parents (docs/M2A.md §13);
   //   5:234 visible 5:908 (the lifted member-owned root).
   // Bound layers whose own value differs from the root's default (properties.boundLayerDiffers):
-  //   visible 1 (5:202 is hidden, Show icon defaults to true); text 1 (5:231 says "Large").
+  //   visible 2 (5:202 is hidden while Show icon defaults to true; 5:234 is shown while Badge defaults to
+  //   false); text 3 (5:231 says "Large", and M1's two Button labels have no characters while Label
+  //   defaults to "Button"). Part B's test asserts these (docs/M2A.md "as built").
   const member = (id, position, name, x, defs, layers) => [node(id, M2A.chip, position, "SYMBOL", name, x, 0, 96, 32, { componentPropDef: defs }), ...layers];
   const icon = (guid, parent, defId) => inst(guid, parent, "c", "Icon", M2A.circle, 80, 11, 10, 10, { componentPropRef: [ref(defId, "OVERRIDDEN_SYMBOL_ID")], derivedSymbolData: [D([M2A.circleShape])] });
   add(...member(M2A.chipS, "a", "Size=S, State=Default", 0, [alias(M2A.dChipSLabel, M2A.dLabel), alias(M2A.dChipSShow, M2A.dShowIcon), alias(M2A.dChipSIcon, M2A.dIcon),
