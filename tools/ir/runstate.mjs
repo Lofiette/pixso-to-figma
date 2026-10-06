@@ -6,14 +6,23 @@
 // states.json v2:
 //   { version: 2, snapshot, irVersion, runId, settings, probes: { P4, P5, P6, P8, P18, P19B: "run <date>" | "pending" },
 //     pixso: { used, identity, q5 }, fonts: { missing: [{ family, style }] }, balance: {…},
-//     tasks: [{ taskNo, op, roots: [IR index], nodes, ceilingMs, state, codes, ms, error, failures, build? }] }
+//     tasks: [{ taskNo, op, roots: [IR index], nodes, ceilingMs, state, codes, ms, error, failures, build?, run?, buildRun?, cleanCeilingMs?, clean? }] }
 //   state: pending | built | built-with-fallbacks | failed | skipped. `failures` (the build report's
 //   failures[] count, gate G5) is a key this file adds to docs/M1.md §6 D's task record, and so is
 //   `flow` on a build ({ groupNodes, absolute, rotPinned, quarterTurnsBaked }: the auto layout the
 //   build gave up to hold positions, printed by the verdict); `build`, on a
 //   verify task, names the build task it verifies (the plan's ledger; a split chain's verifies come
 //   after all its builds, so a verify is not always the task after its build). A record without it
-//   (states.json written before) pairs a verify with the task before it (buildNoOf).
+//   (states.json written before) pairs a verify with the task before it (buildNoOf). `run`, on a
+//   build, is the runId of the run attempt that built it (task.runId: a new one on every attempt, so a
+//   resume runs under another); the verify of that build is sent with buildRun = that run and records
+//   it, and measures only roots stamped with it (docs/M1.md §15.12). A verify whose build carries no
+//   `run` (states.json written before) is sent without one, and measures only its own attempt's roots.
+//   `cleanCeilingMs`, on a build, is the ceiling of the clean sent before it (the plan's ledger: the
+//   clean is its own job, sized on the earlier build it may remove, not on the build's records); a
+//   record without it (written before) gives the clean the build's ceilingMs. `clean`, on a build,
+//   is { removed, kept, ceilingMs } from that clean's report: how many top-level roots of an earlier
+//   run it removed and how many of this run it found (docs/M1.md §15.12).
 //
 // Transitions (TRANSITIONS): pending -> built | built-with-fallbacks | failed | skipped; on resume
 // failed and skipped -> pending. A built task is never re-run by a resume of the same snapshot and
@@ -71,7 +80,8 @@ export function newStates({ snapshot, irVersion, runId, settings, probes, pixso,
     pixso: pixso || { used: false, identity: null, q5: false },
     fonts: { missing: [] }, balance,
     tasks: ledger.map((t) => Object.assign({ taskNo: t.taskNo, op: t.op, roots: t.roots.slice(), nodes: t.nodes, ceilingMs: t.ceilingMs,
-      state: "pending", codes: {}, ms: {}, error: null, failures: 0 }, t.op === "verify" && Number.isInteger(t.build) ? { build: t.build } : {})),
+      state: "pending", codes: {}, ms: {}, error: null, failures: 0 }, t.op === "verify" && Number.isInteger(t.build) ? { build: t.build } : {},
+    t.op === "build" && Number.isFinite(t.cleanCeilingMs) ? { cleanCeilingMs: t.cleanCeilingMs } : {})),
   };
 }
 
@@ -112,7 +122,12 @@ export function resumeStates(old, fresh, tasks) {
   let resumed = 0;
   fresh.tasks.forEach((t, k) => {
     const o = old.tasks[k];
-    if (keep[k]) { Object.assign(t, { state: o.state, codes: o.codes, ms: o.ms, error: null, failures: o.failures || 0 }); resumed++; }
+    if (keep[k]) {
+      Object.assign(t, { state: o.state, codes: o.codes, ms: o.ms, error: null, failures: o.failures || 0 });
+      for (const key of ["run", "buildRun"]) if (typeof o[key] === "string") t[key] = o[key];
+      if (o.clean && typeof o.clean === "object") t.clean = o.clean;
+      resumed++;
+    }
   });
   fresh.fonts = old.fonts || fresh.fonts;
   return { states: fresh, resumed };
@@ -160,7 +175,7 @@ export function transition(states, taskNo, to, rec) {
   if (TASK_STATES.indexOf(to) < 0) throw new RangeError("unknown state " + JSON.stringify(to));
   if (TRANSITIONS[t.state].indexOf(to) < 0) throw new Error("task " + taskNo + ": " + t.state + " cannot become " + to);
   t.state = to;
-  if (rec) for (const k of ["codes", "ms", "error", "failures", "flow"]) if (rec[k] !== undefined) t[k] = rec[k];
+  if (rec) for (const k of ["codes", "ms", "error", "failures", "flow", "run", "buildRun", "clean"]) if (rec[k] !== undefined) t[k] = rec[k];
   return t;
 }
 
@@ -224,12 +239,18 @@ export async function runTasks(o) {
       continue;
     }
     const opts = { ceilingMs: rec.ceilingMs, images: o.imagesFor ? o.imagesFor(task) : new Map() };
-    let report;
+    let report, sent = task, cleaned, inClean = false;
     try {
       if (task.op === "build" && o.clean) {
         const c = o.clean(task);
         if (c) {
-          const rc = await o.post(c, { ceilingMs: rec.ceilingMs, images: new Map() });
+          // Its own ceiling: an earlier build it removes may be far larger than this task (a split
+          // root's first task removes the whole root an earlier run built).
+          const cc = Number.isFinite(rec.cleanCeilingMs) && rec.cleanCeilingMs > 0 ? rec.cleanCeilingMs : rec.ceilingMs;
+          inClean = true;
+          const rc = await o.post(c, { ceilingMs: cc, images: new Map() });
+          inClean = false;
+          cleaned = { removed: rc && Number.isFinite(rc.removed) ? rc.removed : null, kept: rc && Number.isFinite(rc.kept) ? rc.kept : null, ceilingMs: cc };
           // A clean that was refused, sent nothing back or could not remove an earlier run's roots
           // would leave them in the file beside the new build, which VERIFY (preferring this run's)
           // cannot see: the build does not run, and the task is a resumable BUILD_FAILED (G1).
@@ -238,7 +259,7 @@ export async function runTasks(o) {
             const codes = {};
             count(codes, CODE.BUILD_FAILED);
             const why = "clean: " + (!rc ? "no report" : rc.error ? String(rc.error) : rc.refused ? "refused" : left + " old roots not removed");
-            transition(states, task.taskNo, "failed", { codes, error: why });
+            transition(states, task.taskNo, "failed", { codes, error: why, clean: cleaned });
             log("  task " + task.taskNo + " (build): " + CODE.BUILD_FAILED + ": " + why);
             save(states);
             continue;
@@ -252,22 +273,24 @@ export async function runTasks(o) {
           save(states);
           continue;
         }
+        // The verify measures the build of the attempt that made it, and no other run's copy.
+        if (typeof b.run === "string") sent = Object.assign({}, task, { buildRun: b.run });
       }
-      report = await o.post(task, opts);
+      report = await o.post(sent, opts);
     } catch (e) {
       const codes = {};
       if (isStall(e)) {
         count(codes, CODE.PLUGIN_STALLED);
-        transition(states, task.taskNo, "failed", { codes, error: errText(e) });
-        log("  task " + task.taskNo + " (" + task.op + "): " + CODE.PLUGIN_STALLED + " — the run stops; run again to resume");
+        transition(states, task.taskNo, "failed", { codes, error: (inClean ? "clean: " : "") + errText(e) });
+        log("  task " + task.taskNo + " (" + task.op + (inClean ? ", its clean" : "") + "): " + CODE.PLUGIN_STALLED + " — the run stops; run again to resume");
         skipRest(task.taskNo);
         save(states);
         stopped = "stalled";
         break;
       }
       count(codes, CODE.BUILD_FAILED);
-      transition(states, task.taskNo, "failed", { codes, error: errText(e) });
-      log("  task " + task.taskNo + " (" + task.op + "): " + CODE.BUILD_FAILED + ": " + String((e && e.message) || e).split("\n")[0]);
+      transition(states, task.taskNo, "failed", { codes, error: (inClean ? "clean: " : "") + errText(e) });
+      log("  task " + task.taskNo + " (" + task.op + (inClean ? ", its clean" : "") + "): " + CODE.BUILD_FAILED + ": " + String((e && e.message) || e).split("\n")[0]);
       save(states);
       continue;
     }
@@ -297,19 +320,21 @@ export async function runTasks(o) {
     }
     if (task.op === "build") {
       const out = buildOutcome(report);
-      transition(states, task.taskNo, out.state, { codes: out.codes, ms: out.ms, failures: out.failures, flow: out.flow });
+      transition(states, task.taskNo, out.state, { codes: out.codes, ms: out.ms, failures: out.failures, flow: out.flow, run: task.runId, clean: cleaned });
       builds.set(task.taskNo, report);
       save(states);
       continue;
     }
     if (task.op === "verify") {
       const codes = {};
-      const lost = (report.roots || []).filter((r) => !r.found).length;
+      const lostRoots = (report.roots || []).filter((r) => !r.found);
+      const lost = lostRoots.length;
       if (lost) count(codes, CODE.ROOT_NOT_FOUND, lost);
+      for (const r of lostRoots) if (typeof r.reason === "string") log("  task " + task.taskNo + " (verify): root " + r.i + " " + CODE.ROOT_NOT_FOUND + ": " + r.reason);
       const build = builds.has(buildNoOf(rec)) ? builds.get(buildNoOf(rec)) : null;
       const J = o.judge ? o.judge({ task, build, verify: report }) : null;
       if (J) { Js.push(Object.assign({ taskNo: task.taskNo }, { J })); if (o.onJudge) o.onJudge(task, J); }
-      transition(states, task.taskNo, "built", { codes, ms: report.ms || {} });
+      transition(states, task.taskNo, "built", Object.assign({ codes, ms: report.ms || {} }, sent.buildRun ? { buildRun: sent.buildRun } : {}));
       save(states);
       continue;
     }

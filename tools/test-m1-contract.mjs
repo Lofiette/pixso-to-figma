@@ -105,6 +105,10 @@ taskOk("an S2 master on the service page, attached to the page at its grid place
 }));
 taskErr("an unknown op", tmut(buildTask, (t) => { t.op = "paint"; }), "op");
 taskErr("a runId that is not 16 hex", tmut(buildTask, (t) => { t.runId = "run-1"; }), "runId");
+// buildRun (docs/M1.md §15.12): a verify names the run attempt that built its roots.
+taskOk("a verify naming the run that built its roots (buildRun) passes", tmut(buildTask, (t) => { t.op = "verify"; t.buildRun = "fedcba9876543210"; }));
+taskErr("buildRun on a build task", tmut(buildTask, (t) => { t.buildRun = "fedcba9876543210"; }), "buildRun");
+taskErr("a buildRun that is not 16 hex", tmut(buildTask, (t) => { t.op = "verify"; t.buildRun = "run-0"; }), "buildRun");
 taskErr("another task version", tmut(buildTask, (t) => { t.version = 2; }), "version");
 taskErr("records of another IR version", tmut(buildTask, (t) => { t.irVersion = 1; }), "irVersion");
 taskErr("an unknown key", tmut(buildTask, (t) => { t.extra = 1; }), "extra");
@@ -275,6 +279,28 @@ check(/props is tools\/ir\/props\.mjs/.test(threw(() => taskMod.validateTask(bui
   const ctx2 = IR.makeCtx(D.figma, task, { id: "j2" });
   const ctx3 = IR.makeCtx(D.figma, Object.assign(buildTask(), { runId: "fedcba9876543210" }), { id: "j3" });
   check(ctx2.S === ctx.S && ctx3.S !== ctx.S && same(ctx3.S.nodes, {}), "the session is kept across the tasks of one run and starts again for another run");
+  // A verify takes only the build of the attempt that built it (task.buildRun, else its own runId), and
+  // says when only another run's copy is there (§15.12). Build and clean keep any run's as a fallback.
+  {
+    const VT = (o) => Object.assign(buildTask(), { op: "verify" }, o);
+    const R2 = "00000000000000b2";
+    const onlyOld = Object.assign(buildTask(), { snapshot: "pix:" + "e".repeat(64) });
+    const cv = IR.makeCtx(D.figma, Object.assign(VT(), { snapshot: onlyOld.snapshot }), { id: "v1" });
+    const old = D.figma.createFrame();
+    for (const [k, v] of [["pxIdx", "0"], ["pxSnap", onlyOld.snapshot], ["pxIr", String(schema.VERSION)], ["pxSrc", "1:2"], ["pxRun", "fedcba9876543210"]]) cv.stamp(old, k, v);
+    const miss = {};
+    const none = await cv.findRoot(0, undefined, miss);
+    check(none === null && miss.otherRun === "fedcba9876543210" && miss.otherId === old.id,
+      "a verify does not take an earlier run's copy of a root, and says whose copy it passed over", JSON.stringify([none && none.id, miss]));
+    const cb = IR.makeCtx(D.figma, Object.assign(buildTask(), { snapshot: onlyOld.snapshot }), { id: "b1" });
+    check((await cb.findRoot(0)) === old, "a build still falls back to an earlier run's copy (a split root's parent, the clean's targets)");
+    const cvr = IR.makeCtx(D.figma, Object.assign(VT({ buildRun: "fedcba9876543210" }), { snapshot: onlyOld.snapshot, runId: R2 }), { id: "v2" });
+    check((await cvr.findRoot(0)) === old, "a verify under a later runId finds the roots stamped with its buildRun (a resumed attempt verifying an earlier attempt's build)");
+    const cvx = IR.makeCtx(D.figma, Object.assign(VT({ buildRun: R2 }), { snapshot: onlyOld.snapshot, runId: R2 }), { id: "v3" });
+    cvx.S.nodes["0"] = old.id;
+    check((await cvx.findRoot(0)) === null, "a verify skips a remembered node of another run");
+    old.remove();
+  }
   if (IR.countLines.notInThisBuild) check(/IR\.countLines is not in this build: part C/.test(threw(() => ctx.measure(frame, task.nodes[3]))), "ctx.measure calls IR.countLines, which refuses until part C lands");
   host.measure = (c, node, rec) => ({ lines: 2, approx: false, rec: rec.i });
   check(same(ctx.measure(frame, task.nodes[3]), { lines: 2, approx: false, rec: 3 }), "a test's host.measure replaces IR.countLines");

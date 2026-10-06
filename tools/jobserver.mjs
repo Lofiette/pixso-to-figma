@@ -157,7 +157,11 @@ export function startJobServer(port = 3778, opts = {}) {
   let blobs = new Map();           // hash -> Buffer
   const waiting = new Map();       // id -> { resolve, reject }
   let seq = 0;
-  let lastPoll = 0;            // when the plugin last asked for work
+  // Job ids carry this runner's own tag. A window finishing a job for a runner that died reports it to
+  // whichever runner listens now, and with plain "j1", "j2" the new runner took that report for its own
+  // job of the same number (docs/M1.md §15.12).
+  const idTag = randomBytes(4).toString("hex");
+  let lastPoll = 0;           // when the plugin last asked for work
   let staleSeen = 0;           // when a plugin window of another build last asked (409)
   let owner = null;            // X-PXF-Window of the window given this runner's first job ("" when it names none)
   let ownerSeen = 0;           // when that window last asked anything
@@ -543,7 +547,7 @@ export function startJobServer(port = 3778, opts = {}) {
       if (typeof payloadText !== "string") return Promise.reject(new Error("a job's payload is JSON text"));
       const badOpts = checkPostOpts(opts);
       if (badOpts) return Promise.reject(new Error("post: " + badOpts));
-      const id = "j" + (++seq);
+      const id = "j" + (++seq) + "-" + idTag;
       if (job.imageTransport !== undefined && IMAGE_TRANSPORTS.indexOf(job.imageTransport) < 0) {
         return Promise.reject(new Error("post: imageTransport is " + IMAGE_TRANSPORTS.join(" or ")));
       }
