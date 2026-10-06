@@ -5,7 +5,8 @@
 // sides Pixso draws (a solid stroke, a path, both sides at least 2 px), five points per side are
 // sampled in the middle of the band the side would draw, away from the corners, exactly as the
 // measurement of §1.2 did; the result is the IR-own oracleSides, and where rule and oracle disagree
-// the IR follows the oracle and notes SIDE_RULE_UNPROVEN.
+// the IR follows the oracle and notes SIDE_RULE_UNPROVEN. A stroke whose every side rounds to 0 (the
+// IR's two decimals) takes no oracle: the IR draws no side of it (stats.thinStrokes).
 //
 // Corners: any rectangle*CornerRadius field present means the four fields, a missing one 0 (M writes
 // no cornerRadius on 3 834 nodes); otherwise cornerRadius. Four equal values are written as one.
@@ -136,7 +137,13 @@ export function strokeProps(cx, n, type, put, opts) {
   if (opts && opts.sides && visiblePaint(n.strokePaints)) {
     const rule = sideRule(n);
     const storedAlign = cx.en("PixsoNode", "strokeAlign")(n.strokeAlign);
-    const oracle = sideOracle(cx, n, rule, storedAlign === undefined ? "absent" : storedAlign);
+    // A stroke whose every side rounds to 0 at the IR's two decimals (a 0.001 px border, U and P: 6
+    // components each) is weight 0 in the IR and draws nothing in Figma. Its stroke-area path still
+    // holds the 0.001 px ring, so an oracle would say every side is drawn, against the IR's own weight
+    // (the first live build of U, 2026-10-06: 3 G8 findings). No oracle is taken for it.
+    const thin = rule.some((v) => v > 0) && rule.every((v) => r2(v) === 0);
+    if (thin) cx.stats.thinStrokes++;
+    const oracle = thin ? { none: "thin" } : sideOracle(cx, n, rule, storedAlign === undefined ? "absent" : storedAlign);
     let sides = rule.map((v) => r2(v));
     if (oracle.sides) {
       put("oracleSides", oracle.sides);

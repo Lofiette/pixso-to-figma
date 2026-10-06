@@ -26,7 +26,7 @@
 //     populations: { userTop, userMasters, mastersNoInstance, mastersWithInstanceInternal, internalLoose,
 //                    stateGroupsInternal, lostBorder }   (IR indices; tools/pix/ir/populations.mjs)
 //     populationCounts, records, nonInstance, instances, vectors, text, spaceEvenly, strokeAlignDecided,
-//     cornerRadiusOnly, lostBorderSections, counterFillKeptFixed,
+//     cornerRadiusOnly, lostBorderSections, counterFillKeptFixed, thinStrokes, staleBooleans,
 //     styles: { fill | stroke | effect: { same, styleWins, missing, noValue } } (tools/pix/ir/styles.mjs) }
 // The balance of docs/M1.md §8.2: stored = records + notCarried (every term), checked here.
 import { createHash } from "node:crypto";
@@ -40,6 +40,7 @@ import { guidStr } from "./util.mjs";
 import { plan, resolveInstances, dropUnresolved, emit } from "./nodes.mjs";
 import { imageTable } from "./images.mjs";
 import { populations, populationCounts } from "./populations.mjs";
+import { staleBooleans } from "../../ir/operands.mjs";
 
 export const READER_SETTINGS = ["booleans", "spaceEvenlySingle", "textFit", "scope", "mode"];
 
@@ -65,9 +66,9 @@ function newStats() {
     booleans: { native: 0, flattened: 0, foldedNodes: 0, degenerate: 0 },
     notCarried: { pages: 0, directories: 0, documents: 0, styleDefinitions: 0, variables: 0, unsupported: 0, foldedOperands: 0, degenerate: 0, outOfScope: 0 },
     populations: null, populationCounts: null, records: 0, nonInstance: 0, instances: 0,
-    vectors: { networks: 0, fromNetwork: 0, fromGeometry: 0, loopsClosed: 0, loopsDropped: 0, regionFills: 0, classes: { "region-no-fill": 0, "network-bounds": 0, winding: 0 } },
+    vectors: { networks: 0, fromNetwork: 0, fromGeometry: 0, loopsClosed: 0, loopsDropped: 0, regionFills: 0, vertexRadiusZero: 0, classes: { "region-no-fill": 0, "network-bounds": 0, winding: 0 } },
     text: { fontFromStyle: 0, rawLineHeight: 0, percentOneAuto: 0, styleValueOverridden: 0, trailingBaseStyleIds: 0 },
-    spaceEvenly: { between: 0, single: 0 }, strokeAlignDecided: {}, cornerRadiusOnly: {}, lostBorderSections: 0, counterFillKeptFixed: 0,
+    spaceEvenly: { between: 0, single: 0 }, strokeAlignDecided: {}, cornerRadiusOnly: {}, lostBorderSections: 0, counterFillKeptFixed: 0, thinStrokes: 0, staleBooleans: 0,
     styles: { fill: style0(), stroke: style0(), effect: style0() },
   };
 }
@@ -189,6 +190,11 @@ export function pixToIR(buffer, opts) {
   // ---------- records ----------
   const out = { records: [], meta: [], components: [] };
   emit(cx, keptPages, out);
+  // A native boolean whose stored result is out of date against its own operands (a union that leaves
+  // one out, and the booleans made from it): VECTOR_ORACLE_DIFFERS boolean-operands, so the judge
+  // holds it to its operands (tools/ir/operands.mjs, docs/M1.md §15.13).
+  const stale = staleBooleans({ nodes: out.records, values });
+  for (const i of [...stale.keys()].sort((a, b) => a - b)) { push(CODE.VECTOR_ORACLE_DIFFERS, { node: i, detail: stale.get(i) }); stats.staleBooleans++; }
   const pages = keptPages.map((pg) => {
     const o = { guid: pg.page.guid, name: typeof pg.page.canvas.name === "string" ? pg.page.canvas.name : "", internal: pg.page.internal };
     const bg = backgroundOf(cx, pg.page.canvas);
