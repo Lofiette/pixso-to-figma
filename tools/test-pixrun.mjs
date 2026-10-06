@@ -752,7 +752,7 @@ function pixRunGroup() {
     const c = run(join(flipped, "tmp-data"));
     check(c.code === 1 && /inside the repository/.test(c.out), "pix-run refuses the repository named with its drive letter in the other case");
   } else console.log("skip the drive-letter case: not Windows");
-  check(Object.keys(RUN_SETTINGS).length === 19, "every setting of §3 is a pix-run flag (with --data, --only, --from-ir and --stats)");
+  check(Object.keys(RUN_SETTINGS).length === 19 + M2A_SETTINGS.length, "every setting of §3 is a pix-run flag (with --data, --only, --from-ir and --stats, and docs/M2A.md §3's thirteen)");
   {
     // Review S7: --from-ir keeps the reader's settings the IR header records.
     const header = { settings: { textFit: "source-box", booleans: "flatten", spaceEvenlySingle: "center" }, scope: { kind: "pages", ids: ["0:4"] } };
