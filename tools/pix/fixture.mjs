@@ -64,6 +64,7 @@ enum WrapMode { NO_WRAP = 0; WRAP = 1; }
 enum StackAlign { AUTO = 0; SPACE_BETWEEN = 1; }
 enum ComponentPropType { BOOL = 0; TEXT = 1; COLOR = 2; INSTANCE_SWAP = 3; }
 enum ComponentPropNodeField { VISIBLE = 0; TEXT_DATA = 1; OVERRIDDEN_SYMBOL_ID = 2; INHERIT_FILL_STYLE_ID = 3; }
+enum InstanceSwapPreferredValueType { COMPONENT = 0; STATE_GROUP = 1; }
 enum ImageType { PNG = 1; JPEG = 2; SVG = 3; PDF = 4; SKETCH = 5; EPS = 6; TIFF = 7; WEBP = 8; }
 enum ExportConstraintType { CONTENT_SCALE = 1; CONTENT_WIDTH = 2; CONTENT_HEIGHT = 3; }
 enum FontVariantNumericFigure { NORMAL = 1; LINING = 2; OLDSTYLE = 3; }
@@ -92,7 +93,7 @@ message VectorData { int vectorNetworkBlob = 1; Vector normalizedSize = 2; Vecto
 message ArcData { float startingAngle = 1; float endingAngle = 2; float innerRadius = 3; }
 message Effect { EffectType type = 1; Color color = 2; Vector offset = 3; float radius = 4; bool visible = 5;
   BlendMode blendMode = 6; float spread = 7; bool showShadowBehindNode = 8; }
-message SymbolData { GUID symbolID = 1; PixsoNode[] symbolOverrides = 2; }
+message SymbolData { GUID symbolID = 1; PixsoNode[] symbolOverrides = 2; float uniformScaleFactor = 3; }
 message ExportConstraint { ExportConstraintType type = 1; float value = 2; }
 message ExportSettings { string suffix = 1; ImageType imageType = 2; ExportConstraint constraint = 3; }
 message FontName { string family = 1; string style = 2; string postscript = 3; }
@@ -105,6 +106,8 @@ message TextStyleData { int styleID = 1; float fontSize = 2; float paragraphInde
 message FontMetaData { FontName key = 1; }
 message VectorPaints { int regionId = 1; Paint[] paints = 2; }
 message LayoutGrid { int pattern = 1; float sectionSize = 2; bool visible = 3; Color color = 4; }
+message PluginData { string pluginID = 1; string value = 2; string key = 3; }
+message VectorStyle { int regionId = 1; GUID id = 2; }
 message Baseline { Vector position = 1; float width = 2; float lineY = 3; float lineHeight = 4; float lineAscent = 5;
   int firstCharacter = 6; int endCharacter = 7; }
 message Glyph { int blobIndex = 1; Vector position = 2; int styleID = 3; float fontSize = 4; int firstCharacter = 5;
@@ -114,7 +117,10 @@ message TextData { string characters = 1; int[] characterStyleIDs = 2; TextStyle
   Vector layoutSize = 4; Baseline[] baselines = 5; Glyph[] glyphs = 6; ParagraphStyle[] paragraphStyle = 12; FontMetaData[] fontMetaData = 13; }
 message PropValueData { string property = 1; string[] values = 2; }
 message ComponentPropValue { TextData textValue = 1; GUID guidValue = 2; bool boolValue = 3; }
-message ComponentPropDef { GUID id = 1; string name = 2; ComponentPropValue initialValue = 3; ComponentPropType type = 6; }
+message InstanceSwapPreferredValue { InstanceSwapPreferredValueType type = 1; string key = 2; }
+message ComponentPropPreferredValues { string[] stringValues = 1; InstanceSwapPreferredValue[] instanceSwapValues = 2; }
+message ComponentPropDef { GUID id = 1; string name = 2; ComponentPropValue initialValue = 3; string sortPosition = 4; GUID parentPropDefId = 5;
+  ComponentPropType type = 6; ComponentPropPreferredValues preferredValues = 7; }
 message ComponentPropRef { GUID defID = 1; ComponentPropNodeField componentPropNodeField = 3; }
 message ComponentPropAssignment { GUID defID = 1; ComponentPropValue value = 2; }
 message SharedStyleMasterData { string styleKey = 1; string sortPosition = 2; string fileKey = 3; }
@@ -222,6 +228,10 @@ message PixsoNode {
   FontVariantNumericFigure fontVariantNumericFigure = 202;
   FontVariantNumericSpacing fontVariantNumericSpacing = 203;
   FontVariantNumericFraction fontVariantNumericFraction = 204;
+  bool propsAreBubbled = 205;
+  int overrideLevel = 206;
+  PluginData[] pluginData = 207;
+  VectorStyle[] vectorStyles = 208;
 }
 
 message Blob { byte[] bytes = 1; }
@@ -337,7 +347,14 @@ const G = (s) => { const [a, b] = s.split(":").map(Number); return g(a, b); };
 //     fill geometry, a winding and a bounds disagreement, an open region under no fill, RIGHT_ANGLE);
 //     a NaN size with geometry, a group taking its box from that child, and a NaN path; a
 //     CONNECTLINE; a LINE with height; a SECTION with a stroke; a group mask; a STAR and a POLYGON with
-//     no stored geometry (Figma draws both natively).
+//     no stored geometry (Figma draws both natively);
+//   - the M2a cases (docs/M2A.md §5.4; M2A, m2aNodes): a third user page "M2a cases" in the folder,
+//     and masters on the internal canvas: variant sets accepted, rejected per class and disagreeing
+//     with their vocabulary, one on a user page with auto layout; property definitions with real-layout
+//     aliases, chains, member-owned roots, COLOR and INSTANCE_SWAP roots and preferred values; bindings
+//     of every class; assignments of every class; nested masters for the resolver's rules A, B and C,
+//     swaps by override and by property, an overrideKey-only hop; override entries of every fate; and
+//     sparse derived entries. Each case states its expected outcome next to it.
 export function fixtureMessage(defs) {
   const E = enumsOf(defs);
   const T = E.NodeType;
@@ -648,6 +665,9 @@ export function fixtureMessage(defs) {
       fontName: { family: "Inter", style: "Medium", postscript: "" }, fontSize: 16 },
 
     ...cases,
+
+    // ---- the M2a cases (docs/M2A.md §5.4): M2A and m2aNodes() below ----
+    ...m2aNodes({ E, T, solid, geom, B, INTERNAL, DIR, STYLE }),
   ];
 
   const square = (s) => encodeVectorNetwork({
@@ -722,6 +742,401 @@ export function fixtureMessage(defs) {
       signedBig: -(2n ** 62n), unsignedBig: 2n ** 64n - 1n, scale: 0.25, ready: true,
     },
   };
+}
+
+// ---------- the M2a cases (docs/M2A.md §5.4) ----------
+// Guids of session 5, by label, for the parts' tests. Every expected outcome is written next to its
+// case in m2aNodes() below, under the default settings unless a setting is named; "rec" is the IR
+// record of a stored node, "family X" the IR family whose guid is X (a set's group guid, else the
+// symbol's). Definition ids are guids too (5:9xx); 5:99x name nothing in the file.
+export const M2A = {
+  page: "0:5",
+  // families
+  chip: "5:100", chipS: "5:101", chipHoverS: "5:102", chipM: "5:103", chipL: "5:104",
+  rejNoEquals: "5:120", rejNoEqualsA: "5:121", rejNoEqualsB: "5:122",
+  rejDupAxis: "5:125", rejDupAxisA: "5:126", rejDupAxisB: "5:127",
+  rejAxisCount: "5:130", rejAxisCountA: "5:131", rejAxisCountB: "5:132",
+  rejDupCoord: "5:135", rejDupCoordA: "5:136", rejDupCoordB: "5:137",
+  vocab: "5:140", vocabA: "5:141", vocabB: "5:142",
+  toggle: "5:150", toggleOff: "5:151", toggleOn: "5:152",
+  libTag: "5:170", libTagLight: "5:171", libTagDark: "5:172", libTagLightText: "5:173", libTagDarkText: "5:174",
+  // layers of the Chip members
+  chipSLabel: "5:201", chipSDot: "5:202", chipSIcon: "5:203", chipSWrongType: "5:204", chipSFillStyle: "5:205",
+  chipHLabel: "5:211", chipHDot: "5:212", chipHIcon: "5:213", chipHOtherFamily: "5:214",
+  chipMLabel: "5:221", chipMDot: "5:222", chipMIcon: "5:223", chipMNoRoot: "5:224",
+  chipLLabel: "5:231", chipLDot: "5:232", chipLIcon: "5:233", chipLBadge: "5:234",
+  rejAxisCountFlag: "5:245", rejAxisCountTitle: "5:246",
+  // symbols
+  circle: "5:300", square: "5:301", triangle: "5:302", broken: "5:303", spacer: "5:304",
+  circleShape: "5:310", squareShape: "5:311", triangleShape: "5:312",
+  row: "5:400", rowTitle: "5:401", rowLead: "5:402", rowTrail: "5:403", rowBg: "5:404", rowGroup: "5:405", rowGroupRect: "5:406",
+  rowFlat: "5:407", rowFlatL1: "5:408", rowFlatL2: "5:409",
+  card: "5:420", cardRow: "5:421", cardCaption: "5:422", cardBadgeA: "5:424", cardBadgeB: "5:425",
+  // instances on the M2a page
+  iAssigned: "5:500", iDefaultEqual: "5:501", iNotCarried: "5:502",
+  iSwaps: "5:510", iByProperty: "5:511", iRuleB: "5:512", iRuleC: "5:513", iOverrideKey: "5:514",
+  iEntries: "5:520", iTextStyles: "5:521", iEchoNested: "5:522", iNoDerived: "5:530", iScaled: "5:531",
+  // definition ids
+  dLabel: "5:900", dShowIcon: "5:901", dIcon: "5:902", dTint: "5:903", dCaption: "5:904",
+  dSetAlias: "5:905", dSetAliasOtherSet: "5:906", dSetAliasNowhere: "5:907", dBadge: "5:908",
+  dChipSLabel: "5:910", dChipSShow: "5:911", dChipSIcon: "5:912",
+  dChipMLabel: "5:914", dChipMShow: "5:915", dChipMIcon: "5:916",
+  dChipLLabel: "5:917", dChipLShow: "5:918", dChipLIcon: "5:919",
+  dRowTitle: "5:920", dRowLead: "5:921", dRowLeadAlias: "5:922", dCardBadge: "5:930",
+  dTagText: "5:950", dTagDot: "5:951", dRejFlag: "5:960", dRejTitle: "5:961",
+  dNoDefinition: "5:997", dNoRootTarget: "5:996", nothing: "5:998", nothingInitial: "5:999", fillStyleNowhere: "5:995",
+};
+
+// A componentKey of the fixture: 40 hex computed from a label at run time, never written here
+// (tools/test-hygiene.mjs allows no new value).
+export const fixtureKey = (label) => createHash("sha1").update("pix2fig fixture componentKey: " + label).digest("hex");
+
+// Planted faults the base fixture must not hold, applied with makeFixture("valid", { mutate: M2A_PLANTS.x }):
+//   unknownOverrideField   an override entry carries a Pixso field outside OVERRIDE_SOURCE_FIELDS
+//                          (scrollDirection, on iEntries' [rowBg] entry): dropped with class "unknown",
+//                          and gate G6 fails (docs/M2A.md D8). It is a plant, not a case: the base
+//                          fixture passes every gate (docs/M2A.md §7).
+export const M2A_PLANTS = {
+  unknownOverrideField(value, defs) {
+    const E = enumsOf(defs);
+    const inst = value.pixsoNodes.find((n) => n.guid.sessionID === 5 && n.guid.localID === 520);
+    const e = inst.symbolData.symbolOverrides.find((o) => o.guidPath.guids.length === 1 && o.guidPath.guids[0].localID === 404);
+    e.scrollDirection = E.ScrollDirection.BOTH;
+  },
+};
+
+// The M2a cases' stored nodes (docs/M2A.md §5.4). E: the enums by name, T: node types, solid and
+// geom as in fixtureMessage, B the blob indices there, INTERNAL and DIR the parents of the internal
+// canvas and of the folder the M2a page sits in, STYLE the local fill style's guid.
+function m2aNodes({ E, T, solid, geom, B, INTERNAL, DIR, STYLE }) {
+  const S = (s) => G(s);
+  const M2A_INT = INTERNAL.sessionID + ":" + INTERNAL.localID;   // the internal canvas
+  const CPT = E.ComponentPropType, NF = E.ComponentPropNodeField, PT = E.InstanceSwapPreferredValueType;
+  const NONE = g(0, 0);
+  // A property value carries all three slots, as Pixso's do (docs/M2A.md §1.2); the one read is the root's type's.
+  const pv = (o) => ({ textValue: { characters: (o && o.t) || "" }, guidValue: (o && o.g) || NONE, boolValue: !!(o && o.b) });
+  const root = (id, name, type, init, sortPosition, more) => Object.assign({ id: S(id), name, type: CPT[type], initialValue: pv(init), sortPosition, parentPropDefId: NONE }, more || {});
+  const alias = (id, parent) => ({ id: S(id), name: "", type: CPT.BOOL, initialValue: pv(), parentPropDefId: S(parent) });
+  const sameId = (id) => ({ id: S(id), name: "", type: CPT.BOOL, initialValue: pv() });       // the M1 fixture's model
+  const ref = (defID, field) => ({ defID: S(defID), componentPropNodeField: NF[field] });
+  const asg = (defID, v) => ({ defID: S(defID), value: pv(v) });
+  const font = { family: "Inter", style: "Regular", postscript: "" };
+  const LAYER = new Map();    // guid -> { size, transform } of the stored layer, for the derived entries below
+  const node = (guid, parent, position, type, name, x, y, w, h, more) => {
+    const n = Object.assign({ guid: S(guid), parentIndex: under(S(parent), position), type: T[type], name, size: box(w, h), transform: at(x, y) }, more || {});
+    LAYER.set(guid, { size: box(w, h), transform: at(x, y) });
+    return n;
+  };
+  const text = (guid, parent, position, name, chars, x, y, more) => node(guid, parent, position, "TEXT", name, x, y, 40, 16, Object.assign({
+    fontName: font, fontSize: 12, fillPaints: [solid(0, 0, 0)],
+    textData: { characters: chars, baselines: [{ position: box(0, 12), width: 20, firstCharacter: 0, endCharacter: chars.length }] } }, more || {}));
+  const rect = (guid, parent, position, name, x, y, w, h, more) => node(guid, parent, position, "RECTANGLE", name, x, y, w, h, Object.assign({ fillPaints: [solid(90, 90, 90)] }, more || {}));
+  const inst = (guid, parent, position, name, symbol, x, y, w, h, more) => {
+    const n = node(guid, parent, position, "INSTANCE", name, x, y, w, h, more);
+    n.symbolData = Object.assign({ symbolID: S(symbol) }, n.symbolData || {});
+    return n;
+  };
+  // A derived entry: the path, and the stored box of its last layer unless `only` names what it stores.
+  const D = (guids, only) => {
+    const last = LAYER.get(guids[guids.length - 1]) || { size: box(1, 1), transform: at(0, 0) };
+    const d = { guidPath: path(...guids.map(S)) };
+    if (!only) { d.size = last.size; d.transform = last.transform; } else Object.assign(d, only);
+    return d;
+  };
+  const red = () => [solid(255, 0, 0)];
+  const lib = (label, id) => ({ publishFile: "fixturelibraryfilekey00", publishID: g(50, id), componentKey: fixtureKey(label), sharedSymbolVersion: "fixture-version-3" });
+
+  const out = [];
+  const add = (...ns) => { for (const n of ns) out.push(n); };
+
+  // ======== icons and other symbols (internal canvas) ========
+  // Each icon is a mastersNoInstance root (built in S2 by M1). 5:303 has a non-finite transform: it is
+  // stored but not carried (GEOMETRY_INVALID by guid, notCarried.degenerate +1), so it is a SYMBOL
+  // the IR cannot reference: symbolKnown true, refOf null (docs/M2A.md D5, "not carried").
+  add(node(M2A.circle, M2A_INT, "h", "SYMBOL", "Icon/Circle", 0, 400, 10, 10),
+    node(M2A.circleShape, M2A.circle, "a", "ELLIPSE", "Shape", 0, 0, 10, 10, { fillPaints: [solid(0, 120, 220)], fillGeometry: geom(B.ellipse10) }),
+    node(M2A.square, M2A_INT, "i", "SYMBOL", "Icon/Square", 20, 400, 10, 10),
+    rect(M2A.squareShape, M2A.square, "a", "Shape", 0, 0, 10, 10),
+    node(M2A.triangle, M2A_INT, "j", "SYMBOL", "Icon/Triangle", 40, 400, 10, 10),
+    rect(M2A.triangleShape, M2A.triangle, "a", "Shape", 0, 0, 10, 10),
+    Object.assign(node(M2A.broken, M2A_INT, "k", "SYMBOL", "Icon/Broken", 60, 400, 10, 10), { transform: { m00: 1, m01: 0, m02: NaN, m10: 0, m11: 1, m12: 400 } }),
+    // A master with no children: its instance has no derived data (stats.m2a.instances.noDerived).
+    node(M2A.spacer, M2A_INT, "l", "SYMBOL", "Spacer", 80, 400, 8, 8));
+
+  // ======== Lib Tag: a library copy of a variant set (internal canvas) ========
+  // Accepted (axes [Tone: Light, Dark]); a COMPONENT_SET record with the group's library identity.
+  // Family 5:170 declares [Text TEXT "Tag", Dot BOOLEAN true]; its members carry same-id aliases.
+  // Its members' keys are what Chip's preferred values name: COMPONENT (5:171, in the file) and
+  // STATE_GROUP (the set, in the file).
+  add(node(M2A.libTag, M2A_INT, "m", "FRAME", "Lib Tag", 0, 440, 120, 24, Object.assign({ isStateGroup: true, frameMaskDisabled: true,
+      stateGroupPropertyValueOrders: [{ property: "Tone", values: ["Light", "Dark"] }],
+      componentPropDef: [root(M2A.dTagText, "Text", "TEXT", { t: "Tag" }, "a"), root(M2A.dTagDot, "Dot", "BOOL", { b: true }, "b")] }, lib("lib tag set", 70))),
+    node(M2A.libTagLight, M2A.libTag, "a", "SYMBOL", "Tone=Light", 0, 0, 56, 24, Object.assign({ componentPropDef: [sameId(M2A.dTagText), sameId(M2A.dTagDot)] }, lib("lib tag light", 71))),
+    text(M2A.libTagLightText, M2A.libTagLight, "a", "Text", "Tag", 8, 4, { overrideKey: g(50, 73), componentPropRef: [ref(M2A.dTagText, "TEXT_DATA")] }),
+    node(M2A.libTagDark, M2A.libTag, "b", "SYMBOL", "Tone=Dark", 64, 0, 56, 24, Object.assign({ componentPropDef: [sameId(M2A.dTagText), sameId(M2A.dTagDot)] }, lib("lib tag dark", 72))),
+    text(M2A.libTagDarkText, M2A.libTagDark, "a", "Text", "Tag", 8, 4, { overrideKey: g(50, 74), componentPropRef: [ref(M2A.dTagText, "TEXT_DATA")] }));
+
+  // ======== Chip: the accepted set with every property case (internal canvas) ========
+  // Accepted. Names list their axes in mixed order; the vocabulary lists State before Size and lacks
+  // the value L. Axes (--axis-order vocabulary): [State: Default, Hover], [Size: S, M, L] (L appended,
+  // families.valuesAppended 1); under --axis-order names, the first member's order: [Size, State].
+  // Family 5:100 declares, in sortPosition order (D3):
+  //   Show icon (5:901) BOOLEAN true; Label (5:900) TEXT "Chip"; Icon (5:902) INSTANCE_SWAP default
+  //   { guid 5:300 }: its initialValue (5:999) names no symbol and every bound layer declares 5:300
+  //   (--swap-default layer and definition alike; properties.swapDefaultFromLayer 1); its preferred
+  //   values [{ COMPONENT, key "lib tag light", guid 5:171 }, { COMPONENT, key "absent component" },
+  //   { COMPONENT_SET, key "lib tag set", guid 5:170 }] (preferred.inFile 2, byKeyOnly 1);
+  //   Caption (5:904) TEXT "Note", its two stringValues dropped (preferred.stringValuesDropped 2);
+  //   Badge (5:908) BOOLEAN false, a member-owned root lifted from 5:104 (liftedMemberRoots 1).
+  //   Tint (5:903) is a COLOR root: not declared, SOURCE_FEATURE_UNSUPPORTED "COLOR property" on the set.
+  // The set's own aliases: 5:905 (to 5:900, the middle of a two-hop chain), 5:906 (to Lib Tag's root
+  // 5:950, outside the scope: no-root), 5:907 (to 5:996, nothing: no-root).
+  add(node(M2A.chip, M2A_INT, "n", "FRAME", "Chip", 0, 480, 400, 40, { isStateGroup: true, frameMaskDisabled: true,
+    stateGroupPropertyValueOrders: [{ property: "State", values: ["Default", "Hover"] }, { property: "Size", values: ["S", "M"] }],
+    componentPropDef: [
+      root(M2A.dLabel, "Label", "TEXT", { t: "Chip" }, "b"),
+      root(M2A.dShowIcon, "Show icon", "BOOL", { b: true }, "a"),
+      root(M2A.dIcon, "Icon", "INSTANCE_SWAP", { g: S(M2A.nothingInitial) }, "c", { preferredValues: { instanceSwapValues: [
+        { type: PT.COMPONENT, key: fixtureKey("lib tag light") }, { type: PT.COMPONENT, key: fixtureKey("absent component") },
+        { type: PT.STATE_GROUP, key: fixtureKey("lib tag set") }] } }),
+      root(M2A.dTint, "Tint", "COLOR", {}, "d"),
+      root(M2A.dCaption, "Caption", "TEXT", { t: "Note" }, "e", { preferredValues: { stringValues: ["Note", "Hint"] } }),
+      alias(M2A.dSetAlias, M2A.dLabel), alias(M2A.dSetAliasOtherSet, M2A.dTagText), alias(M2A.dSetAliasNowhere, M2A.dNoRootTarget)] }));
+  // Each member: a label (TEXT_DATA), a dot (VISIBLE) and an icon instance (OVERRIDDEN_SYMBOL_ID), bound
+  // through the member's own aliases (real layout: own id, parentPropDefId, unnamed BOOL), plus one
+  // binding case. Every kept binding names the ROOT id. Bindings (D4):
+  //   5:201 characters 5:900 (via alias 5:910); 5:202 visible 5:901; 5:203 mainComponent 5:902;
+  //   5:204 VISIBLE bound to 5:900, a TEXT root: PROPERTY_REF_DROPPED "type-mismatch";
+  //   5:205 INHERIT_FILL_STYLE_ID: PROPERTY_REF_DROPPED "fill-style";
+  //   5:211 characters 5:900 (a same-id alias); 5:214 VISIBLE to Lib Tag's 5:951: "other-family";
+  //   5:221 characters 5:900 through two hops (5:914 -> 5:905 -> 5:900); 5:224 VISIBLE via 5:907: "no-root";
+  //   5:234 visible 5:908 (the lifted member-owned root).
+  // Bound layers whose own value differs from the root's default (properties.boundLayerDiffers):
+  //   visible 1 (5:202 is hidden, Show icon defaults to true); text 1 (5:231 says "Large").
+  const member = (id, position, name, x, defs, layers) => [node(id, M2A.chip, position, "SYMBOL", name, x, 0, 96, 32, { componentPropDef: defs }), ...layers];
+  const icon = (guid, parent, defId) => inst(guid, parent, "c", "Icon", M2A.circle, 80, 11, 10, 10, { componentPropRef: [ref(defId, "OVERRIDDEN_SYMBOL_ID")], derivedSymbolData: [D([M2A.circleShape])] });
+  add(...member(M2A.chipS, "a", "Size=S, State=Default", 0, [alias(M2A.dChipSLabel, M2A.dLabel), alias(M2A.dChipSShow, M2A.dShowIcon), alias(M2A.dChipSIcon, M2A.dIcon)], [
+    text(M2A.chipSLabel, M2A.chipS, "a", "Label", "Chip", 4, 8, { componentPropRef: [ref(M2A.dChipSLabel, "TEXT_DATA")] }),
+    rect(M2A.chipSDot, M2A.chipS, "b", "Dot", 60, 12, 8, 8, { visible: false, componentPropRef: [ref(M2A.dChipSShow, "VISIBLE")] }),
+    icon(M2A.chipSIcon, M2A.chipS, M2A.dChipSIcon),
+    node(M2A.chipSWrongType, M2A.chipS, "d", "ELLIPSE", "Wrong type", 70, 2, 4, 4, { fillPaints: [solid(0, 0, 0)], componentPropRef: [ref(M2A.dLabel, "VISIBLE")] }),
+    rect(M2A.chipSFillStyle, M2A.chipS, "e", "Fill styled", 76, 2, 4, 4, { componentPropRef: [ref(M2A.fillStyleNowhere, "INHERIT_FILL_STYLE_ID")] })]));
+  add(...member(M2A.chipHoverS, "b", "State=Hover, Size=S", 100, [sameId(M2A.dLabel), sameId(M2A.dShowIcon), sameId(M2A.dIcon)], [
+    text(M2A.chipHLabel, M2A.chipHoverS, "a", "Label", "Chip", 4, 8, { componentPropRef: [ref(M2A.dLabel, "TEXT_DATA")] }),
+    rect(M2A.chipHDot, M2A.chipHoverS, "b", "Dot", 60, 12, 8, 8, { componentPropRef: [ref(M2A.dShowIcon, "VISIBLE")] }),
+    icon(M2A.chipHIcon, M2A.chipHoverS, M2A.dIcon),
+    rect(M2A.chipHOtherFamily, M2A.chipHoverS, "d", "Other family", 70, 2, 4, 4, { componentPropRef: [ref(M2A.dTagDot, "VISIBLE")] })]));
+  add(...member(M2A.chipM, "c", "Size=M, State=Default", 200, [alias(M2A.dChipMLabel, M2A.dSetAlias), alias(M2A.dChipMShow, M2A.dShowIcon), alias(M2A.dChipMIcon, M2A.dIcon)], [
+    text(M2A.chipMLabel, M2A.chipM, "a", "Label", "Chip", 4, 8, { componentPropRef: [ref(M2A.dChipMLabel, "TEXT_DATA")] }),
+    rect(M2A.chipMDot, M2A.chipM, "b", "Dot", 60, 12, 8, 8, { componentPropRef: [ref(M2A.dChipMShow, "VISIBLE")] }),
+    icon(M2A.chipMIcon, M2A.chipM, M2A.dChipMIcon),
+    rect(M2A.chipMNoRoot, M2A.chipM, "d", "No root", 70, 2, 4, 4, { componentPropRef: [ref(M2A.dSetAliasNowhere, "VISIBLE")] })]));
+  add(...member(M2A.chipL, "d", "Size=L, State=Hover", 300, [alias(M2A.dChipLLabel, M2A.dLabel), alias(M2A.dChipLShow, M2A.dShowIcon), alias(M2A.dChipLIcon, M2A.dIcon),
+    root(M2A.dBadge, "Badge", "BOOL", { b: false }, "f")], [
+    text(M2A.chipLLabel, M2A.chipL, "a", "Label", "Large", 4, 8, { componentPropRef: [ref(M2A.dChipLLabel, "TEXT_DATA")] }),
+    rect(M2A.chipLDot, M2A.chipL, "b", "Dot", 60, 12, 8, 8, { componentPropRef: [ref(M2A.dChipLShow, "VISIBLE")] }),
+    icon(M2A.chipLIcon, M2A.chipL, M2A.dChipLIcon),
+    rect(M2A.chipLBadge, M2A.chipL, "d", "Badge", 70, 2, 4, 4, { componentPropRef: [ref(M2A.dBadge, "VISIBLE")] })]));
+
+  // ======== rejected state groups, one per class in D2's order (internal canvas) ========
+  // Each stays a FRAME record with VARIANT_SET_REJECTED (by node) whose detail starts with the class;
+  // its members are standalone components. families: groups +4 rejected, rejectedMembers 8.
+  const rejected = (id, position, name, y, members) => [node(id, M2A_INT, position, "FRAME", name, 0, y, 120, 24, { isStateGroup: true }),
+    ...members.map(([mid, mname, layer], k) => [node(mid, id, "ab"[k], "SYMBOL", mname, k * 60, 0, 56, 24), rect(layer, mid, "a", "Fill", 4, 4, 16, 16)]).flat()];
+  add(...rejected(M2A.rejNoEquals, "o", "Rejected: no-equals", 540, [[M2A.rejNoEqualsA, "Size=S, Big", "5:241"], [M2A.rejNoEqualsB, "Size=M", "5:242"]]));      // no-equals
+  add(...rejected(M2A.rejDupAxis, "p", "Rejected: duplicate-axis", 570, [[M2A.rejDupAxisA, "Size=S, Size=M", "5:243"], [M2A.rejDupAxisB, "Size=L", "5:244"]])); // duplicate-axis
+  add(...rejected(M2A.rejDupCoord, "r", "Rejected: duplicate-coordinate", 630, [[M2A.rejDupCoordA, "Size=S", "5:247"], [M2A.rejDupCoordB, "Size=S", "5:248"]])); // duplicate-coordinate
+  // axis-count, with properties: the group's root Title (5:961) is copied onto each member's own family
+  // (--rejected-props copy: same id; copiedRoots 2); 5:131 keeps its member-owned root Flag (5:960),
+  // so it declares [Title, Flag] and 5:132 [Title]. Bindings 5:245 visible 5:960, 5:246 characters 5:961.
+  // Under --rejected-props none, 5:132 declares nothing and 5:246's binding drops as "undeclared".
+  add(node(M2A.rejAxisCount, M2A_INT, "q", "FRAME", "Rejected: axis-count", 0, 600, 120, 24, { isStateGroup: true,
+      componentPropDef: [root(M2A.dRejTitle, "Title", "TEXT", { t: "T" }, "a")] }),
+    node(M2A.rejAxisCountA, M2A.rejAxisCount, "a", "SYMBOL", "Size=S, State=On", 0, 0, 56, 24, { componentPropDef: [root(M2A.dRejFlag, "Flag", "BOOL", { b: true }, "b")] }),
+    rect(M2A.rejAxisCountFlag, M2A.rejAxisCountA, "a", "Fill", 4, 4, 16, 16, { componentPropRef: [ref(M2A.dRejFlag, "VISIBLE")] }),
+    node(M2A.rejAxisCountB, M2A.rejAxisCount, "b", "SYMBOL", "Size=M", 60, 0, 56, 24),
+    text(M2A.rejAxisCountTitle, M2A.rejAxisCountB, "a", "Title", "T", 4, 4, { componentPropRef: [ref(M2A.dRejTitle, "TEXT_DATA")] }));
+
+  // ======== Vocab: the vocabulary names another axis than the names (internal canvas) ========
+  // Accepted under --variant-grammar names (axes [Size: S, M], in the names' order); rejected
+  // "vocabulary" under --variant-grammar vocabulary.
+  add(node(M2A.vocab, M2A_INT, "s", "FRAME", "Vocab other axis", 0, 660, 120, 24, { isStateGroup: true,
+      stateGroupPropertyValueOrders: [{ property: "Tone", values: ["A", "B"] }] }),
+    node(M2A.vocabA, M2A.vocab, "a", "SYMBOL", "Size=S", 0, 0, 56, 24), rect("5:249", M2A.vocabA, "a", "Fill", 4, 4, 16, 16),
+    node(M2A.vocabB, M2A.vocab, "b", "SYMBOL", "Size=M", 60, 0, 56, 24), rect("5:250", M2A.vocabB, "a", "Fill", 4, 4, 16, 16));
+
+  // ======== Row and Card2: nested masters for the resolver (internal canvas) ========
+  // Row declares [Title (5:920) TEXT "Row", Lead icon (5:921) INSTANCE_SWAP]. Lead icon's default is
+  // { guid 5:300 } under --swap-default layer (its bound layer 5:402 declares 5:300; its initialValue
+  // names 5:301: swapDefaultFromLayer +1) and { guid 5:301 } under definition. 5:402 binds it through
+  // the alias 5:922 (mainComponent 5:921). 5:403 is an exposed nested instance (propsAreBubbled:
+  // instance.exposed true). 5:407 is a class B boolean, flattened to a VECTOR: its operands 5:408 and
+  // 5:409 are not carried (no record, so no `at` through them).
+  add(node(M2A.row, M2A_INT, "t", "SYMBOL", "Row", 0, 700, 200, 40, { componentPropDef: [root(M2A.dRowTitle, "Title", "TEXT", { t: "Row" }, "a"),
+      root(M2A.dRowLead, "Lead icon", "INSTANCE_SWAP", { g: S(M2A.square) }, "b"), alias(M2A.dRowLeadAlias, M2A.dRowLead)] }),
+    text(M2A.rowTitle, M2A.row, "b", "Title", "Row", 30, 12, { componentPropRef: [ref(M2A.dRowTitle, "TEXT_DATA")] }),
+    inst(M2A.rowLead, M2A.row, "c", "Lead", M2A.circle, 8, 15, 10, 10, { componentPropRef: [ref(M2A.dRowLeadAlias, "OVERRIDDEN_SYMBOL_ID")], derivedSymbolData: [D([M2A.circleShape])] }),
+    inst(M2A.rowTrail, M2A.row, "d", "Trail", M2A.circle, 182, 15, 10, 10, { propsAreBubbled: true, derivedSymbolData: [D([M2A.circleShape])] }),
+    rect(M2A.rowBg, M2A.row, "a", "Bg", 0, 0, 200, 40, { fillPaints: [solid(230, 230, 230)], strokePaints: [solid(20, 20, 20)], strokeWeight: 1, strokeAlign: E.StrokeAlign.INSIDE }),
+    node(M2A.rowGroup, M2A.row, "e", "GROUP", "Group", 120, 10, 20, 20),
+    rect(M2A.rowGroupRect, M2A.rowGroup, "a", "Group rect", 0, 0, 20, 20),
+    node(M2A.rowFlat, M2A.row, "f", "BOOLEAN_OPERATION", "Flat", 150, 15, 10, 10, { booleanOperation: E.BooleanOperation.UNION, fillPaints: [solid(128, 0, 0)],
+      fillGeometry: geom(B.boolBResult), strokeGeometry: geom(B.boolBResult) }),
+    node(M2A.rowFlatL1, M2A.rowFlat, "a", "LINE", "L1", 0, 5, 10, 0, { strokePaints: [solid(20, 20, 20)], strokeWeight: 1, strokeGeometry: geom(B.lineStroke) }),
+    node(M2A.rowFlatL2, M2A.rowFlat, "b", "LINE", "L2", 0, 0, 10, 0, { strokePaints: [solid(20, 20, 20)], strokeWeight: 1, strokeGeometry: geom(B.lineStroke) }));
+  const rowDerived = (pre, opts) => {
+    const o = opts || {};
+    const P = (...gs) => pre.concat(gs);
+    return [D(P(M2A.rowTitle)), D(P(M2A.rowLead)), D(P(M2A.rowLead, o.lead || M2A.circleShape)), D(P(M2A.rowTrail)),
+      D(P(M2A.rowTrail, o.trail || M2A.circleShape)), D(P(M2A.rowBg)), D(P(M2A.rowGroup)), D(P(M2A.rowGroupRect)), D(P(M2A.rowFlat)), D(P(M2A.rowFlatL1))];
+  };
+  // Card2 holds a Row instance (5:421) with its own overrides: an inner swap of Trail to Square and a
+  // red fill on Bg (a master's nested-instance override: part of the echo baseline below it). Card2
+  // declares Badge icon (5:930) INSTANCE_SWAP: its two bound layers disagree (5:424 declares 5:300,
+  // 5:425 5:301), so the default is its initialValue { guid 5:300 } under both --swap-default values
+  // (swapDefaultLayersDisagree { roots 1, layers 1 }).
+  add(node(M2A.card, M2A_INT, "u", "SYMBOL", "Card2", 0, 760, 220, 70, { componentPropDef: [root(M2A.dCardBadge, "Badge icon", "INSTANCE_SWAP", { g: S(M2A.circle) }, "a")] }),
+    inst(M2A.cardRow, M2A.card, "a", "Row", M2A.row, 10, 10, 200, 40, {
+      symbolData: { symbolOverrides: [{ guidPath: path(S(M2A.rowTrail)), overriddenSymbolID: S(M2A.square) }, { guidPath: path(S(M2A.rowBg)), fillPaints: red() }] },
+      derivedSymbolData: rowDerived([], { trail: M2A.squareShape }) }),
+    text(M2A.cardCaption, M2A.card, "b", "Caption", "Card", 10, 52),
+    inst(M2A.cardBadgeA, M2A.card, "c", "Badge A", M2A.circle, 170, 52, 10, 10, { componentPropRef: [ref(M2A.dCardBadge, "OVERRIDDEN_SYMBOL_ID")], derivedSymbolData: [D([M2A.circleShape])] }),
+    inst(M2A.cardBadgeB, M2A.card, "d", "Badge B", M2A.square, 190, 52, 10, 10, { componentPropRef: [ref(M2A.dCardBadge, "OVERRIDDEN_SYMBOL_ID")], derivedSymbolData: [D([M2A.squareShape])] }));
+  const cardDerived = (rowOpts) => [D([M2A.cardRow]), ...rowDerived([M2A.cardRow], rowOpts), D([M2A.cardCaption]), D([M2A.cardBadgeA]), D([M2A.cardBadgeA, M2A.circleShape]),
+    D([M2A.cardBadgeB]), D([M2A.cardBadgeB, M2A.squareShape])];
+
+  // ======== the M2a page: a set on a user page, and the instances ========
+  add({ guid: S(M2A.page), parentIndex: under(DIR, "b"), type: T.CANVAS, name: "M2a cases" });
+  // Toggle: an accepted set on a user page, with auto layout (19 / 75 / 57 / 58 such groups in D, K, M,
+  // P). Its COMPONENT_SET record keeps its FRAME props, auto layout included, and M1 plans and builds
+  // it as that FRAME: its tasks equal, record for record, those under --variant-sets frames (D13).
+  add(node(M2A.toggle, M2A.page, "a", "FRAME", "Toggle", 0, 0, 96, 32, { isStateGroup: true, fillPaints: [solid(255, 255, 255)],
+      stackMode: E.StackMode.HORIZONTAL, stackSpacing: 8, stackPaddingLeft: 4, stackPaddingRight: 4, stackPaddingTop: 4, stackPaddingBottom: 4,
+      stackPrimarySizing: E.StackSize.FIXED, stackCounterSizing: E.StackSize.FIXED, stateGroupPropertyValueOrders: [{ property: "State", values: ["Off", "On"] }] }),
+    node(M2A.toggleOff, M2A.toggle, "a", "SYMBOL", "State=Off", 4, 4, 40, 24, { fillPaints: [solid(200, 200, 200)] }),
+    rect("5:251", M2A.toggleOff, "a", "Knob", 4, 4, 16, 16),
+    node(M2A.toggleOn, M2A.toggle, "b", "SYMBOL", "State=On", 52, 4, 40, 24, { fillPaints: [solid(0, 160, 80)] }),
+    rect("5:252", M2A.toggleOn, "a", "Knob", 20, 4, 16, 16));
+  const chipDerived = (member, layers, iconShape) => [...layers.map((l) => D([l])), D([layers[2], iconShape || M2A.circleShape])];
+  // Assignments on an instance (D6), one per class; family 5:100:
+  //   5:900 "Hello" kept; 5:911 (alias) false kept as { 5:100, 5:901, false } (assignments made through
+  //   an alias id); 5:997 STALE_ASSIGNMENT "no-definition"; 5:951 (Lib Tag's) "other-family"; 5:907
+  //   "no-root"; 5:903 (COLOR, not declared) "undeclared"; 5:902 -> 5:998 (no symbol)
+  //   SWAP_VALUE_DANGLING "assignment" (rule A: the icon's effective symbol stays 5:300). Under
+  //   --swap-dangling strict its derived path [5:203, 5:310] resolves only through rule C (a second
+  //   SWAP_ASSIGNMENT_IGNORED), and with --swap-fallback off as well it does not resolve.
+  add(inst(M2A.iAssigned, M2A.page, "b", "Chip assigned", M2A.chipS, 0, 60, 96, 32, { componentPropAssignment: [
+      asg(M2A.dLabel, { t: "Hello" }), asg(M2A.dChipSShow, { b: false }), asg(M2A.dNoDefinition, { b: true }), asg(M2A.dTagDot, { b: true }),
+      asg(M2A.dSetAliasNowhere, { b: true }), asg(M2A.dTint, { b: true }), asg(M2A.dIcon, { g: S(M2A.nothing) })],
+    derivedSymbolData: chipDerived(M2A.chipS, [M2A.chipSLabel, M2A.chipSDot, M2A.chipSIcon, M2A.chipSWrongType, M2A.chipSFillStyle]) }));
+  // 5:901 true equals its default: kept (--default-assignments keep) or dropped and counted (drop);
+  // 5:916 (alias) -> 5:301 kept as { 5:100, 5:902, { guid 5:301 } }: the icon's effective symbol is 5:301
+  // by property, so its derived path [5:223, 5:311] resolves.
+  add(inst(M2A.iDefaultEqual, M2A.page, "c", "Chip default-equal", M2A.chipM, 100, 60, 96, 32, { componentPropAssignment: [asg(M2A.dShowIcon, { b: true }), asg(M2A.dChipMIcon, { g: S(M2A.square) })],
+    derivedSymbolData: chipDerived(M2A.chipM, [M2A.chipMLabel, M2A.chipMDot, M2A.chipMIcon, M2A.chipMNoRoot], M2A.squareShape) }));
+  // 5:902 -> 5:303, a stored SYMBOL with no record and no library identity: SWAP_VALUE_DANGLING
+  // "assignment: not carried" (D5). symbolKnown(5:303) is true, so the resolver follows it (rule A
+  // skips only values naming no symbol): 5:303 has no children, so the icon's derived entry is [5:233] alone.
+  add(inst(M2A.iNotCarried, M2A.page, "d", "Chip not carried", M2A.chipL, 200, 60, 96, 32, { componentPropAssignment: [asg(M2A.dIcon, { g: S(M2A.broken) })],
+    derivedSymbolData: [D([M2A.chipLLabel]), D([M2A.chipLDot]), D([M2A.chipLIcon]), D([M2A.chipLBadge])] }));
+  // Paths (D7) on an instance of Card2:
+  //   [5:421, 5:403] swap to 5:302: the OUTER swap wins over Card2's inner swap of Trail to Square;
+  //   [5:421, 5:403, 5:312] fills: a path of length 3, live only under the outer swap (Triangle's shape);
+  //   [5:421, 5:402] swap to 5:301: a swap by override; [5:421, 5:402, 5:311] fills: live under it.
+  // All four live; overrides.swaps.override 2. derived holds the paths as swapped.
+  add(inst(M2A.iSwaps, M2A.page, "e", "Swaps", M2A.card, 0, 120, 220, 70, { symbolData: { symbolOverrides: [
+      { guidPath: path(S(M2A.cardRow), S(M2A.rowTrail)), overriddenSymbolID: S(M2A.triangle) },
+      { guidPath: path(S(M2A.cardRow), S(M2A.rowTrail), S(M2A.triangleShape)), fillPaints: red() },
+      { guidPath: path(S(M2A.cardRow), S(M2A.rowLead)), overriddenSymbolID: S(M2A.square) },
+      { guidPath: path(S(M2A.cardRow), S(M2A.rowLead), S(M2A.squareShape)), fillPaints: red() }] },
+    derivedSymbolData: cardDerived({ lead: M2A.squareShape, trail: M2A.triangleShape }) }));
+  // A swap by property through an alias: 5:922 (alias of Lead icon) -> 5:301, kept as { 5:400, 5:921,
+  // { guid 5:301 } }; Lead's effective symbol is 5:301 (via "property"), so [5:402, 5:311] is live.
+  add(inst(M2A.iByProperty, M2A.page, "f", "Swap by property", M2A.row, 240, 120, 200, 40, { componentPropAssignment: [asg(M2A.dRowLeadAlias, { g: S(M2A.square) })],
+    symbolData: { symbolOverrides: [{ guidPath: path(S(M2A.rowLead), S(M2A.squareShape)), fillPaints: red() }] },
+    derivedSymbolData: rowDerived([], { lead: M2A.squareShape }) }));
+  // Rule B: a no-op swap of the nested Row to Row itself resets the nested instance's own overrides
+  // (Card2's inner Trail swap and Bg fill): [5:421, 5:403, 5:310] (Circle's shape) resolves under
+  // --swap-reset on and does not under off. The no-op swap is kept (swaps.noOp 1; never an echo, D9).
+  // The red fill on [5:421, 5:404] is not an echo: after the reset the baseline is Row's own grey (D9).
+  add(inst(M2A.iRuleB, M2A.page, "g", "Rule B", M2A.card, 0, 200, 220, 70, { symbolData: { symbolOverrides: [
+      { guidPath: path(S(M2A.cardRow)), overriddenSymbolID: S(M2A.row) },
+      { guidPath: path(S(M2A.cardRow), S(M2A.rowBg)), fillPaints: red() }] },
+    derivedSymbolData: cardDerived({}) }));
+  // Rule C (P's shape): an entry on the nested Row assigns Lead icon -> 5:301, which Pixso ignored: derived
+  // holds [5:421, 5:402, 5:310] (Circle's shape). The walk fails at hop 2 under the assignment, the path is
+  // in derived, so the declared symbol is used: SWAP_ASSIGNMENT_IGNORED (1), the assignment dropped as
+  // STALE_ASSIGNMENT "ignored", and the entry, left with nothing, is not written
+  // (overrides.emptyAfterTranslation). Under --swap-fallback off the path is unresolved.
+  add(inst(M2A.iRuleC, M2A.page, "h", "Rule C", M2A.card, 240, 200, 220, 70, { symbolData: { symbolOverrides: [
+      { guidPath: path(S(M2A.cardRow)), componentPropAssignment: [asg(M2A.dRowLead, { g: S(M2A.square) })] }] },
+    derivedSymbolData: cardDerived({ trail: M2A.squareShape }) }));
+  // A hop that matches only by overrideKey: [50:73] is 5:173's overrideKey, not its local guid. derived
+  // holds [5:173], so the entry is OVERRIDE_STALE "not-derived" (and must stay so: D7).
+  add(inst(M2A.iOverrideKey, M2A.page, "i", "Override key", M2A.libTagLight, 480, 120, 56, 24, { symbolData: { symbolOverrides: [
+      { guidPath: path(g(50, 73)), fillPaints: red() }] },
+    derivedSymbolData: [D([M2A.libTagLightText])] }));
+  // Entries (D8-D11, D17) on an instance of Row, in stored order:
+  //   [5:400] (its symbolID) size 200x40 (the record's) and a blue fill; [] (empty path) size 210x40 and
+  //     opacity 0.5: both root entries, merged (OVERRIDE_PATHS_MERGED, 1 conflicting field: size) into
+  //     one override with path [] holding the look { fills, opacity }; the size is the record's own:
+  //     under --override-merge last it is 210 (OVERRIDE_FIELD_DROPPED "root-box", rootBox.differs 1),
+  //     under first 200 (an echo, rootBox.echo 1);
+  //   [5:404] green fill, overrideLevel 1, then [5:404] yellow fill, overrideLevel 2: merged; the fill
+  //     is yellow under last, green under first and under outer (the lowest level wins);
+  //   [5:406] opacity 1: an echo (the master layer's is 1), and vectorPaints: dropped "no-equivalent";
+  //   [5:401] pluginData: dropped "no-equivalent"; [5:401] is a text bound to Title, which the instance
+  //     assigns ("Assigned title"), and its characters override "Override title" differs from that:
+  //     overrides.boundConflicts 1 (the baseline of a bound field is the property's value, D9);
+  //   [5:405] a fill on a GROUP: dropped "not-on-type";
+  //   [5:402] a fill and a style reference (the local fill style 1:50) on a nested INSTANCE: carried
+  //     (an INSTANCE target takes a COMPONENT's props), the style's value winning (IR.md §7);
+  //   [5:403] a no-op swap to its declared 5:300 (kept; swaps.noOp) with an assignment to Row's Title,
+  //     which Circle's family lacks: STALE_ASSIGNMENT "nested: other-family";
+  //   [5:408] a fill on a folded boolean operand (no record): dropped "layer-not-carried";
+  //   [5:499] in no derived entry: OVERRIDE_STALE "not-derived", its assignment dropped with it
+  //     (assignments.droppedWithEntry 1).
+  // Derived: [5:401] stores textData with one baseline only (lines 1, no size, no transform);
+  // [5:402, 5:310] stores only fill geometry equal to the layer's own: nothing to write under
+  // --derived-geometry changed (derived.empty 1); [5:404] stores a transform and a stroke-area path
+  // only (oracleSides; no size); [5:405] a size only.
+  add(inst(M2A.iEntries, M2A.page, "j", "Entries", M2A.row, 0, 300, 200, 40, {
+    componentPropAssignment: [asg(M2A.dRowTitle, { t: "Assigned title" })],
+    symbolData: { symbolOverrides: [
+      { guidPath: path(S(M2A.row)), size: box(200, 40), fillPaints: [solid(0, 0, 255)] },
+      { guidPath: path(), size: box(210, 40), opacity: 0.5 },
+      { guidPath: path(S(M2A.rowBg)), fillPaints: [solid(0, 255, 0)], overrideLevel: 1 },
+      { guidPath: path(S(M2A.rowBg)), fillPaints: [solid(255, 255, 0)], overrideLevel: 2 },
+      { guidPath: path(S(M2A.rowGroupRect)), opacity: 1, vectorPaints: [{ regionId: 0, paints: red() }] },
+      { guidPath: path(S(M2A.rowTitle)), pluginData: [{ pluginID: "fixture", key: "k", value: "v" }], textData: { characters: "Override title" } },
+      { guidPath: path(S(M2A.rowGroup)), fillPaints: red() },
+      { guidPath: path(S(M2A.rowLead)), fillPaints: red(), inheritFillStyleID: STYLE },
+      { guidPath: path(S(M2A.rowTrail)), overriddenSymbolID: S(M2A.circle), componentPropAssignment: [asg(M2A.dRowTitle, { t: "Nested" })] },
+      { guidPath: path(S(M2A.rowFlatL1)), fillPaints: red() },
+      { guidPath: path(S("5:499")), name: "Gone", componentPropAssignment: [asg(M2A.dRowTitle, { t: "Stale" })] }] },
+    derivedSymbolData: [
+      D([M2A.rowTitle], { textData: { characters: "Override title", baselines: [{ position: box(0, 12), width: 60, firstCharacter: 0, endCharacter: 14 }] } }),
+      D([M2A.rowLead]), D([M2A.rowLead, M2A.circleShape], { fillGeometry: geom(B.ellipse10) }), D([M2A.rowTrail]), D([M2A.rowTrail, M2A.circleShape]),
+      D([M2A.rowBg], { transform: at(0, 0), strokePaddingPath: geom(B.ringPad) }), D([M2A.rowGroup], { size: box(20, 20) }), D([M2A.rowGroupRect]), D([M2A.rowFlat]), D([M2A.rowFlatL1])] }));
+  // A text override with a style table (characters kept, the table's fontSize as a range); a size
+  // override on Bg (width and height: kept, class "refused", counted OVERRIDE_FIELD_UNSUPPORTED by the
+  // planner) and a style reference (fillStyle, the local style 1:50). The instance's own stored fill
+  // differs from its master root's look (instances.ownDiffers; written into the [] override under
+  // --instance-own own).
+  add(inst(M2A.iTextStyles, M2A.page, "k", "Text styles", M2A.row, 240, 300, 200, 40, { fillPaints: [solid(128, 0, 128)], symbolData: { symbolOverrides: [
+      { guidPath: path(S(M2A.rowTitle)), textData: { characters: "Styled", characterStyleIDs: [0, 0, 1, 1, 1, 1], styleOverrideTable: [{ styleID: 1, fontSize: 20 }] } },
+      { guidPath: path(S(M2A.rowBg)), size: box(180, 40), inheritFillStyleID: STYLE }] },
+    derivedSymbolData: rowDerived([]) }));
+  // An echo through a master's nested-instance override: red on [5:421, 5:404] equals Card2's own
+  // override of its Row's Bg, so it is dropped (OVERRIDE_ECHO, 1 field).
+  add(inst(M2A.iEchoNested, M2A.page, "l", "Echo nested", M2A.card, 0, 360, 220, 70, { symbolData: { symbolOverrides: [
+      { guidPath: path(S(M2A.cardRow), S(M2A.rowBg)), fillPaints: red() }] },
+    derivedSymbolData: cardDerived({ trail: M2A.squareShape }) }));
+  // No derived data (its master has no children): instances.noDerived 1.
+  add(inst(M2A.iNoDerived, M2A.page, "m", "No derived", M2A.spacer, 240, 360, 8, 8));
+  // Scaled: uniformScaleFactor 2 (instance.scale 2; instances.scaled 1).
+  add(inst(M2A.iScaled, M2A.page, "n", "Scaled", M2A.circle, 260, 360, 20, 20, { symbolData: { uniformScaleFactor: 2 }, derivedSymbolData: [D([M2A.circleShape], { size: box(20, 20), transform: at(0, 0) })] }));
+  return out;
 }
 
 export const VARIANTS = ["valid", "truncated", "unknown-field", "trailing-bytes", "renumbered"];
