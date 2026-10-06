@@ -1014,14 +1014,22 @@ function wire(uiHtml, port, code, tap) {
   const els = {};
   const el = (id) => els[id] || (els[id] = { id, textContent: "", className: "", hidden: ["pairrow", "scoperow", "go"].indexOf(id) >= 0,
     disabled: false, onclick: null, onkeydown: null, value: id === "scope" ? "file" : "", style: {} });
-  let closed = false, fetches = 0;
+  let closed = false, fetches = 0, target = port, held = null;
+  // Requests in flight, so a runner's death can be played: the window's open requests fail as a closed
+  // socket fails them, and the next ones reach whatever runner now listens (W.retarget).
+  const inflight = new Set();
   const winFetch = (url, o) => {
     if (closed) return Promise.reject(new TypeError("window closed"));
     fetches++;
     const u = new URL(String(url));
     const oo = Object.assign({}, o || {});
     oo.headers = Object.assign({ Origin: "null" }, oo.headers || {});
-    return fetch("http://127.0.0.1:" + port + u.pathname + u.search, oo);
+    let cut = null;
+    const dead = new Promise((_, rej) => { cut = () => rej(new TypeError("fetch failed (the runner is gone)")); });
+    inflight.add(cut);
+    // A held path (W.hold) is never sent: it waits, as a request to a dying runner does, until cut.
+    if (held && held.test(u.pathname)) return dead.finally(() => inflight.delete(cut));
+    return Promise.race([fetch("http://127.0.0.1:" + target + u.pathname + u.search, oo), dead]).finally(() => inflight.delete(cut));
   };
   const a = uiHtml.indexOf("<script>"), b = uiHtml.lastIndexOf("</script>");
   const win = createContext({
@@ -1033,7 +1041,8 @@ function wire(uiHtml, port, code, tap) {
   runInContext(uiHtml.slice(a + 8, b), win);
   const plugin = createContext({ figma, __html__: "", setTimeout, clearTimeout, performance });
   runInContext(code || CODE, plugin);
-  return { figma, el, plugin, fetches: () => fetches, close() { closed = true; } };
+  return { figma, el, plugin, fetches: () => fetches, close() { closed = true; },
+    retarget(p) { held = null; target = p; for (const c of [...inflight]) c(); }, hold(re) { held = re; } };
 }
 
 {
@@ -1234,6 +1243,69 @@ function wire(uiHtml, port, code, tap) {
   W.close();
   srv.close();
 }
+
+// A window busy with a job when its runner dies and another one starts (the live session of 2026-10-05,
+// docs/M1.md §15.11: the plugin, finishing a job for a dead runner, did not ask for the code). The new
+// runner has a new key, so the window's requests get 401: the code field and the state line asking for
+// it come up while the job still runs, the job is not disturbed, and once it ends, or after a job that
+// failed for want of its runner, the window still asks, and works once paired.
+async function busyPairing(label, finish) {
+  const secA = newSecrets();
+  const dA = buildPlugin({ outDir: join(scratch, "dist-busy-" + label), token: secA.token });
+  const A = startJobServer(0, Object.assign({ log: () => {}, pluginVersion: dA.version }, secA));
+  await A.ready;
+  const W = wire(readFileSync(dA.uiPath, "utf8"), A.port);
+  let B = null;
+  const ops = W.plugin.PXF_IR.ops, was = ops.fonts;
+  try {
+    await until(() => A.lastPoll() > 0, 5000, "the window to ask for work");
+    let release = null, entered = false, finished = false;
+    ops.fonts = async (ctx) => { entered = true; await new Promise((r) => { release = r; }); finished = true; return ctx.report; };
+    // "failed": the runner dies while the window fetches the job's payload, so the job fails in the window.
+    if (finish === "failed") W.hold(/\/payload$/);
+    A.post({ kind: "ir" }, JSON.stringify(FONTS_TASK()), new Map(), 60000).catch(() => {});
+    if (finish === "failed") await until(() => /^job j\S+ \(ir\)/m.test(W.el("l").textContent), 5000, "the window to take the job");
+    else await until(() => entered, 5000, "the job to start in the plugin");
+    // The runner dies with the job unanswered; another starts on the same port, same build, new key.
+    A.close();
+    const secB = newSecrets();
+    B = startJobServer(0, Object.assign({ log: () => {}, pluginVersion: dA.version }, secB));
+    await B.ready;
+    W.retarget(B.port);
+    if (finish === "after") { release(); await until(() => finished, 5000, "the job to end"); }
+    let asked = true;
+    try { await until(() => W.el("pairrow").hidden === false && /Введите код/.test(W.el("s").textContent), 8000, "the window to ask for the code"); }
+    catch (e) { asked = false; }
+    check(asked, label + ": the window shows the code field and its state line asks for the code" +
+      (finish === "after" ? " once the job for the dead runner has ended" : finish === "failed" ? " after the job failed with its runner" : " while the job for the dead runner still runs"),
+      JSON.stringify([W.el("pairrow").hidden, W.el("s").textContent]));
+    if (finish === "during") {
+      check(!finished && /задани/.test(W.el("s").textContent), label + ": the job is left running, and the line says Figma is still finishing it", W.el("s").textContent);
+      W.el("code").value = secB.pairCode;
+      await W.el("pairgo").onclick();
+      check(W.el("pairrow").hidden === true && B.paired && !finished, label + ": the code pairs the window while the job still runs");
+      let early = null;
+      const p = B.post({ kind: "render" }, JSON.stringify({ op: "ping" }), new Map(), 15000).then((r) => { early = r; return r; });
+      await sleep(400);
+      check(early === null, label + ": a busy window takes no second job before its own has ended");
+      release();
+      const r = await p;
+      check(finished && r.ok === 1, label + ": the job ends, and the window then takes the new runner's job");
+    } else {
+      W.el("code").value = secB.pairCode;
+      await W.el("pairgo").onclick();
+      const r = await B.post({ kind: "render" }, JSON.stringify({ op: "ping" }), new Map(), 15000);
+      check(W.el("pairrow").hidden === true && B.paired && r.ok === 1, label + ": paired, the window takes the new runner's job");
+    }
+  } catch (e) { fail("busy pairing (" + label + "): " + e.message); }
+  ops.fonts = was;
+  W.close();
+  A.close();
+  if (B) B.close();
+}
+await busyPairing("busy", "during");
+await busyPairing("just finished", "after");
+await busyPairing("failed", "failed");
 
 // openSession wires the build it writes into the server it starts.
 {

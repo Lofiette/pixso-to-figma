@@ -703,6 +703,7 @@ function bundleWith(D, host, irFiles) {
   const rep5 = await IR.ops.verify(ctx5, t5);
   check(same(rep5.fontsMissing, [{ family: "Synthetic Sans", style: "Bold" }]) && ctx5.S.fonts["Synthetic Sans|Bold"] === "sub" && ctx5.S.fonts["Inter|Regular"] === "ok",
     "verify loads the task's fonts and the fallback first; a missing one is listed and marked substituted", show(rep5.fontsMissing));
+  check(D.missingFontLoads === 0, "a font Figma does not list is never handed to loadFontAsync (real Figma may hang on it)", String(D.missingFontLoads));
   // The read-only walk keeps layout reads out of the write log, and no write lands on another task's root.
   check(!D.writes.slice(writesBefore).some((w) => w.id === sc.other.id), "another task's root is never touched");
 }

@@ -9,7 +9,8 @@
 // hang, answer 500/503 or a JSON-RPC error, or come back with another file open (outageAfter). Besides
 // M0's synthetic scripts (px:identity, px:fake-object, px:script-error) it answers the read-only
 // script library of tools/ir/mcp-readonly.mjs from its own synthetic state: px:sample from S.nodes,
-// px:image-bytes and px:image-range from S.images, px:render from S.nodes[guid].png. Every script it
+// px:image-bytes and px:image-range from S.images, px:render from S.nodes[guid].png, px:audit-render
+// from S.nodes[guid].audit(scale) (the render audit's picture and where it sits). Every script it
 // receives is kept in S.scripts. Everything is synthetic and nothing leaves 127.0.0.1.
 import http from "node:http";
 
@@ -45,6 +46,11 @@ function libraryAnswer(S, src) {
     if (!n || !n.png) return { value: { e: "no node" }, served: a.guid };
     return { value: { n: n.png.length, d: n.png.toString("base64"), w: n.width, h: n.height }, served: a.guid };
   }
+  if (src.indexOf("// px:audit-render") === 0) {
+    const n = S.nodes.get(a.guid);
+    if (!n || typeof n.audit !== "function") return { value: { e: "no node" }, served: a.guid };
+    return { value: n.audit(a.scale), served: a.guid };
+  }
   return null;
 }
 
@@ -54,7 +60,7 @@ export function fakePixso() {
     identity: { file: "Synthetic file A", fileKey: "synthetic-key-a", pageIds: ["0:1", "0:2"] },
     fails: {},                 // object id -> the error its script answers with
     images: new Map(),         // image hash -> the bytes Pixso gives for it (any bytes: a test may plant a bad SHA-1)
-    nodes: new Map(),          // guid -> { type, name, width, height, png } for the guid sample and renders
+    nodes: new Map(),          // guid -> { type, name, width, height, png, audit } for the guid sample and renders
     scripts: [],               // every eval_script source received, in order (the tests check each is read-only)
     served: [],                // object ids answered, one entry per call, in order
     calls: 0,                  // requests received

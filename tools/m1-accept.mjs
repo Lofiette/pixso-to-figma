@@ -13,9 +13,11 @@
 // above 0 and all four side weights 0, on a node that is not an instance and not inside one. Each is
 // looked up in this run's IR by guid and reported as built, and with its sides matching (not in the
 // judge's side mismatches). Without it the .pix lost-border population is reported (docs/M1.md §0.5).
-// --audit: a render audit made by hand ({ format: "pix2fig.audit", version: 2, snapshot, runId,
-// roots: [{ i, guid, ok }] }; version 1 has no run identity); PASS needs one covering every built root
-// of this run (an audit naming another snapshot or runId, or other guids, does not count).
+// --audit: a render audit, <runDir>/audit/audit.json as tools/ir-audit.mjs writes it (docs/M1.md §16),
+// or one made by hand ({ format: "pix2fig.audit", version: 2, snapshot, runId, roots: [{ i, guid, ok }] };
+// version 1 has no run identity); PASS needs one covering every built root of this run that is not an
+// INSTANCE placeholder (an audit naming another snapshot or runId, or other guids, does not count; a
+// root whose ok is null was not compared and covers nothing).
 //
 // Exit code: 0 when the verdict is not FAIL, 3 when it is, 1 when the run folder cannot be read.
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";

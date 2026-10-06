@@ -9,7 +9,7 @@
 //     task    the build (or verify) task (tools/ir/task.mjs) that was built and verified; each of its
 //             records must be the IR record of the same index (same guid and type)
 //     build   the plugin's build report (docs/M1.md §6 B), or null when the build failed
-//     verify  the plugin's verify report: { op: "verify", taskNo, roots: [{ i, id, found, inParent? }], count, rows }
+//     verify  the plugin's verify report: { op: "verify", taskNo, roots: [{ i, id, found, inParent?, reason? }], count, rows }
 //             where each row is an array indexed by ROW below (inParent: a split root's [x, y] in its parent)
 //     lostBorder  optional: part A's stats.populations.lostBorder (IR indices). Only it names the
 //             lost-border population (the .pix border fields are not in the IR); without it
@@ -243,8 +243,8 @@ const unionOf = (entries) => unionBounds(entries.filter((e) => subpaths(e) > 0).
 const pn = (n) => { const v = Number(Number(n).toFixed(6)); return String(Object.is(v, -0) ? 0 : v); };
 // The box of an IR drawing in the record's own space: its build source (a network's segments, curves
 // included, and any vertex no segment uses; or fillGeometry), or a boolean's stored result. null when
-// it has none.
-function drawingBox(p, value) {
+// it has none. Exported for the render audit's test (tools/test-iraudit.mjs: what a vector draws).
+export function drawingBox(p, value) {
   const boxes = [];
   if (p.vectorNetwork !== undefined) {
     const net = value(p.vectorNetwork) || {};

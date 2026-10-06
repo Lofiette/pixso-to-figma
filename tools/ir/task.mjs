@@ -32,9 +32,14 @@
 //     values: { "<IR values index>": value },
 //     fonts: [{ family, style }],
 //     images: [{ hash, source: "archive"|"mcp"|"render"|"none", format, reason: string | null }],
-//     expect: { count, nonInstance, placeholders } | null }
+//     expect: { count, nonInstance, placeholders } | null,
+//     buildRun?: 16 lowercase hex (verify only) }
 //
 // What each part of it means:
+// - buildRun: on a verify task, the runId of the run attempt that built the task's roots (the runner
+//   records it per build task in states.json; a resume runs under a new runId, docs/M1.md §15.12). The
+//   verify takes only roots stamped pxRun = buildRun (ctx.findRoot); absent, only its own runId's. An
+//   earlier run's copy of a root is never measured.
 // - nodes: IR records by their IR index i, parent-first, with the IR parent index (-1 for a page's
 //   top-level record). props are the IR's props with ORACLE_PROPS stripped; interned props are keys
 //   of `values` (the IR's own indices, as strings). instance is the IR's instance data, INSTANCE only.
@@ -131,7 +136,7 @@ export function validateTask(task, deps) {
   if (task.format !== TASK_FORMAT) { err("format", "unknown format " + show(task.format) + "; expected " + show(TASK_FORMAT)); return done(); }
   if (task.version !== TASK_VERSION) { err("version", "unsupported task version " + show(task.version) + "; this plugin knows version " + TASK_VERSION + " only"); return done(); }
   closed(task, ["format", "version", "op", "runId", "taskNo", "of", "snapshot", "irVersion", "settings", "page", "roots",
-    "nodes", "notes", "values", "fonts", "images", "expect"], "");
+    "nodes", "notes", "values", "fonts", "images", "expect", "buildRun"], "");
   let size = -1;
   try { size = taskChars(task); } catch (e) { err("", "the task does not serialise: " + ((e && e.message) || e)); }
   if (size > maxChars) err("", "the task is " + size + " characters; the cap is " + maxChars + " (--max-task-mb)");
@@ -139,6 +144,10 @@ export function validateTask(task, deps) {
   const op = task.op;
   if (TASK_OPS.indexOf(op) < 0) err("op", "must be one of " + TASK_OPS.join(", ") + "; got " + show(op));
   if (!(isStr(task.runId) && /^[0-9a-f]{16}$/.test(task.runId))) err("runId", "16 lowercase hex; got " + show(task.runId));
+  if (own(task, "buildRun")) {
+    if (op !== "verify") err("buildRun", "only a verify task names the run that built its roots");
+    else if (!(isStr(task.buildRun) && /^[0-9a-f]{16}$/.test(task.buildRun))) err("buildRun", "16 lowercase hex; got " + show(task.buildRun));
+  }
   if (!isInt(task.taskNo) || task.taskNo < 1) err("taskNo", "an integer from 1; got " + show(task.taskNo));
   else if (!isInt(task.of) || task.of < task.taskNo) err("of", "the number of tasks in the run, at least taskNo; got " + show(task.of));
   if (!(isStr(task.snapshot) && /^(pix|mcp):./.test(task.snapshot))) err("snapshot", "the IR's snapshotId (pix:… or mcp:…); got " + show(task.snapshot));

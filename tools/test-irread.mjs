@@ -336,7 +336,12 @@ refuses("a glyph path that ends inside an op", () => pixToIR(mutated((v) => { v.
 refuses("a style id that is not in styleOverrideTable", () => pixToIR(mutated((v, at) => { at(IDS.text).textData.characterStyleIDs[0] = 7; })), /style id 7/);
 refuses("a baseline whose end character is outside the text", () => pixToIR(mutated((v, at) => { at(IDS.text).textData.baselines[1].endCharacter = 19; })), /baseline/);
 refuses("a baseline whose first character is past its end", () => pixToIR(mutated((v, at) => { at(IDS.text).textData.baselines[1].firstCharacter = 13; at(IDS.text).textData.baselines[1].endCharacter = 12; })), /baseline/);
-refuses("more characterStyleIDs than code points", () => pixToIR(mutated((v, at) => { at(IDS.text).textData.characterStyleIDs.push(0); })), /code points/);
+refuses("more characterStyleIDs than code points, past the end not all the base style", () => pixToIR(mutated((v, at) => { at(IDS.text).textData.characterStyleIDs.push(0, 1); })), /code points/);
+check("trailing ids of the base style past the last code point are dropped and counted, not PIX_CORRUPT", () => {
+  const r = pixToIR(mutated((v, at) => { at(IDS.text).textData.characterStyleIDs.push(0); }));
+  eq(r.stats.text.trailingBaseStyleIds, 1);
+  eq(rec(IDS.text, r.ir).props.characters, rec(IDS.text).props.characters);
+});
 refuses("a geometry path naming a blob that does not exist", () => pixToIR(mutated((v, at) => { at(IDS.heart).fillGeometry[0].blobIndex = 500; })), /blob 500/);
 check("a full sweep with no hole is the plain ellipse (no arcData); a full donut keeps its arcData (review figma F1)", () => {
   const full = Math.fround(2 * Math.PI);

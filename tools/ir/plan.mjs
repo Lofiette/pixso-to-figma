@@ -20,7 +20,15 @@
 // followed by its verify task, the service page (S2) before the user pages (S1); where a root is split
 // across tasks, the chain's build tasks come first and their verify tasks after them, in the same
 // order. ledger[k] describes tasks[k] for states.json: { taskNo, op, roots: [IR index], nodes,
-// ceilingMs }, and a verify's entry names its build task (build: taskNo).
+// ceilingMs }, and a verify's entry names its build task (build: taskNo). A build's entry also carries
+// cleanCeilingMs, the ceiling of the clean the runner sends before it (docs/M1.md §15.12): the clean
+// is its own job, and what it may remove is an earlier run's build of the task's top-level roots,
+// whole, split pieces attached by later tasks included; such a build holds at most every IR record
+// under those roots (removing nodes is not cheaper than making them, I), so
+// cleanCeilingMs = CEILING_BASE_MS + ceilingMsPerNode × that count. That is one earlier copy: the clean
+// removes every other run's copy it finds, and each run's clean leaves none behind, but a file holding
+// several (built before the clean existed) needs a larger --ceiling-ms-per-node. A split piece is not top-level, so
+// the clean of a later task of a chain removes nothing and counts 0 for it.
 //
 // Which records are built. Every record is claimed by exactly one population (POPULATIONS):
 //   user                         every record on a user page (S1: built, always)
@@ -322,8 +330,11 @@ export function planM1(ir, stats, opts) {
   });
   for (const t of tasks) t.of = tasks.length;
   const perNode = Number(st.ceilingMsPerNode);
+  const under = subtreeSizes(N);
+  const cleanable = (t) => t.roots.filter((r) => r.attachTo === "page").reduce((s, r) => s + under[r.i], 0);
   const ledger = tasks.map((t) => Object.assign({ taskNo: t.taskNo, op: t.op, roots: t.roots.map((r) => r.i), nodes: t.nodes.length,
-    ceilingMs: CEILING_BASE_MS + perNode * t.nodes.length }, t.op === "verify" ? { build: buildOf.get(t.taskNo) } : {}));
+    ceilingMs: CEILING_BASE_MS + perNode * t.nodes.length }, t.op === "verify" ? { build: buildOf.get(t.taskNo) } : {},
+  t.op === "build" ? { cleanCeilingMs: CEILING_BASE_MS + perNode * cleanable(t) } : {}));
   let largest = 0;
   for (const t of tasks) {
     const n = taskChars(t);
@@ -359,6 +370,23 @@ export function planM1(ir, stats, opts) {
     settings: Object.assign({ m1Scope }, st),
   };
   return { tasks, ledger, scope: { built: builtIdx, outOfScope }, balance, preflight, populations: lists };
+}
+
+// How many IR records each record's subtree holds, itself included (any type, any population).
+export function subtreeSizes(N) {
+  const size = N.map(() => 1);
+  const depth = N.map(() => -1);
+  const depthOf = (i) => {
+    const path = [];
+    let j = i;
+    while (j >= 0 && depth[j] < 0 && N[j]) { path.push(j); j = N[j].parent; }
+    let d = j >= 0 && N[j] ? depth[j] : -1;
+    for (let k = path.length - 1; k >= 0; k--) depth[path[k]] = ++d;
+    return depth[i];
+  };
+  const order = N.map((_, i) => i).sort((a, b) => depthOf(b) - depthOf(a));
+  for (const i of order) { const p = N[i] ? N[i].parent : -1; if (p >= 0 && N[p]) size[p] += size[i]; }
+  return size;
 }
 
 // The reader's not-carried terms (tools/pix/ir/index.mjs notCarried), in the order they are printed.
