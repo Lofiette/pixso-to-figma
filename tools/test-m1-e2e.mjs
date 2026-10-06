@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 import { makeFixture } from "./pix/fixture.mjs";
 import { readPix } from "./pix/read.mjs";
 import { pixToIR } from "./pix/ir/index.mjs";
-import { CODE, ORACLE_CLASSES, VECTOR_TYPES } from "./ir/schema.mjs";
+import { CODE, ORACLE_CLASSES, VECTOR_TYPES, VERSION as IR_VERSION } from "./ir/schema.mjs";
 import { BUILD_PHASES, maxTaskChars, taskChars } from "./ir/task.mjs";
 import { validate, validateTask } from "./ir/validate.mjs";
 import { CEILING_BASE_MS, PLAN_DEFAULTS, cleanTaskFor, planM1 } from "./ir/plan.mjs";
@@ -161,7 +161,7 @@ const nodeOf = (run, i) => run.D.node(run.ctxs.get(buildTaskOf(run, i).taskNo).S
 // ============================================================================================
 {
   const v = validate(IR);
-  check(v.ok && IR.header.version === 2, "the fixture's IR is valid IR version 2", show(v.errors.slice(0, 3)));
+  check(v.ok && IR.header.version === IR_VERSION, "the fixture's IR is valid IR version " + IR_VERSION, show(v.errors.slice(0, 3)));
   const plan = planM1(IR, STATS, { m1Scope: "default", runId: RUN });
   const cap = maxTaskChars(4);
   const bad = plan.tasks.filter((t) => !validateTask(t).ok || taskChars(t) > cap);

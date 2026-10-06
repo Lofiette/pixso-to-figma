@@ -46,7 +46,7 @@ const T6 = (x, y) => [1, 0, x, 0, 1, y];
 const painted = { fills: 0, strokes: 1, strokeWeight: 1, strokeAlign: "INSIDE", blendMode: "PASS_THROUGH" };
 const SETTINGS = { textFit: "widen", layoutOrder: "creation", textRead: "measure", fallbackFont: { family: "Inter", style: "Regular" } };
 const buildTask = () => ({
-  format: "pix2fig.task", version: 1, op: "build", runId: "0123456789abcdef", taskNo: 1, of: 2, snapshot: SNAP, irVersion: 2,
+  format: "pix2fig.task", version: 1, op: "build", runId: "0123456789abcdef", taskNo: 1, of: 2, snapshot: SNAP, irVersion: schema.VERSION,
   settings: JSON.parse(JSON.stringify(SETTINGS)),
   page: { index: 0, guid: "0:1", name: "Page 1", service: false, background: 0 },
   roots: [{ i: 0, attachTo: "page", place: null }],
@@ -76,7 +76,10 @@ function taskErr(label, t, path, opts) {
   check(!r.ok && hit, label + (hit ? "  ->  " + hit.path + ": " + hit.message : ""), r.ok ? "accepted" : r.errors.slice(0, 3).map((e) => e.path + ": " + e.message).join(" | "));
 }
 
-check(taskMod.TASK_IR_VERSION === schema.VERSION, "the task format's IR version is the schema's (" + schema.VERSION + ")");
+check(taskMod.TASK_IR_VERSION === schema.VERSION && schema.VERSION === 3, "the task format's IR version is the schema's (" + schema.VERSION + ")");
+// docs/M2A.md D13: a COMPONENT_SET record is written into tasks as a FRAME until M2b builds sets; every other type as is.
+check(typeof taskMod.taskType === "function" && taskMod.taskType("COMPONENT_SET") === "FRAME" && schema.NODE_TYPES.every((t) => t === "COMPONENT_SET" || taskMod.taskType(t) === t) &&
+  !Object.prototype.hasOwnProperty.call(taskMod.BUILT_TYPE, "COMPONENT_SET"), "taskType writes a COMPONENT_SET as a FRAME and every other type as is; BUILT_TYPE still has no COMPONENT_SET");
 check(Object.isFrozen(taskMod.BUILT_TYPE) && Object.keys(taskMod.BUILT_TYPE).every((t) => schema.NODE_TYPES.indexOf(t) >= 0) &&
   Object.keys(taskMod.BUILT_TYPE).every((t) => SURFACE.nodes[taskMod.BUILT_TYPE[t]]) && taskMod.BUILT_TYPE.GROUP === "FRAME" && taskMod.BUILT_TYPE.INSTANCE === "FRAME",
   "BUILT_TYPE is frozen, maps IR types to Figma types the surface has, GROUP and INSTANCE to FRAME");
@@ -130,7 +133,7 @@ taskErr("a split root attached to a parent that is not its own", tmut(buildTask,
   t.roots.push({ i: 9, attachTo: { i: 8, guid: "1:8" }, place: null }); t.expect = { count: 6, nonInstance: 5, placeholders: 1 };
 }), "roots[1].attachTo.i");
 taskErr("a grid place on an ordinary page", tmut(buildTask, (t) => { t.roots[0].place = [0, 0]; }), "roots[0].place");
-taskErr("a type M1 does not build", tmut(buildTask, (t) => { t.nodes[0].type = "COMPONENT_SET"; }), "nodes[0].type");
+taskErr("a type M1 does not build (a COMPONENT_SET record carried as such, not as taskType's FRAME)", tmut(buildTask, (t) => { t.nodes[0].type = "COMPONENT_SET"; }), "nodes[0].type");
 taskErr("a record after its child (not parent-first)", tmut(buildTask, (t) => { t.nodes.reverse(); }), "nodes[0].parent");
 taskErr("a build-stage code in the task's notes", tmut(buildTask, (t) => { t.notes.push({ code: "INSTANCE_DEFERRED", i: 1, detail: null }); }), "notes[1].code");
 taskErr("an unknown code in the task's notes", tmut(buildTask, (t) => { t.notes.push({ code: "LOOKS_FINE", i: 1, detail: null }); }), "notes[1].code");

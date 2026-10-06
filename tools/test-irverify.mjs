@@ -605,7 +605,7 @@ function verifyTask() {
     { i: 6, parent: 0, guid: "7:7", type: "INSTANCE", name: "I", props: { relativeTransform: T6(120, 10), width: 30, height: 30 } },
     { i: 7, parent: 0, guid: "7:8", type: "TEXT", name: "T", props: paint({ relativeTransform: T6(60, 10), width: 50, height: 30, characters: "Hi", fontName: 3, fontSize: 12, textAutoResize: "NONE", lines: 1 }) },
   ];
-  const task = { format: "pix2fig.task", version: 1, op: "verify", runId: RUN, taskNo: 2, of: 2, snapshot: SNAP, irVersion: 2, settings: clone(SETTINGS),
+  const task = { format: "pix2fig.task", version: 1, op: "verify", runId: RUN, taskNo: 2, of: 2, snapshot: SNAP, irVersion: schema.VERSION, settings: clone(SETTINGS),
     page: { index: 0, guid: "0:1", name: "Page 1", service: false, background: null },
     roots: [{ i: 0, attachTo: "page", place: null }], nodes, notes: [{ code: schema.CODE.VECTOR_FROM_GEOMETRY, i: 2, detail: null }],
     values: vals, fonts: [{ family: "Inter", style: "Regular" }], images: [], expect: { count: 8, nonInstance: 7, placeholders: 1 } };
@@ -744,7 +744,7 @@ function toyText(D) {
 function textTask(recs, fonts) {
   const vals = { "0": [], "1": { family: "Inter", style: "Regular" }, "2": { family: "Roboto", style: "Regular" }, "3": { unit: "PIXELS", value: 14 },
     "4": { unit: "PERCENT", value: 150 }, "5": { unit: "AUTO" } };
-  return { format: "pix2fig.task", version: 1, op: "verify", runId: RUN, taskNo: 1, of: 1, snapshot: SNAP, irVersion: 2, settings: clone(SETTINGS),
+  return { format: "pix2fig.task", version: 1, op: "verify", runId: RUN, taskNo: 1, of: 1, snapshot: SNAP, irVersion: schema.VERSION, settings: clone(SETTINGS),
     page: { index: 0, guid: "0:1", name: "Page 1", service: false, background: null }, roots: [{ i: 0, attachTo: "page", place: null }],
     nodes: recs, notes: [], values: vals, fonts: fonts || [{ family: "Inter", style: "Regular" }, { family: "Roboto", style: "Regular" }], images: [],
     expect: { count: recs.length, nonInstance: recs.length, placeholders: 0 } };

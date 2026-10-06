@@ -21,7 +21,7 @@
 // The shape, every record closed (an unknown key is an error):
 //
 //   { format: "pix2fig.task", version: 1, op: "fonts"|"build"|"verify"|"clean",
-//     runId: 16 lowercase hex, taskNo: 1.., of: taskNo.., snapshot: snapshotId(IR header), irVersion: 2,
+//     runId: 16 lowercase hex, taskNo: 1.., of: taskNo.., snapshot: snapshotId(IR header), irVersion: 3,
 //     settings: { textFit: "widen"|"source-box", layoutOrder: "creation"|"deepestFirst",
 //                 textRead: "measure"|"inLoop", fallbackFont: { family, style } },
 //     page: { index: IR page index | null, guid: page guid | "m1-service", name, service: bool,
@@ -42,8 +42,10 @@
 //   earlier run's copy of a root is never measured.
 // - nodes: IR records by their IR index i, parent-first, with the IR parent index (-1 for a page's
 //   top-level record). props are the IR's props with ORACLE_PROPS stripped; interned props are keys
-//   of `values` (the IR's own indices, as strings). instance is the IR's instance data, INSTANCE only.
-//   type is the IR type; BUILT_TYPE says what Figma node it becomes.
+//   of `values` (the IR's own indices, as strings). instance is the IR's instance data, INSTANCE only
+//   (M1's planner writes none: an instance is a placeholder).
+//   type is taskType(the IR type): the IR type, except that a COMPONENT_SET is written as a FRAME until
+//   M2b builds sets (docs/M2A.md D13); BUILT_TYPE says what Figma node it becomes.
 // - roots: where each subtree of this task attaches. A node whose parent is not in the task is a root.
 //   attachTo "page": a top-level record (parent -1), or any S2 master on the service page.
 //   attachTo { i, guid }: a split root whose IR parent i was built by an earlier task; i is its
@@ -67,7 +69,7 @@
 export const TASK_FORMAT = "pix2fig.task";
 export const TASK_VERSION = 1;
 // The IR version the task's records come from; tools/test-m1-contract.mjs checks it equals schema.VERSION.
-export const TASK_IR_VERSION = 2;
+export const TASK_IR_VERSION = 3;
 export const TASK_OPS = ["fonts", "build", "verify", "clean"];
 // 4 MB of JSON text; --max-task-mb lowers or raises it, never above 16 MB (P3: the largest message
 // measured to cross the plugin boundary, and the report slices are 400 000 characters).
@@ -80,6 +82,14 @@ export const SERVICE_PAGE_GUID = "m1-service";
 export const BUILT_TYPE = Object.freeze({ FRAME: "FRAME", GROUP: "FRAME", SECTION: "SECTION", COMPONENT: "COMPONENT",
   INSTANCE: "FRAME", RECTANGLE: "RECTANGLE", ELLIPSE: "ELLIPSE", POLYGON: "POLYGON", STAR: "STAR", LINE: "LINE",
   VECTOR: "VECTOR", BOOLEAN_OPERATION: "BOOLEAN_OPERATION", TEXT: "TEXT" });
+// The type an IR record is written into a task as (docs/M2A.md D13): an accepted variant set's
+// COMPONENT_SET record is planned and judged as the state-group FRAME it was in IR version 2, with the
+// same props (auto layout included: the builder writes layout only for a FRAME or a COMPONENT), so M1's
+// path builds it exactly as before. Every other type is written as is. BUILT_TYPE stays without
+// COMPONENT_SET, so a task that carries one is still refused. M2b drops this mapping.
+export function taskType(irType) {
+  return irType === "COMPONENT_SET" ? "FRAME" : irType;
+}
 // The builder's settings (docs/M1.md §3, D11); textFit's values are the IR's (schema.SETTINGS.textFit).
 export const TASK_SETTINGS = { layoutOrder: ["creation", "deepestFirst"], textRead: ["measure", "inLoop"] };
 export const TASK_SETTING_DEFAULTS = { textFit: "widen", layoutOrder: "deepestFirst", textRead: "measure",

@@ -48,7 +48,7 @@
 import { randomBytes } from "node:crypto";
 import { CODE, INTERNED_PROPS, ORACLE_PROPS, snapshotId } from "./schema.mjs";
 import { BUILT_TYPE, SERVICE_PAGE_GUID, TASK_FORMAT, TASK_IR_VERSION, TASK_SETTING_DEFAULTS,
-  TASK_VERSION, maxTaskChars, taskChars } from "./task.mjs";
+  TASK_VERSION, maxTaskChars, taskChars, taskType } from "./task.mjs";
 import { tableFromIR } from "./images.mjs";
 import { count } from "./runstate.mjs";
 
@@ -73,9 +73,10 @@ const ROOT_ENTRY = 128;
 const own = (o, k) => o !== null && o !== undefined && Object.prototype.hasOwnProperty.call(o, k);
 
 // The populations from the IR alone, where part A's stats are not at hand: on an internal page, a
-// top-level COMPONENT is a master, a top-level FRAME whose children are all COMPONENTs is a state
-// group (its children masters), anything else top-level is loose; a master is "with instance" when
-// its subtree holds an INSTANCE. Returns { name: [IR index of each population root] }.
+// top-level COMPONENT is a master, a top-level COMPONENT_SET (IR version 3, docs/M2A.md D13), or a
+// top-level FRAME whose children are all COMPONENTs, is a state group (its children masters), anything
+// else top-level is loose; a master is "with instance" when its subtree holds an INSTANCE. Returns
+// { name: [IR index of each population root] }.
 export function derivePopulations(ir) {
   const N = ir.nodes || [];
   const kids = childrenOf(N);
@@ -87,7 +88,7 @@ export function derivePopulations(ir) {
     const pg = ir.pages[r.page];
     if (!pg || !pg.internal) { pops.userTop.push(i); return; }
     if (r.type === "COMPONENT") master(i);
-    else if (r.type === "FRAME" && kids[i].length && kids[i].every((c) => N[c].type === "COMPONENT")) { pops.stateGroupsInternal.push(i); kids[i].forEach(master); }
+    else if (r.type === "COMPONENT_SET" || (r.type === "FRAME" && kids[i].length && kids[i].every((c) => N[c].type === "COMPONENT"))) { pops.stateGroupsInternal.push(i); kids[i].forEach(master); }
     else pops.internalLoose.push(i);
   });
   N.forEach((r, i) => { if (r.type === "COMPONENT" && !internalPage(ir, i)) pops.userMasters.push(i); });
@@ -123,7 +124,8 @@ export function claimRecords(ir, stats, scopeSet) {
   const claim = new Array(N.length);
   N.forEach((r, i) => {
     const parentClaim = r.parent >= 0 ? claim[r.parent] : null;
-    if (!own(BUILT_TYPE, r.type) || parentClaim === "notBuildable") { claim[i] = "notBuildable"; return; }
+    // By the type the record is built as (a COMPONENT_SET as its FRAME, docs/M2A.md D13).
+    if (!own(BUILT_TYPE, taskType(r.type)) || parentClaim === "notBuildable") { claim[i] = "notBuildable"; return; }
     if (parentClaim === "notInScope") { claim[i] = "notInScope"; return; }
     if (r.parent < 0) {
       const pg = ir.pages[r.page];
@@ -148,7 +150,7 @@ function refsOf(rec) {
 function taskNode(rec, i) {
   const props = {};
   for (const k of Object.keys(rec.props || {})) if (ORACLE_PROPS.indexOf(k) < 0) props[k] = rec.props[k];
-  return { i, parent: rec.parent, guid: rec.guid, type: rec.type, name: rec.name, props };
+  return { i, parent: rec.parent, guid: rec.guid, type: taskType(rec.type), name: rec.name, props };
 }
 function walkImages(v, out) {
   if (Array.isArray(v)) { for (const x of v) walkImages(x, out); return; }

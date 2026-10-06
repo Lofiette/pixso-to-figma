@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CODE, ORACLE_PROPS } from "./ir/schema.mjs";
+import { CODE, ORACLE_PROPS, VERSION as IR_VERSION, M2A_SETTINGS, SETTING_DEFAULTS } from "./ir/schema.mjs";
 import { SERVICE_PAGE_GUID, taskChars } from "./ir/task.mjs";
 import { validate, validateTask } from "./ir/validate.mjs";
 import { cleanTaskFor, derivePopulations, planM1, PLAN_DEFAULTS, CEILING_BASE_MS } from "./ir/plan.mjs";
@@ -134,11 +134,11 @@ function syntheticIR(opts) {
   const comps = [];
   nodes.forEach((n, i) => { if (n.type === "COMPONENT") comps.push({ node: i, set: null }); });
   const ir = {
-    header: { format: "pix2fig.ir", version: 2, source: { kind: "pix", sha256: "0".repeat(62) + "a1", fileKey: null, documentName: "Synthetic file A" },
+    header: { format: "pix2fig.ir", version: IR_VERSION, source: { kind: "pix", sha256: "0".repeat(62) + "a1", fileKey: null, documentName: "Synthetic file A" },
       scope: { kind: "file" },
       capabilities: { authoredOverrides: true, resolvedOverrides: false, overrideKeys: true, publishIds: true, symbolVersions: true, derivedBoxes: true, inkBounds: false, renders: false },
-      settings: { mode: "design", overrides: "fidelity", drift: "link", deleted: "publish", resync: "pixso-unless-edited", textFit: "widen", booleans: "auto",
-        spaceEvenlySingle: "between", kitmaps: "default" } },
+      settings: Object.assign({ mode: "design", overrides: "fidelity", drift: "link", deleted: "publish", resync: "pixso-unless-edited", textFit: "widen", booleans: "auto",
+        spaceEvenlySingle: "between" }, Object.fromEntries(M2A_SETTINGS.map((k) => [k, SETTING_DEFAULTS[k]])), { kitmaps: "default" }) },
     pages: [{ guid: "0:1", name: "Page 1", internal: false, background: 0 }, { guid: "0:2", name: "Internal canvas", internal: true }],
     values, nodes, sets: [], components: comps, styles: [],
     images: [{ hash: hashes.png, present: true, format: "png" }, { hash: hashes.missing, present: false, format: "png" }, { hash: hashes.jpeg, present: true, format: "jpeg" }],
@@ -247,7 +247,7 @@ function syntheticIR(opts) {
     const cc = (no) => bp.ledger.find((l) => l.taskNo === no).cleanCeilingMs;
     const first = bp.ledger.find((l) => l.taskNo === firstWithBig.taskNo);
     const topLevel = firstWithBig.roots.filter((r) => r.attachTo === "page").map((r) => r.i);
-    const st0 = newStates({ snapshot: bp.tasks[0].snapshot, irVersion: 2, runId: RUN, settings: {}, probes: probeStatus(VERDICTS), pixso: null,
+    const st0 = newStates({ snapshot: bp.tasks[0].snapshot, irVersion: IR_VERSION, runId: RUN, settings: {}, probes: probeStatus(VERDICTS), pixso: null,
       balance: JSON.parse(JSON.stringify(bp.balance)), ledger: bp.ledger });
     check(topLevel.length > 0 && cc(firstWithBig.taskNo) === CEILING_BASE_MS + PLAN_DEFAULTS.ceilingMsPerNode * topLevel.reduce((s, i) => s + under(i), 0) &&
       cc(firstWithBig.taskNo) > first.ceilingMs && split.every((t) => cc(t.taskNo) === CEILING_BASE_MS + PLAN_DEFAULTS.ceilingMsPerNode *
@@ -261,7 +261,7 @@ function syntheticIR(opts) {
     // Part F: a resume keeps a split root only whole (B's request: after a plugin restart the split
     // pieces' parent carries no stamp, so its task runs again with them).
     const chain = splitChains(bp.tasks).find((g) => g.indexOf(firstWithBig.taskNo) >= 0) || [];
-    const mk = () => newStates({ snapshot: bp.tasks[0].snapshot, irVersion: 2, runId: RUN, settings: { m1Scope: "default" }, probes: probeStatus(VERDICTS),
+    const mk = () => newStates({ snapshot: bp.tasks[0].snapshot, irVersion: IR_VERSION, runId: RUN, settings: { m1Scope: "default" }, probes: probeStatus(VERDICTS),
       pixso: null, balance: JSON.parse(JSON.stringify(bp.balance)), ledger: bp.ledger });
     const old = mk();
     for (const t of old.tasks) t.state = "built";
@@ -473,7 +473,7 @@ function playedPlugin(opts) {
 async function runGroup() {
   const S = syntheticIR({});
   const plan = planM1(S.ir, S.stats, { runId: RUN });
-  const fresh = () => newStates({ snapshot: plan.tasks[0].snapshot, irVersion: 2, runId: RUN, settings: { m1Scope: "default" }, probes: probeStatus(VERDICTS),
+  const fresh = () => newStates({ snapshot: plan.tasks[0].snapshot, irVersion: IR_VERSION, runId: RUN, settings: { m1Scope: "default" }, probes: probeStatus(VERDICTS),
     pixso: null, balance: JSON.parse(JSON.stringify(plan.balance)), ledger: plan.ledger });
   check(/not a reason code/.test(threw(() => count({}, "NOT_A_CODE"))) && count({}, CODE.BUILD_FAILED, 2)[CODE.BUILD_FAILED] === 2, "count() records codes and throws on one outside the vocabulary");
   check(/cannot become/.test(threw(() => { const s = fresh(); transition(s, 2, "built"); transition(s, 2, "failed"); })) && /cannot become/.test(threw(() => transition(fresh(), 2, "pending"))),
@@ -581,7 +581,7 @@ function goodRun() {
   const S = syntheticIR({});
   const plan = planM1(S.ir, S.stats, { runId: RUN });
   const ran = { probes: Object.fromEntries(["P4", "P5", "P6", "P8", "P18", "P19B"].map((p) => [p, { status: "run 2026-10-06" }])) };
-  const states = newStates({ snapshot: plan.tasks[0].snapshot, irVersion: 2, runId: RUN, settings: {}, probes: probeStatus(ran), pixso: null, balance: plan.balance, ledger: plan.ledger });
+  const states = newStates({ snapshot: plan.tasks[0].snapshot, irVersion: IR_VERSION, runId: RUN, settings: {}, probes: probeStatus(ran), pixso: null, balance: plan.balance, ledger: plan.ledger });
   for (const t of states.tasks) {
     t.state = "built";
     if (t.op === "build") { t.ms = { create: 10, stamp: 2 }; const task = plan.tasks[t.taskNo - 1]; if (task.expect.placeholders) t.codes = { [CODE.INSTANCE_DEFERRED]: task.expect.placeholders }; }
