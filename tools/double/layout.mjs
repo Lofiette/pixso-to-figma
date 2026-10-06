@@ -18,7 +18,8 @@
 //     size and follows the counter alignment, builder4:389-390, C);
 //   - hidden children and layoutPositioning ABSOLUTE are out of the flow (builder4:387-388, C);
 //   - the padding floor: an auto-layout frame is never smaller than its padding on the flow axis
-//     (builder4:302-306, C); min and max sizes clamp frames and their flow children;
+//     (builder4:302-306, C), nor on the counter axis (the first live build of U, 2026-10-06, C); min
+//     and max sizes clamp frames and their flow children;
 //   - an INSIDE stroke is outside the content box unless strokesIncludedInLayout (I);
 //   - layoutWrap WRAP (horizontal): rows broken at the inner width, counterAxisSpacing between rows,
 //     counterAxisAlignContent AUTO or SPACE_BETWEEN (I);
@@ -118,6 +119,9 @@ function arrange(H, st, changed) {
   if (!primFixed) prim = kids.reduce((n, c) => n + primSize(c), 0) + gap * Math.max(0, kids.length - 1) + pS + pE;
   if (!cntFixed) cnt = rows.reduce((n, r) => n + rowCnt(r), 0) + cGap * Math.max(0, rows.length - 1) + cS + cE;
   prim = Math.max(prim, pS + pE);
+  // The floor holds on the counter axis too (U: a vertical flow 24 px wide with 35 + 35 px of side
+  // padding was built 70 px wide).
+  cnt = Math.max(cnt, cS + cE);
   let w = horiz ? prim : cnt, h = horiz ? cnt : prim;
   w = clampW(st, w); h = clampH(st, h);
   if (!flowFills(st, "w") && !flowFills(st, "h")) resize(H, st, w, h, changed);

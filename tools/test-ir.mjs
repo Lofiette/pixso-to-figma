@@ -338,6 +338,16 @@ expectValid("a region-less network (an open path)", mut(vec, (ir) => { ir.values
 expectValid("a VECTOR_ORACLE_DIFFERS note with its class", mut(vec, (ir) => { ir.notes = [{ code: "VECTOR_ORACLE_DIFFERS", node: 1, detail: "network-bounds: 1.4 px" }]; }));
 expectError("a VECTOR_ORACLE_DIFFERS note with no class", mut(vec, (ir) => { ir.notes = [{ code: "VECTOR_ORACLE_DIFFERS", node: 1, detail: "bounds differ" }]; }), "notes[0].detail", true);
 expectError("a VECTOR_ORACLE_DIFFERS note on a frame", mut(vec, (ir) => { ir.notes = [{ code: "VECTOR_ORACLE_DIFFERS", node: 0, detail: "winding" }]; }), "notes[0].node", true);
+// boolean-operands (docs/M1.md §15.13): a BOOLEAN_OPERATION's stored result out of date against its operands.
+const staleBool = () => mut(vec, (ir) => {
+  ir.nodes[1] = { parent: 0, guid: "1:3", type: "BOOLEAN_OPERATION", name: "B", props: shapeProps(10, 8, { booleanOperation: "UNION", oracleFillGeometry: 2 }) };
+  ir.nodes.push({ parent: 1, guid: "1:4", type: "RECTANGLE", name: "R", props: shapeProps(6, 6) });
+  ir.notes = [{ code: "VECTOR_ORACLE_DIFFERS", node: 1, detail: "boolean-operands: the stored result leaves out operand 2 by 3 px" }];
+});
+expectValid("a VECTOR_ORACLE_DIFFERS boolean-operands note on a BOOLEAN_OPERATION with its stored result", staleBool());
+expectError("a boolean-operands note on a VECTOR", mut(vec, (ir) => { ir.notes = [{ code: "VECTOR_ORACLE_DIFFERS", node: 1, detail: "boolean-operands" }]; }), "notes[0].node", true);
+expectError("a boolean-operands note on a BOOLEAN_OPERATION with no stored result", mut(staleBool, (ir) => { delete ir.nodes[1].props.oracleFillGeometry; }), "notes[0].node", true);
+expectError("a vector class on a BOOLEAN_OPERATION", mut(staleBool, (ir) => { ir.notes[0].detail = "network-bounds: 2 px"; }), "notes[0].node", true);
 for (const c of ["INSTANCE_DEFERRED", "OUT_OF_SCOPE", "PLUGIN_STALLED"]) {
   expectError("a " + REASON_CODES[c].stage + "-stage code in the IR's notes (" + c + ")", mut(minimal, (ir) => { ir.notes = [{ code: c, node: 0 }]; }), "notes[0].code", true);
 }

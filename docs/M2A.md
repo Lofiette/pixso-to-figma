@@ -1080,3 +1080,10 @@ Left open, each a decision rather than a defect:
 
 Commits of the review, on top of `e1b8145`: `0192405` (V1), `0c51b9b` (V4), `34e2ea6` (V5), `382068b` (V2), `8943c3d`
 and `2f0959a` (V3), `5be412a` (V6), and the commit that adds this section.
+
+**Master's U fixes merged** (PR #8, `docs/M1.md` §15.13), in the merge commit after `747e308`. IR version 3 keeps what
+they added to version 2: the `boolean-operands` class of VECTOR_ORACLE_DIFFERS (in `NOTE_CLASSES` after the vector
+classes; the validator holds such a note to a BOOLEAN_OPERATION record with its stored result), the reader's
+`vectors.vertexRadiusZero`, `thinStrokes` and `staleBooleans`, and the judge's `booleanOperands` class. After the merge
+`m2a-accept --expect --twice` prints the same gates and numbers on all five files as before it, and
+`pix-run --dry --no-pixso` prints the same preflight and balances as master (`5dfdb4c`) on all five.

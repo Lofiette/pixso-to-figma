@@ -215,6 +215,17 @@ check("a stroke with no visible paint has no side oracle and no SIDE_RULE_UNPROV
   eq([p.oracleSides, codesOf(IDS.planted, r.ir).indexOf(CODE.SIDE_RULE_UNPROVEN)], [undefined, -1]);
   eq(codesOf(IDS.planted).indexOf(CODE.SIDE_RULE_UNPROVEN) >= 0, true);
 });
+check("a stroke whose every side rounds to 0 (a 0.001 px border) is weight 0 and takes no side oracle (U, docs/M1.md §15.13)", () => {
+  // The ring's stroke-area path holds a ring every side of which the oracle samples as drawn; at
+  // 0.001 px the IR's weight is 0, and an oracle saying "drawn" would contradict it (G8).
+  const r = pixToIR(mutated((v, at) => { at(IDS.ring).strokeWeight = 0.001; }));
+  const p = rec(IDS.ring, r.ir).props;
+  eq([p.strokeWeight, p.strokeWeights, p.oracleSides, codesOf(IDS.ring, r.ir).indexOf(CODE.SIDE_RULE_UNPROVEN), r.stats.thinStrokes, validate(r.ir).ok], [0, undefined, undefined, -1, 1, true]);
+  // At the IR's precision (0.01) the oracle is still taken.
+  const q = pixToIR(mutated((v, at) => { at(IDS.ring).strokeWeight = 0.01; }));
+  eq([rec(IDS.ring, q.ir).props.strokeWeight, rec(IDS.ring, q.ir).props.oracleSides, q.stats.thinStrokes], [0.01, [true, true, true, true], 0]);
+  eq(stats.thinStrokes, 0);
+});
 check("corner fields: the four, a missing one 0; cornerRadius alone; four equal fields as cornerRadius", () => {
   const a = rec(IDS.cornersFields).props, b = rec(IDS.cornerRadiusOnly).props, c = rec(IDS.cornersEqual).props;
   eq([a.cornerRadii, a.cornerRadius, b.cornerRadius, b.cornerRadii, c.cornerRadius, c.cornerRadii], [[4, 0, 8, 0], undefined, 6, undefined, 5, undefined]);
@@ -382,6 +393,15 @@ check("a network with a region is the build source, scaled to the node, with the
   eq(net.vertices[2], { x: 20, y: 20, strokeJoin: "ROUND", cornerRadius: 2, handleMirroring: "ANGLE" });
   eq([p.strokeCap, p.strokeJoin], ["CIRCLE_FILLED", "ROUND"]);
   return codesOf(IDS.vNet).length === 0;
+});
+check("a vertex style's radius of 0 under a node radius is the vertex's own 0 (U, docs/M1.md §15.13)", () => {
+  // Pixso draws such a vertex sharp; without it in the IR the builder would give it the node's radius.
+  const r = pixToIR(mutated((v, at) => { at(IDS.vNet).cornerRadius = 3; at(IDS.vNet).vectorData.styleOverrideTable[0].cornerRadius = 0; }));
+  const net = val(rec(IDS.vNet, r.ir).props.vectorNetwork, r.ir);
+  eq([rec(IDS.vNet, r.ir).props.cornerRadius, net.vertices.map((x) => x.cornerRadius), r.stats.vectors.vertexRadiusZero, validate(r.ir).ok], [3, [undefined, undefined, 0, undefined], 1, true]);
+  // With no node radius an own 0 says nothing the absent radius does not: it is left out.
+  const q = pixToIR(mutated((v, at) => { at(IDS.vNet).vectorData.styleOverrideTable[0].cornerRadius = 0; }));
+  eq([val(rec(IDS.vNet, q.ir).props.vectorNetwork, q.ir).vertices[2].cornerRadius, q.stats.vectors.vertexRadiusZero], [undefined, 0]);
 });
 check("the curved star network keeps its tangents and its stored path as the oracle", () => {
   const p = rec(IDS.star).props, net = val(p.vectorNetwork);
@@ -573,6 +593,20 @@ check("native: no boolean flattened; class B keeps its operands and notes the lo
 check("a boolean with no operand and no geometry is not carried (GEOMETRY_INVALID)", () => {
   eq(idx(ir, IDS.boolEmpty), -1);
   return ir.notes.some((n) => n.code === CODE.GEOMETRY_INVALID && n.guid === IDS.boolEmpty);
+});
+check("a union whose stored result leaves out an operand, and the booleans made from it, are VECTOR_ORACLE_DIFFERS boolean-operands (U, docs/M1.md §15.13)", () => {
+  const stale = (I) => I.notes.filter((n) => n.code === CODE.VECTOR_ORACLE_DIFFERS && /^boolean-operands: /.test(n.detail || "")).map((n) => [n.node, n.detail]);
+  // The fixture's booleans store results that cover their operands: none is noted, under any setting.
+  eq([stale(ir), stale(R.native.ir), stale(R.flatten.ir), stats.staleBooleans], [[], [], [], 0]);
+  // The union stores A1's square alone (0..10), leaving out A2 (10..20): stale by 10 px.
+  const a = pixToIR(mutated((v, at) => { at(IDS.boolA).fillGeometry = at(IDS.boolARect1).fillGeometry; }));
+  eq([stale(a.ir), a.stats.staleBooleans, validate(a.ir).ok], [[[idx(a.ir, IDS.boolA), "boolean-operands: the stored result leaves out operand " + idx(a.ir, IDS.boolARect2) + " by 10 px"]], 1, true]);
+  // A nested union made stale (its second operand moved out of its stored square): the outer boolean,
+  // made from it, is stale too, whatever its own operands say.
+  const b = pixToIR(mutated((v, at) => { at(IDS.boolNested).booleanOperation = at(IDS.boolA).booleanOperation; at(IDS.boolNestedB).transform = Object.assign({}, at(IDS.boolNestedB).transform, { m02: 10 }); }));
+  const nb = idx(b.ir, IDS.boolNested);
+  eq([rec(IDS.boolNested, b.ir).props.booleanOperation, stale(b.ir), validate(b.ir).ok],
+    ["UNION", [[idx(b.ir, IDS.boolA), "boolean-operands: made from the out-of-date stored result of operand " + nb], [nb, "boolean-operands: the stored result leaves out operand " + idx(b.ir, IDS.boolNestedB) + " by 10 px"]], true]);
 });
 
 // ---------- 10. GEOMETRY_INVALID ----------

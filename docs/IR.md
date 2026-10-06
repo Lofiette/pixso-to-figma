@@ -192,7 +192,8 @@ Two value shapes are checked:
   separated by white space (`"M 0 0 L 10 0 L 10 10 Z"`);
 - **vector network**: `{ vertices, segments, regions }` as Figma's `VectorNetwork`: a vertex is `{ x, y,
   strokeCap?, strokeJoin?, cornerRadius?, handleMirroring? }` (`NONE`, `ANGLE` or `ANGLE_AND_LENGTH`; Pixso's
-  RIGHT_ANGLE is stripped by the reader), a segment `{ start, end, tangentStart?, tangentEnd? }` with vertex indices,
+  RIGHT_ANGLE is stripped by the reader; `cornerRadius` is the vertex's own, `0` included where its style says 0
+  under a node `cornerRadius`, which a vertex with no radius of its own takes, M1.md §15.13), a segment `{ start, end, tangentStart?, tangentEnd? }` with vertex indices,
   a region `{ windingRule, loops, fills? }` whose loops are closed lists of segment indices.
 
 ## 7. Nodes
@@ -240,7 +241,9 @@ Version 2's decisions about what a record is (`docs/M1.md` §2):
   becomes a `VECTOR` from its network and a LINE with a height a `VECTOR` from its geometry, each with a
   `SOURCE_FEATURE_UNSUPPORTED` note. Where the network and the stored geometry disagree in a known way the record has
   a `VECTOR_ORACLE_DIFFERS` note whose detail starts with the class (`region-no-fill`, `network-bounds`,
-  `winding`). A network record with no region whose segments close a loop and no stored fill path keeps its
+  `winding`). A native `BOOLEAN_OPERATION` whose stored result is out of date against its own operands (a union
+  that leaves one out by more than 1 px, and every boolean made from such a one) has a `VECTOR_ORACLE_DIFFERS` note
+  of class `boolean-operands` (`tools/ir/operands.mjs`, M1.md §15.13). A network record with no region whose segments close a loop and no stored fill path keeps its
   network; Figma fills such a loop (P19B, 2026-10-05) where Pixso drew none, so under a visible fill paint the
   record is written with `fills` [] and a `SOURCE_FEATURE_UNSUPPORTED` "unfilled loop" note, and Figma draws no
   fill either. An open region loop the reader drops (no visible fill) adds no segment to the network.
@@ -258,7 +261,8 @@ Version 2's decisions about what a record is (`docs/M1.md` §2):
   until M2b builds sets (`taskType()` in `tools/ir/task.mjs`, `docs/M2A.md` D13).
 - **Side strokes (D15).** No `border*Weight` field means four sides at `strokeWeight`; any field present means a
   missing side is 0. Where the stroke-area path shows which sides Pixso draws, the reader writes `oracleSides`, and
-  where the rule and the path disagree the IR follows the path and notes `SIDE_RULE_UNPROVEN`.
+  where the rule and the path disagree the IR follows the path and notes `SIDE_RULE_UNPROVEN`. A stroke whose every
+  side rounds to 0 (a 0.001 px border) is weight 0 and has no `oracleSides` (M1.md §15.13).
 - **Section strokes (D13)** are dropped: a `SECTION` has fills only. Its corner radius, which Figma does not draw on a
   section, is noted `SOURCE_FEATURE_UNSUPPORTED` "SECTION corner radius".
 
@@ -457,9 +461,10 @@ values) is listed, because every font is loaded before the first text write.
 record (an unsupported node); `path` is a guidPath inside an instance (`[]` for the instance's own override, the entry
 with `path` `[]`), and a note with a `path` names that `INSTANCE` record by `node`; `detail` is free text, except that a code with classes (`NOTE_CLASSES` in the schema) has a detail
 that starts with one of its classes, optionally followed by `: ` and text. The classes are listed in the table below,
-in the order the reader decides in. A `VECTOR_ORACLE_DIFFERS` note names a network-built `VECTOR` record and a
-`VARIANT_SET_REJECTED` note the state group's `FRAME` record. An IR's notes carry **read-stage codes only**; the
-other stages go to the run's own reports.
+in the order the reader decides in. A `VECTOR_ORACLE_DIFFERS` note names a network-built `VECTOR` record (its
+classes `ORACLE_CLASSES`), except that the class `boolean-operands` (`BOOLEAN_ORACLE_CLASSES`) names a
+`BOOLEAN_OPERATION` record with its stored result instead; a `VARIANT_SET_REJECTED` note names the state group's
+`FRAME` record. An IR's notes carry **read-stage codes only**; the other stages go to the run's own reports.
 
 Code writes a code as `CODE.X` (the frozen map in the schema), never as a quoted string, through one helper per
 side that throws on an unknown code: the reader's `note()`, the plugin's `ctx.code()` and the runner's `count()`.
@@ -497,7 +502,7 @@ from the preflight and the kit-map resolution, and *build* codes come from Figma
 | `SOURCE_FEATURE_UNSUPPORTED` | read | a Pixso feature Figma lacks, named in the detail, which starts with the feature from an open list (CONNECTLINE, LINE with height, SECTION strokes, SECTION corner radius, RIGHT_ANGLE, vibrance, hue filter, dashCap, deformationTransform, fontVariations, GRID, counter alignment <X>, strokeCap <X>, effect <TYPE>, export format <X>, paint type <X>, image paint without an image, text without a font name, inverse winding, open region loop, operand strokes under `--booleans native`, an operand without fill geometry, boolean without stored geometry, built natively, no stored geometry (a STAR or POLYGON), layoutGrids, fontVariantNumeric, fontVariantPosition, OpenType features, COLOR property), optionally followed by `: ` and text; dropped or converted, and counted per feature in `stats.unsupported`. The judge excuses a vector's paths only for the features that change the drawing (`judge.mjs` SFU_GEOMETRY, docs/M1.md §8.3) | named here (§7) |
 | `GEOMETRY_INVALID` | read | a NaN size, transform or path, or a boolean with no operand and no geometry; the box comes from the geometry or the children, or the node is not carried | named here (§7) |
 | `IMAGE_HASH_MISMATCH` | read | an archive image entry whose SHA-1 is not its name; treated as missing | named here (§4) |
-| `VECTOR_ORACLE_DIFFERS` | read | the stored network and the stored fill geometry disagree in a pre-registered class (`region-no-fill`, `network-bounds`, `winding`) | named here (§3) |
+| `VECTOR_ORACLE_DIFFERS` | read | the stored network and the stored fill geometry disagree in a pre-registered class (`region-no-fill`, `network-bounds`, `winding`), or a boolean's stored result is out of date against its operands (`boolean-operands`) | named here (§3) |
 | `SIDE_RULE_UNPROVEN` | read | the side rule and the stroke-area path disagree; the IR follows the path | named here (§3) |
 | `BOOLEAN_FLATTENED` | read | a boolean carried as one `VECTOR` from its stored fill geometry; its operands are not carried | named here (§7) |
 | `KIT_MAP_MISSING` | plan | no kit map is loaded for the copy's library | §5 |

@@ -1138,3 +1138,34 @@ in a negative inner space).
 that is in the file, Pixso draws the style's current value; the node's own copy can be stale (a render
 pair: own fill grey, style blue, drawn blue). The node's own value is the source only when the style is
 not in the file.
+
+# M1, U's first live build (2026-10-06): engine rules
+
+Found by tracing the failing gates of the first live build of a Сова-based UI kit to their records and the stored
+`.pix` fields (docs/M1.md §15.13 has the counts).
+
+**Figma takes `layoutPositioning = ABSOLUTE` only on a child of a frame that has a flow at that moment.** Otherwise
+it throws ("Can only set layoutPositioning = ABSOLUTE if the parent node has layoutMode !== NONE"). A builder that
+writes flows late, deepest first, must write ABSOLUTE after the parent's flow. A throw in the middle of a
+multi-step move leaves the tree half done: the boolean had already taken its holder's place, and the empty holder
+stayed beside it as one node too many.
+
+**Figma's padding floor holds on the counter axis too.** An auto-layout frame is never narrower or shorter than its
+padding on either axis: a vertical flow 24 px wide with 35 + 35 px of side padding is built 70 px wide. Pixso keeps
+the size and lays the children out in a negative inner space (a child centred there sits at x 0).
+
+**Pixso's vertex radius of 0 is a radius.** A vertex whose style override carries `cornerRadius` 0 is drawn sharp
+under a node `cornerRadius` (every such vertex at a corner, on four files); only a vertex whose style has no radius
+takes the node's. Since Figma keeps radii per vertex, the node's radius goes onto the vertices with none, and an own
+0 must travel as 0.
+
+**Pixso's stored boolean result is a cache, and it can be out of date.** A union can store a result, and a size, that
+leave out an operand (there: a mirrored second half; 35 other copies of the same group store the full result,
+and every other mirrored union operand lies inside its stored result), and the booleans built over it store results
+made from the stale one. Figma computes every boolean from its operands. A check of a boolean against its stored
+result has to check that result against the operands first. Whether Pixso draws the cache or the operands is not
+measured.
+
+**A stroke below the IR's precision draws nothing, and its stroke-area path says otherwise.** A 0.001 px border
+rounds to weight 0, while the stored stroke-area path still holds the 0.001 px ring, so sampling that path reports
+every side drawn. The side oracle is only meaningful for a weight the IR carries.

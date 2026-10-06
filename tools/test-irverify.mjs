@@ -579,6 +579,40 @@ const widenScene = (by) => {
     check(judge(s3).geometry.sizeVisibleOver1 === 1, "a RECTANGLE is never vectorBox: its size is written");
   }
 }
+{
+  // The first live build of U (docs/M1.md §15.13): a union whose stored result (and size, 30 x 20) was
+  // not computed again after a second operand (30..50) was added. Figma computes the union of both
+  // operands: a 50 px box and path. Counted with no note; under the reader's boolean-operands note
+  // held to the box its operands bound instead (G7 classified booleanOperands, G9 excused), and only
+  // while Figma's paths cover the stored result and stay inside that box.
+  const stale = (note, figX1) => {
+    const s = scene();
+    s.ir.nodes.push({ parent: 8, guid: "5:99", type: "RECTANGLE", name: "R17", props: paint({ relativeTransform: T6(30, 0), width: 20, height: 20 }) });   // 17
+    if (note) s.ir.notes.push({ code: schema.CODE.VECTOR_ORACLE_DIFFERS, node: 8, detail: "boolean-operands: the stored result leaves out operand 17 by 20 px" });
+    s.task = taskOf(s.ir);
+    const w8 = rowOf(s, 8);
+    w8[ROW.childCount] = 2; w8[ROW.w] = figX1 - 160; w8[ROW.vec] = [V("NONZERO", 160, 10, figX1, 30)];
+    s.verify.rows.push([17, "RECTANGLE", 0, true, 190, 10, 20, 20, null, null, null]);
+    s.verify.count = s.verify.rows.length;
+    return judge(s);
+  };
+  let J = stale(false, 210);
+  check(J.count.ok && J.geometry.sizeVisibleOver1 === 1 && same(J.vectors.differs, [{ i: 8, kind: "bounds" }]) && !J.geometry.classified.booleanOperands,
+    "a boolean built from its operands, wider than its out-of-date stored result, is counted (G7, G9) with no note", show([J.geometry, J.vectors]));
+  J = stale(true, 210);
+  check(J.count.ok && J.geometry.sizeVisibleOver05 === 0 && J.geometry.visibleOver05 === 0 && J.geometry.classified.booleanOperands === 1 &&
+    J.vectors.differs.length === 0 && J.vectors.excused.VECTOR_ORACLE_DIFFERS === 2,
+    "boolean-operands: the box and the paths of its operands' union are classified and excused", show([J.geometry, J.vectors]));
+  J = stale(true, 215);
+  check(J.geometry.sizeVisibleOver1 === 1 && same(J.vectors.differs, [{ i: 8, kind: "bounds" }]) && !J.geometry.classified.booleanOperands,
+    "boolean-operands: a result reaching past the box its operands bound is still counted", show([J.geometry, J.vectors]));
+  J = stale(true, 185);
+  check(J.geometry.sizeVisibleOver1 === 1 && same(J.vectors.differs, [{ i: 8, kind: "bounds" }]),
+    "boolean-operands: a result that does not cover the stored one is still counted", show([J.geometry, J.vectors]));
+  const s = scene(); s.ir.notes.push({ code: schema.CODE.VECTOR_ORACLE_DIFFERS, node: 2, detail: "boolean-operands" }); s.task = taskOf(s.ir);
+  rowOf(s, 2)[ROW.vec] = [V("NONZERO", 43, 10, 53, 18)];
+  check(same(judge(s).vectors.differs, [{ i: 2, kind: "bounds" }]), "boolean-operands excuses nothing on a VECTOR");
+}
 
 // ============================================================================================
 // 3. VERIFY on a scene built in the double by direct figma.* calls (independent of part B)

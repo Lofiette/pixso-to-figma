@@ -63,7 +63,7 @@ export function networkToIR(cx, net, sx, sy, table, opts) {
   const styles = new Map((table || []).map((e) => [e.styleID, e]));
   const regionFills = new Map();
   for (const vp of (opts && opts.regionPaints) || []) if (vp && Number.isInteger(vp.regionId) && !regionFills.has(vp.regionId)) regionFills.set(vp.regionId, paintsOf(cx, vp.paints));
-  let rightAngle = 0, bad = false;
+  let rightAngle = 0, bad = false, ownZero = 0;
   const num = (v) => { if (!isFin(v)) bad = true; return r2(v); };
   const vertices = net.vertices.map((v) => {
     const o = { x: num(v.x * sx), y: num(v.y * sy) };
@@ -74,6 +74,11 @@ export function networkToIR(cx, net, sx, sy, table, opts) {
       const join = E.STROKE_JOIN[cx.en("VectorStyleData", "strokeJoin")(st.strokeJoin)];
       if (join) o.strokeJoin = join;
       if (isFin(st.cornerRadius) && st.cornerRadius > 0) o.cornerRadius = r2(st.cornerRadius);
+      // A vertex style's radius of 0 is the vertex's own, and Pixso draws that vertex sharp under a
+      // node radius (on the four local files, 134 such vertices sharp, 0 rounded; a vertex with no
+      // radius in its style takes the node's: 2 802 rounded, 0 sharp). Carried where the node has a
+      // radius, so the builder does not give it the node's (docs/M1.md §15.13).
+      else if (isFin(st.cornerRadius) && opts && opts.nodeRadius) { o.cornerRadius = 0; ownZero++; }
       const m = cx.en("VectorStyleData", "handleMirroring")(st.handleMirroring);
       if (m === "RIGHT_ANGLE") rightAngle++;
       else if (E.HANDLE_MIRRORING[m]) o.handleMirroring = E.HANDLE_MIRRORING[m];
@@ -111,7 +116,7 @@ export function networkToIR(cx, net, sx, sy, table, opts) {
     if (regionFills.has(ri)) { reg.fills = regionFills.get(ri); filledRegions++; }
     regions.push(reg);
   }
-  return { value: { vertices, segments, regions }, rightAngle, bad, closedLoops, droppedLoops, filledRegions };
+  return { value: { vertices, segments, regions }, rightAngle, bad, closedLoops, droppedLoops, filledRegions, ownZero };
 }
 
 // Whether a loop is closed: every vertex on it met an even number of times, and each segment meets
@@ -204,8 +209,10 @@ export function vectorProps(cx, n, put, size) {
     const ns = vd.normalizedSize;
     const sx = ns && isFin(ns.x) && ns.x > 0 && isFin(size.w) ? size.w / ns.x : 1;
     const sy = ns && isFin(ns.y) && ns.y > 0 && isFin(size.h) ? size.h / ns.y : 1;
-    const ir = networkToIR(cx, net, sx, sy, vd.styleOverrideTable, { fillVisible: visiblePaint(n.fillPaints), regionPaints: n.vectorPaints });
+    const ir = networkToIR(cx, net, sx, sy, vd.styleOverrideTable, { fillVisible: visiblePaint(n.fillPaints), regionPaints: n.vectorPaints,
+      nodeRadius: isFin(n.cornerRadius) && r2(n.cornerRadius) > 0 });
     if (ir.filledRegions) V.regionFills++;
+    V.vertexRadiusZero += ir.ownZero;
     if (ir.rightAngle) cx.feature("RIGHT_ANGLE", ir.rightAngle + " vertices");
     if (ir.closedLoops) {
       V.loopsClosed++;

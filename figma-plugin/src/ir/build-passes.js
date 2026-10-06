@@ -138,13 +138,18 @@ B.repairPass = async function (st, countIt) {
     // placed by matrix (B.modeOf reads the dropped flow as NONE, so the place passes write each
     // child's wanted matrix and the flow passes leave them), where Pixso put them under its padding
     // (the test kit K, first live build 2026-10-05: five frames with children, 4 to 24 px too wide).
+    // The floor holds on the counter axis too (the first live build of U, 2026-10-06: a component 24 px
+    // wide in a vertical flow with 35 + 35 px of side padding was built 70 px wide), so both axes are
+    // checked (detail.layoutDroppedForCounterPadding counts the frames only the counter axis drops).
     if (B.isAL(mode)) {
-      var padSum = mode === "HORIZONTAL" ? (ns.paddingLeft || 0) + (ns.paddingRight || 0) : (ns.paddingTop || 0) + (ns.paddingBottom || 0);
-      var wanted = mode === "HORIZONTAL" ? w.w : w.h;
-      if (padSum > wanted + 0.5) {
+      var padW = (ns.paddingLeft || 0) + (ns.paddingRight || 0), padH = (ns.paddingTop || 0) + (ns.paddingBottom || 0);
+      var overW = padW > w.w + 0.5, overH = padH > w.h + 0.5;
+      var overFlow = mode === "HORIZONTAL" ? overW : overH, overCounter = mode === "HORIZONTAL" ? overH : overW;
+      if (overFlow || overCounter) {
         B.set(st, ns, i, "layoutMode", "NONE"); C.layoutDroppedForSize++;
         st.flowDropped[k] = 1;
         if (kidsOf(st, k).length) D.layoutDroppedWithChildren = (D.layoutDroppedWithChildren || 0) + 1;
+        if (!overFlow) D.layoutDroppedForCounterPadding = (D.layoutDroppedForCounterPadding || 0) + 1;
       }
     }
     // Re-read before acting: a stale size would pin an axis at the wrong value.

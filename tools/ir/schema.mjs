@@ -147,11 +147,16 @@ export const SUPERSEDED_BY = { x: "relativeTransform", y: "relativeTransform", r
 // The classes of VECTOR_ORACLE_DIFFERS, pre-registered (docs/M1.md §8.3). The note's detail is the
 // class, optionally followed by ": " and free text; the judge excuses only that class.
 export const ORACLE_CLASSES = ["region-no-fill", "network-bounds", "winding"];
+// The class a BOOLEAN_OPERATION record's VECTOR_ORACLE_DIFFERS takes (docs/M1.md §15.13): its stored
+// result is out of date against its own operands (tools/ir/operands.mjs), so the judge holds it to
+// them; the vector classes above are for VECTOR records built from their network.
+export const BOOLEAN_ORACLE_CLASSES = ["boolean-operands"];
 // Every code whose detail starts with a class from a frozen list (docs/M2A.md §5.1, IR.md §13): the
 // class, optionally followed by ": " and free text. Each list is in the order the reader decides in
-// (the first class that applies), which docs/M2A.md D2, D4, D6, D8 and D10 fix.
+// (the first class that applies), which docs/M2A.md D2, D4, D6, D8 and D10 fix. VECTOR_ORACLE_DIFFERS
+// takes the vector classes and the boolean one (docs/M1.md §8.3, §15.13).
 export const NOTE_CLASSES = {
-  VECTOR_ORACLE_DIFFERS: ORACLE_CLASSES,
+  VECTOR_ORACLE_DIFFERS: ORACLE_CLASSES.concat(BOOLEAN_ORACLE_CLASSES),
   VARIANT_SET_REJECTED: ["no-equals", "duplicate-axis", "axis-count", "duplicate-coordinate", "vocabulary", "empty", "not-symbol"],
   STALE_ASSIGNMENT: ["no-definition", "other-family", "no-root", "undeclared", "nested", "ignored"],
   OVERRIDE_STALE: ["not-derived", "unresolved"],
@@ -207,7 +212,7 @@ export const REASON_CODES = {
   SOURCE_FEATURE_UNSUPPORTED: { stage: "read", plan: null, from: "§7: Source vs IR. Coverage, with every loss given a reason code", meaning: "a Pixso feature Figma lacks; the detail starts with the feature, from an open list (CONNECTLINE, LINE with height, SECTION strokes, SECTION corner radius, RIGHT_ANGLE, vibrance, hue filter, dashCap, deformationTransform, fontVariations, GRID, counter alignment <X>, strokeCap <X>, effect <TYPE>, an exportSettings format, paint type <X>, image paint without an image, text without a font name, inverse winding, open region loop, operand strokes, an operand without fill geometry, boolean without stored geometry, built natively, COLOR property); dropped or converted, and counted" },
   GEOMETRY_INVALID: { stage: "read", plan: null, from: "§7: Source vs IR. Coverage, with every loss given a reason code", meaning: "a NaN size, transform or path, or a boolean with no operand and no geometry; the box comes from the geometry or the children, or the node is not carried" },
   IMAGE_HASH_MISMATCH: { stage: "read", plan: null, from: "§4: Pixso MCP bytes by hash (the SHA-1 is checked)", meaning: "an archive image entry whose SHA-1 is not its name; it is treated as missing (a file-level note: no node, the name in the detail)" },
-  VECTOR_ORACLE_DIFFERS: { stage: "read", plan: null, from: "§3: Regions and fillGeometry disagree on 35 and 220 vectors", meaning: "the stored network and the stored fill geometry disagree in a pre-registered class (region-no-fill, network-bounds, winding); the judge excuses only that class" },
+  VECTOR_ORACLE_DIFFERS: { stage: "read", plan: null, from: "§3: Regions and fillGeometry disagree on 35 and 220 vectors", meaning: "the stored network and the stored fill geometry disagree in a pre-registered class (region-no-fill, network-bounds, winding), or a boolean's stored result is out of date against its operands (boolean-operands); the judge excuses only that class" },
   SIDE_RULE_UNPROVEN: { stage: "read", plan: null, from: "§3: The stored stroke-area path proves how per-side weights work", meaning: "the side rule and the stroke-area path disagree; the IR follows the path" },
   BOOLEAN_FLATTENED: { stage: "read", plan: null, from: "§7: Source vs IR. Coverage, with every loss given a reason code", meaning: "a boolean carried as one VECTOR from its stored fill geometry; its operands are not carried" },
   OUT_OF_SCOPE: { stage: "plan", plan: null, from: "§6: Every object ends in a recorded state: built, built-with-fallbacks, failed or skipped", meaning: "an IR record the chosen M1 scope does not build; the detail names its population" },
@@ -1233,9 +1238,14 @@ export function validateIR(ir, options) {
       if (Object.prototype.hasOwnProperty.call(NOTE_CLASSES, nt.code) && noteClass(nt.code, nt.detail) === null) {
         err(P + ".detail", "a " + nt.code + " detail starts with its class, one of " + NOTE_CLASSES[nt.code].join(", ") + "; got " + show(nt.detail));
       }
+      // A boolean-operands note names a boolean with its stored result (docs/M1.md §15.13); every
+      // other class a VECTOR record built from its network.
       if (nt.code === CODE.VECTOR_ORACLE_DIFFERS) {
+        const cls = noteClass(nt.code, nt.detail);
         const vn = nodeAt(nt.node);
-        if (!vn || vn.type !== "VECTOR" || !isObj(vn.props) || vn.props.vectorNetwork === undefined) err(P + ".node", "a " + nt.code + " note names a VECTOR record built from its network");
+        if (BOOLEAN_ORACLE_CLASSES.indexOf(cls) >= 0) {
+          if (!vn || vn.type !== "BOOLEAN_OPERATION" || !isObj(vn.props) || vn.props.oracleFillGeometry === undefined) err(P + ".node", "a " + nt.code + " " + cls + " note names a BOOLEAN_OPERATION record with its stored result");
+        } else if (!vn || vn.type !== "VECTOR" || !isObj(vn.props) || vn.props.vectorNetwork === undefined) err(P + ".node", "a " + nt.code + " note names a VECTOR record built from its network");
       }
       // A rejected state group stays a FRAME record, and the note names that record (docs/M2A.md D2).
       if (nt.code === CODE.VARIANT_SET_REJECTED) {
