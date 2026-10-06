@@ -85,11 +85,19 @@ IR.ops.verify = async function (ctx, task) {
   var fonts = (Array.isArray(task.fonts) ? task.fonts : []).slice();
   if (task.settings && task.settings.fallbackFont) fonts.push(task.settings.fallbackFont);
   var missing = [], seen = {};
+  // Only fonts Figma lists are loaded (IR.availableFonts); one it does not is missing, never asked for.
+  var have = typeof IR.availableFonts === "function" ? await IR.availableFonts(ctx) : null;
   for (var f = 0; f < fonts.length; f++) {
     var key = fonts[f].family + "|" + fonts[f].style;
     if (seen[key]) continue;
     seen[key] = true;
     ctx.progress();
+    if (have && have[key] !== 1) {
+      missing.push({ family: fonts[f].family, style: fonts[f].style });
+      if (!IR.util.own(ctx.S.fonts, key)) ctx.S.fonts[key] = "sub";
+      continue;
+    }
+    if (ctx.S.fonts[key] === "ok") continue;
     try {
       await F.loadFontAsync({ family: fonts[f].family, style: fonts[f].style });
       if (!IR.util.own(ctx.S.fonts, key)) ctx.S.fonts[key] = "ok";

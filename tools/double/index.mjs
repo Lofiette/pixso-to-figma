@@ -215,6 +215,9 @@ export function networkRuns(net) {
 
 export function makeDouble(opts = {}) {
   const available = new Set((opts.fonts || DEFAULT_FONTS).map(fkey));
+  // Real Figma may hang on a font it does not have (the live Сова UI kit, 2026-10-06), so asking for
+  // one is counted: the builder and the verifier must look at listAvailableFontsAsync first.
+  let missingFontLoads = 0;
   const verdicts = opts.verdicts || loadVerdicts();
   const beh = behaviour(verdicts);
   const V = beh.of;
@@ -825,7 +828,7 @@ export function makeDouble(opts = {}) {
     createNodeFromSvg: () => { throw new Error("double: no SVG import in the double (the M1 builder does not use it)"); },
     union: booleanOp("UNION"), subtract: booleanOp("SUBTRACT"), intersect: booleanOp("INTERSECT"), exclude: booleanOp("EXCLUDE"),
     loadFontAsync: (f) => {
-      if (!available.has(fkey(f))) return Promise.reject(new Error("double: font \"" + fkey(f) + "\" is not available"));
+      if (!available.has(fkey(f))) { missingFontLoads++; return Promise.reject(new Error("double: font \"" + fkey(f) + "\" is not available")); }
       loaded.add(fkey(f));
       return Promise.resolve();
     },
@@ -883,6 +886,7 @@ export function makeDouble(opts = {}) {
     figma, writes, reads, images, ui: { posted: uiPosted },
     assumed: beh.assumed.slice(),
     get layoutPasses() { return passes; },
+    get missingFontLoads() { return missingFontLoads; },
     setPhase(name) { phase = name === undefined ? null : name; },
     tree: () => { settleAll(); return tree(); },
     node: (id) => { const st = byId.get(String(id)); return st ? st.proxy : null; },
