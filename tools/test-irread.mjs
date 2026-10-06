@@ -76,8 +76,8 @@ check("a schema that numbers every enum differently gives the same IR (names, ne
   const strip = (x) => { const c = JSON.parse(JSON.stringify(x)); delete c.header.source.sha256; return JSON.stringify(c); };
   return strip(r) === strip(ir);
 });
-check("the header: format, version 2, pix source, file scope, the settings", () => {
-  eq(ir.header.format, "pix2fig.ir"); eq(ir.header.version, 2); eq(ir.header.source.kind, "pix");
+check("the header: format, version 3, pix source, file scope, the settings", () => {
+  eq(ir.header.format, "pix2fig.ir"); eq(ir.header.version, 3); eq(ir.header.source.kind, "pix");
   eq(ir.header.scope, { kind: "file" });
   eq([ir.header.settings.booleans, ir.header.settings.spaceEvenlySingle, ir.header.settings.textFit], ["auto", "center", "widen"]);
   eq(R.flatten.ir.header.settings.booleans, "flatten");
@@ -627,12 +627,13 @@ check("layout grids are counted SOURCE_FEATURE_UNSUPPORTED on the frame that has
 check("values are interned once each, compared as canonical JSON", () => new Set(ir.values.map((v) => canonicalJSON(v))).size === ir.values.length);
 
 // ---------- 12. scope ----------
-check("--scope pages: one top-level object; the master an instance names joins it", () => {
+check("--scope pages: one top-level object; the master an instance names joins it, and the symbol its override swaps to (docs/M2A.md D12)", () => {
   const one = pixToIR(fx.pix, { settings: { scope: "pages:" + IDS.sides } });
   eq(one.ir.nodes.filter((n) => n.parent === -1).map((n) => n.guid), [IDS.sides]);
   eq(one.ir.header.scope, { kind: "pages", ids: [IDS.sides] });
   const card = pixToIR(fx.pix, { settings: { scope: "pages:1:60" } });
-  eq(card.ir.nodes.filter((n) => n.parent === -1).map((n) => n.guid), ["1:60", "1:20", "1:30"]);
+  // Card (1:30) and its nested icons' Star (1:20) as in M1; Heart (1:22), which the instance's override swaps to, since IR version 3.
+  eq(card.ir.nodes.filter((n) => n.parent === -1).map((n) => n.guid), ["1:60", "1:20", "1:22", "1:30"]);
   const nc = Object.values(card.stats.notCarried).reduce((a, b) => a + b, 0);
   eq(card.stats.records + nc, card.stats.stored);
   return card.stats.notCarried.outOfScope + " stored nodes out of scope";
