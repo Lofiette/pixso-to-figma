@@ -133,7 +133,16 @@ function state(cx) {
   const prefType = cx.en("InstanceSwapPreferredValue", "type");
   const parentOf = (n) => (n && n.parentIndex ? byGuid.get(guidStr(n.parentIndex.guid)) || null : null);
   const isStateGroup = (n) => !!n && typeName(n) === "FRAME" && !!n.isStateGroup;
-  const enclosing = (n) => { let x = n; while (x && typeName(x) !== "SYMBOL") x = parentOf(x); return x; };
+  // The nearest SYMBOL at or above a node, memoised per node.
+  const encl = new Map();
+  const enclosing = (n) => {
+    if (!n) return null;
+    const g = guidStr(n.guid);
+    if (encl.has(g)) return encl.get(g);
+    const s = typeName(n) === "SYMBOL" ? n : enclosing(parentOf(n));
+    encl.set(g, s);
+    return s;
+  };
   const declaredSymbol = (n) => (n && n.symbolData && guidSet(n.symbolData.symbolID) ? guidStr(n.symbolData.symbolID) : null);
 
   let aliases = 0;
@@ -160,15 +169,12 @@ function state(cx) {
   let keys = null;
   const keyIndex = () => {
     if (keys) return keys;
-    const planned = new Set();
-    const walk = (p) => { planned.add(guidStr(p.n.guid)); for (const k of p.kids || []) walk(k); };
-    for (const pg of cx.planned || []) for (const t of pg.tops) walk(t);
     keys = { COMPONENT: new Map(), COMPONENT_SET: new Map() };
     for (const n of cx.pix.nodes) {
       if (typeof n.componentKey !== "string" || !HEX40.test(n.componentKey)) continue;
       const g = guidStr(n.guid);
       if (typeName(n) === "SYMBOL" && cx.componentGuids.has(g)) { if (!keys.COMPONENT.has(n.componentKey)) keys.COMPONENT.set(n.componentKey, g); }
-      else if (isStateGroup(n) && planned.has(g) && cx.families && cx.families.accepted.has(g)) {
+      else if (isStateGroup(n) && cx.families && cx.families.accepted.has(g)) {   // accepted: carried with its members
         if (!keys.COMPONENT_SET.has(n.componentKey)) keys.COMPONENT_SET.set(n.componentKey, g);
       }
     }
@@ -214,6 +220,9 @@ function familyRoots(cx, S, familyGuid) {
   return { roots, symbols };
 }
 
+// A family with no roots at all (most standalone components): one shared, empty answer.
+const NO_ROOTS = { list: [], byId: new Map(), undeclared: [], written: true, lifted: 0, copied: 0 };
+
 // A family's declarations, once per read: { list: [decl], byId: Map(id -> decl), undeclared: [{ def, why, detail }] }.
 // A decl is { id, def, copied, lifted, ir: { id, name, type, default }, swapValues, fromLayer, disagree }.
 function declarations(cx, familyGuid) {
@@ -221,6 +230,7 @@ function declarations(cx, familyGuid) {
   if (S.families.has(familyGuid)) return S.families.get(familyGuid);
   const P = S.P;
   const { roots, symbols } = familyRoots(cx, S, familyGuid);
+  if (!roots.length) { S.families.set(familyGuid, NO_ROOTS); return NO_ROOTS; }
   const own = new Set(symbols);
   const list = [], undeclared = [];
   for (const r of roots) {
@@ -264,6 +274,7 @@ function declarations(cx, familyGuid) {
 export function propertiesOf(cx, familyGuid) {
   const S = state(cx);
   const D = declarations(cx, familyGuid);
+  if (D === NO_ROOTS) return [];
   const st = cx.m2a.properties;
   const first = !D.written;   // counted and noted once per family, on its record
   D.written = true;
