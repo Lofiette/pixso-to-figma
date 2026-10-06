@@ -47,7 +47,8 @@
 // guid among the stored descendants of the current symbol; every element but the last must be a nested
 // INSTANCE, whose effective symbol is, in this order:
 //   1. an overriddenSymbolID on an entry of any instance of the chain (holders) whose path, relative to
-//      that instance, is this element's; the OUTERMOST holder wins (within one holder, its last entry);
+//      that instance, is this element's; the OUTERMOST holder wins (within one holder, the entry the
+//      duplicate merge keeps, --override-merge: so the walk and the IR's swap agree);
 //   2. for each componentPropRef of the element with field OVERRIDDEN_SYMBOL_ID and a defID other than
 //      0:0, an assignment to that definition, matched by raw id or by alias root inside the definition
 //      scope of the symbol the element sits in, from these pools in order: the outer holders' entries
@@ -68,7 +69,7 @@
 // path reports fallback only when it does not resolve without the forcing.
 //
 // Settings (cx.settings, docs/M2A.md §3): swapDangling skip | strict (rule A), swapReset on | off
-// (rule B), swapFallback derived | off (rule C).
+// (rule B), swapFallback derived | off (rule C); overrideMerge last | first | outer (rule 1's entry).
 import { guidStr, guidSet } from "./util.mjs";
 
 const pathKey = (guids) => guids.join("/");
@@ -131,6 +132,19 @@ export function makeResolver(cx) {
 
   // A swap target as rule A sees it: a guid, or null when the value is to be skipped.
   const usable = (g) => (g && (strict || symbolKnown(g)) ? g : null);
+  // The swap of one holder's entries on one path: the one the duplicate merge keeps (D17,
+  // --override-merge, as overrides.mjs mergeEntries orders them; the winner comes last), so the walk
+  // and the swap the IR writes name the same symbol.
+  const mergeRule = settings.overrideMerge || "outer";
+  const level = (e) => (typeof e.overrideLevel === "number" && Number.isFinite(e.overrideLevel) ? e.overrideLevel : 0);
+  const mergedSwap = (list) => {
+    let order = list.map((e, k) => ({ e, k }));
+    if (mergeRule === "first") order = order.reverse();
+    else if (mergeRule === "outer") order.sort((a, b) => (level(b.e) - level(a.e)) || (a.k - b.k));
+    let v = null;
+    for (const { e } of order) if (guidSet(e.overriddenSymbolID)) { const s = usable(guidStr(e.overriddenSymbolID)); if (s) v = s; }
+    return v;
+  };
 
   // The assignments that can reach a property of the instance element k sits in (the innermost holder,
   // the "owning instance"), as pools in D7 rule 2's order: the outer holders' entries addressed to it,
@@ -163,8 +177,7 @@ export function makeResolver(cx) {
       const rel = guids.slice(h.start, k + 1);
       const list = entriesOf(h.n).get(pathKey(rel));
       if (!list) continue;
-      let v = null;
-      for (const e of list) if (guidSet(e.overriddenSymbolID)) { const s = usable(guidStr(e.overriddenSymbolID)); if (s) v = s; }
+      const v = mergedSwap(list);
       if (v) return { symbol: v, via: "override", src: { instance: h.g, path: rel } };
     }
     // 2. a swap property bound on the element, assigned to the instance it sits in.

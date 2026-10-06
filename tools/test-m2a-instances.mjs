@@ -467,6 +467,25 @@ check("a swap decided by an assignment the IR drops (other-family) is pinned wit
   same(acceptGates(p).filter((g) => g.status === "FAIL").map((g) => g.id), []);
 });
 
+// Duplicate swap entries (review of claude/m2a; 0 in the five files): Swaps gets a second entry on
+// [Row, Lead] swapping to Triangle at overrideLevel 1. --override-merge outer (the default) keeps the
+// level-0 Square, which the IR writes; the resolver must walk the same symbol, or the paths under it
+// (Square's shape, in derived) would resolve against Triangle and fail.
+const plantDuplicateSwap = (value) => {
+  const inst = value.pixsoNodes.find((n) => n.guid.sessionID === 5 && n.guid.localID === 510);
+  const e = inst.symbolData.symbolOverrides.find((o) => o.overriddenSymbolID && o.guidPath.guids.length === 2 && o.guidPath.guids[1].localID === 402);
+  inst.symbolData.symbolOverrides.push({ guidPath: e.guidPath, overriddenSymbolID: { sessionID: 5, localID: 302 }, overrideLevel: 1 });
+};
+check("duplicate swap entries: the resolver walks the swap the D17 merge keeps", () => {
+  const p = read({}, plantDuplicateSwap);
+  same(ovAt(p.ir, M2A.iSwaps, P(M2A.cardRow, M2A.rowLead)).swap, { guid: M2A.square });
+  same([p.stats.m2a.derived.unresolved, p.stats.m2a.overrides.inDerivedUnresolved], [0, 0]);
+  truth(derAt(p.ir, M2A.iSwaps, P(M2A.cardRow, M2A.rowLead, M2A.squareShape)), "Square's shape is not written");
+  const last = read({ overrideMerge: "last" }, plantDuplicateSwap);
+  same(ovAt(last.ir, M2A.iSwaps, P(M2A.cardRow, M2A.rowLead)).swap, { guid: M2A.triangle }, "last:");
+  balances(p.stats, "planted duplicate swap");
+});
+
 // ---------- 4. the census (docs/M2A.md §1.3) ----------
 const CENSUS = ["arcData", "autoCornerRadius", "autoLayoutAbsolutePos", "autoLayoutIncludeBorders", "autoLayoutItemReverseDraw",
   "borderBottomWeight", "borderLeftWeight", "borderRightWeight", "borderStrokeWeightsIndependent", "borderTopWeight", "componentPropAssignment",
