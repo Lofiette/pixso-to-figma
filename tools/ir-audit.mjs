@@ -72,6 +72,7 @@ export function previousRoots(file) {
 // The pieces a pass needs from outside: tools/test-iraudit.mjs gives its own (the plugin on the double,
 // the fake Pixso); main() gives the real ones.
 //   io = { mcp, figmaExport(job), log, identity? (a check already made) }
+const EARLY_STOP = 5;
 export async function auditFolder(runDir, opts, io) {
   const log = io.log || console.log;
   const S = opts.settings;
@@ -102,9 +103,21 @@ export async function auditFolder(runDir, opts, io) {
   const kept = [...previous.values()].filter((e) => e.ok === true && e.key === resultKey(states, S)).length;
   if (kept) log("resuming: " + kept + " roots already ok under these settings are kept");
   const pixsoRender = (guid, scale) => io.mcp.run(SCRIPTS.auditRender(guid, { scale }));
-  const audit = await auditRun({ states, ir, reports, builds, settings: S, identity, previous, log,
+  // The plugin open in another Figma file than the one the run built finds none of the verified ids:
+  // the live audit of 2026-10-06 went through 1 872 roots that way. If the first EARLY_STOP roots it
+  // compares are all "not found" in Figma, it stops and says so.
+  let seen = 0, notFound = 0;
+  const WRONG_FILE = "WRONG_FIGMA_FILE";
+  let audit;
+  try {
+  audit = await auditRun({ states, ir, reports, builds, settings: S, identity, previous, log,
     figmaExport: io.figmaExport, pixsoRender,
     onRoot: (entry, pics) => {
+      if (entry.ok !== null && entry.ok !== undefined) {
+        seen++;
+        if (entry.ok === false && /figma render missing: not found/.test(entry.why || "")) notFound++;
+      }
+      if (seen === EARLY_STOP && notFound === EARLY_STOP) { const e = new Error(WRONG_FILE); e.code = WRONG_FILE; throw e; }
       appendFileSync(jsonl, JSON.stringify(entry) + NL, "utf8");
       for (const p of pics) {
         if (S.pictures === "none" || (S.pictures === "failed" && p.ok !== false)) continue;
@@ -112,6 +125,13 @@ export async function auditFolder(runDir, opts, io) {
         if (p.pixso) writeFileSync(join(outDir, "pictures", p.name + ".pixso.png"), Buffer.from(p.pixso, "base64"));
       }
     } });
+  } catch (e) {
+    if (!e || e.code !== WRONG_FILE) throw e;
+    log("ir-audit: the first " + EARLY_STOP + " roots are all not found in Figma: the plugin window is open in another Figma file");
+    log("  than the one this run built in. Open the runner plugin in that file (the one whose pages this run made) and");
+    log("  run the audit again; nothing was written to the audit.");
+    return { code: 1 };
+  }
   const file = join(outDir, "audit.json");
   writeFileSync(file, JSON.stringify(audit, null, 1), "utf8");
   const C = audit.counts;

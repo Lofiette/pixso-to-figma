@@ -427,6 +427,16 @@ const LP = localPixso();
     "--accept-identity-mismatch goes on and records the difference and the reason in the audit", show(go.audit && go.audit.identity));
 }
 
+// The plugin open in another Figma file: every verified id is not found there. The audit stops after
+// the first few roots and says so, instead of failing every root (the live audit of 2026-10-06).
+{
+  quietLog.length = 0;
+  let asked = 0;
+  const res = await auditOf(GOOD, { mcp: LP, figmaExport: async () => { asked++; return { e: "not found: the node is gone" }; } });
+  check(res.code === 1 && asked <= 6 && quietLog.some((l) => /another Figma file/.test(l)) && !existsSync(join(GOOD.runDir, "audit", "audit.json")),
+    "with the plugin in another Figma file the audit stops after the first roots, says why, and writes no audit", JSON.stringify({ code: res.code, asked }));
+}
+
 // ============================================================================================
 // 7. a second pass, the snapshot, and the verdict's reading of an audit
 // ============================================================================================
