@@ -397,14 +397,16 @@ function baseLook(X, b) {
   return b.look;
 }
 function baseOnce(cx, X, guids, res) {
-  const R = cx.resolver;
+  const R = cx.resolver, rule = (cx.settings && cx.settings.overrideMerge) || "outer";
   const el = res.elements[res.elements.length - 1], T = el.n;
   let B, type;
   if (cx.typeName(T) === "INSTANCE") {
     const M = el.symbol ? cx.byGuid.get(el.symbol) : null;
     B = Object.assign({}, M && cx.typeName(M) === "SYMBOL" ? M : T);
     for (const k of BOX) { if (T[k] !== undefined) B[k] = T[k]; else delete B[k]; }
-    if (!el.reset) for (const e of R.rootEntries(T)) lay(B, e);
+    // A master's instance with duplicate entries on one path is drawn as the merge keeps them (D17),
+    // which is how the IR writes that instance's own overrides.
+    if (!el.reset) { const re = R.rootEntries(T); if (re.length) lay(B, mergeEntries(re, rule).fields); }
     type = "COMPONENT";
   } else {
     B = Object.assign({}, T);
@@ -413,7 +415,8 @@ function baseOnce(cx, X, guids, res) {
   for (let j = res.holders.length - 1; j >= 1; j--) {
     const h = res.holders[j];
     if (h.reset) continue;
-    for (const e of R.entriesOf(h.n).get(R.pathKey(guids.slice(h.start))) || []) lay(B, e);
+    const es = R.entriesOf(h.n).get(R.pathKey(guids.slice(h.start))) || [];
+    if (es.length) lay(B, mergeEntries(es, rule).fields);
   }
   return { node: B, type, parent: parentOf(cx, T), T, el };
 }

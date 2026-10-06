@@ -486,6 +486,44 @@ check("duplicate swap entries: the resolver walks the swap the D17 merge keeps",
   balances(p.stats, "planted duplicate swap");
 });
 
+// The echo baseline through a master's instance with duplicate entries (review of claude/m2a; P: 55
+// such paths inside masters where the latest entry is not the one --override-merge outer keeps): Card2's
+// Row gets a second [Bg] entry, green at overrideLevel 1, after its red one (level 0). The IR writes
+// that Row's Bg red (outer keeps level 0), so Echo nested's green on [Row, Bg] is no echo and is kept.
+const plantInnerDuplicate = (value) => {
+  const nodeOf = (local) => value.pixsoNodes.find((n) => n.guid.sessionID === 5 && n.guid.localID === local);
+  const row = nodeOf(421), e = row.symbolData.symbolOverrides.find((o) => o.fillPaints);
+  const green = [Object.assign({}, e.fillPaints[0], { color: Object.assign({}, e.fillPaints[0].color, { r: 0, g: 255, b: 0 }) })];
+  row.symbolData.symbolOverrides.push({ guidPath: e.guidPath, fillPaints: green, overrideLevel: 1 });
+  nodeOf(522).symbolData.symbolOverrides[0].fillPaints = green;
+};
+check("the echo baseline lays a master's duplicate entries by the merge rule: a value only the latest entry holds is kept", () => {
+  const p = read({}, plantInnerDuplicate);
+  same(fill(p.ir, ovAt(p.ir, M2A.cardRow, P(M2A.rowBg)).fields.fills), RED, "the master's Row Bg (outer):");
+  const o = ovAt(p.ir, M2A.iEchoNested, P(M2A.cardRow, M2A.rowBg));
+  truth(o, "Echo nested's green is dropped as an echo of the master's latest entry");
+  same(fill(p.ir, o.fields.fills)[0].color, { r: 0, g: 1, b: 0 });
+  balances(p.stats, "planted inner duplicate");
+});
+
+// Duplicate root entries assigning one swap property (review of claude/m2a; 0 in the five files): Swap
+// by property gets two root entries, Lead icon -> Triangle at overrideLevel 1, then -> Square. The IR
+// keeps Square (--override-merge outer); rule 2 must read one pool per path in merge order, not the
+// first entry, or Square's shape under Lead fails against Triangle.
+const plantDuplicateAssignment = (value) => {
+  const inst = value.pixsoNodes.find((n) => n.guid.sessionID === 5 && n.guid.localID === 511);
+  const a = inst.componentPropAssignment[0];
+  const to = (local) => Object.assign({}, a, { defID: { sessionID: 5, localID: 921 }, value: Object.assign({}, a.value, { guidValue: { sessionID: 5, localID: local } }) });
+  const root = { guids: [{ sessionID: 5, localID: 400 }] };
+  inst.symbolData.symbolOverrides.push({ guidPath: root, componentPropAssignment: [to(302)], overrideLevel: 1 }, { guidPath: root, componentPropAssignment: [to(301)] });
+};
+check("duplicate root entries assigning a swap property: rule 2 reads them in merge order", () => {
+  const p = read({}, plantDuplicateAssignment);
+  same(instOf(p.ir, M2A.iByProperty).properties, [{ family: M2A.row, id: M2A.dRowLead, value: { guid: M2A.square } }]);
+  same([p.stats.m2a.derived.unresolved, p.stats.m2a.overrides.inDerivedUnresolved], [0, 0]);
+  balances(p.stats, "planted duplicate assignment");
+});
+
 // ---------- 4. the census (docs/M2A.md §1.3) ----------
 const CENSUS = ["arcData", "autoCornerRadius", "autoLayoutAbsolutePos", "autoLayoutIncludeBorders", "autoLayoutItemReverseDraw",
   "borderBottomWeight", "borderLeftWeight", "borderRightWeight", "borderStrokeWeightsIndependent", "borderTopWeight", "componentPropAssignment",

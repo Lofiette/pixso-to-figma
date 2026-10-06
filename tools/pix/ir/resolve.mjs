@@ -137,18 +137,29 @@ export function makeResolver(cx) {
   // and the swap the IR writes name the same symbol.
   const mergeRule = settings.overrideMerge || "outer";
   const level = (e) => (typeof e.overrideLevel === "number" && Number.isFinite(e.overrideLevel) ? e.overrideLevel : 0);
-  const mergedSwap = (list) => {
+  const mergeOrder = (list) => {
     let order = list.map((e, k) => ({ e, k }));
     if (mergeRule === "first") order = order.reverse();
     else if (mergeRule === "outer") order.sort((a, b) => (level(b.e) - level(a.e)) || (a.k - b.k));
+    return order.map((x) => x.e);
+  };
+  const mergedSwap = (list) => {
     let v = null;
-    for (const { e } of order) if (guidSet(e.overriddenSymbolID)) { const s = usable(guidStr(e.overriddenSymbolID)); if (s) v = s; }
+    for (const e of mergeOrder(list)) if (guidSet(e.overriddenSymbolID)) { const s = usable(guidStr(e.overriddenSymbolID)); if (s) v = s; }
     return v;
+  };
+  // One pool per path: the assignments of its entries in merge order, so a pool's last hit is the one
+  // the merge keeps (overrides.mjs mergeEntries); src.path is the first entry's.
+  const poolOf = (list, instance) => {
+    const es = list.filter((e) => (e.componentPropAssignment || []).length);
+    if (!es.length) return null;
+    return { list: [].concat(...mergeOrder(es).map((e) => e.componentPropAssignment)), src: { instance, path: pathGuids(es[0]) } };
   };
 
   // The assignments that can reach a property of the instance element k sits in (the innermost holder,
   // the "owning instance"), as pools in D7 rule 2's order: the outer holders' entries addressed to it,
-  // innermost holder first; its own root entries; its own componentPropAssignment. A holder reset by
+  // innermost holder first; its own root entries; its own componentPropAssignment. The entries of one
+  // path (or the root ones) are one pool, in the duplicate merge's order. A holder reset by
   // rule B gives nothing of its own. Each pool: { list: [raw assignment], src: { instance, path } }.
   function poolsFor(guids, k, holders) {
     const owner = holders[holders.length - 1];
@@ -156,11 +167,12 @@ export function makeResolver(cx) {
     for (let j = holders.length - 2; j >= 0; j--) {
       const h = holders[j];
       if (h.reset) continue;
-      const rel = guids.slice(h.start, k);
-      for (const e of entriesOf(h.n).get(pathKey(rel)) || []) if ((e.componentPropAssignment || []).length) pools.push({ list: e.componentPropAssignment, src: { instance: h.g, path: rel } });
+      const p = poolOf(entriesOf(h.n).get(pathKey(guids.slice(h.start, k))) || [], h.g);
+      if (p) pools.push(p);
     }
     if (!owner.reset) {
-      for (const e of rootEntries(owner.n)) if ((e.componentPropAssignment || []).length) pools.push({ list: e.componentPropAssignment, src: { instance: owner.g, path: pathGuids(e) } });
+      const p = poolOf(rootEntries(owner.n), owner.g);
+      if (p) pools.push(p);
       if ((owner.n.componentPropAssignment || []).length) pools.push({ list: owner.n.componentPropAssignment, src: { instance: owner.g, path: null } });
     }
     return pools;
