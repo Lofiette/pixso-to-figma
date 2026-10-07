@@ -28,6 +28,7 @@ import { booleanClass, classBReason, flattens } from "./booleans.mjs";
 import { componentEntry, masterRef, setEntry } from "./components.mjs";
 import { bindingsOf } from "./properties.mjs";
 import { drawnStyles } from "./styles.mjs";
+import { AUTO_INSTANCE_NAME } from "../../ir/names.mjs";
 
 const NEVER = new Set(NEVER_OMIT);
 const RECT_LIKE = new Set(["FRAME", "COMPONENT", "RECTANGLE"]);
@@ -188,7 +189,7 @@ export function emit(cx, planned, out) {
     // props or populations uses the planned type p.type, so a COMPONENT_SET is its planned FRAME there.
     const type = cx.families ? cx.families.recordType(n, p.type) : p.type;
     rec.type = type;
-    rec.name = typeof n.name === "string" ? n.name : "";
+    rec.name = recordName(cx, p, n);
     rec.props = {};
     records.push(rec);
     meta.push({ stateGroup: !!n.isStateGroup && p.type === "FRAME", lostBorder: false });
@@ -212,6 +213,32 @@ export function emit(cx, planned, out) {
     cx.at = undefined;
   };
   for (let pi = 0; pi < planned.length; pi++) for (const t of planned[pi].tops) one(t, -1, pi, null, planned[pi].page.internal);
+}
+
+// The record's name (docs/M1.md §15.16, tools/ir/names.mjs). Pixso shows an INSTANCE whose stored name
+// is "Instance <n>" under its master's name, or under the state group's when the master is a variant of
+// one (measured live on U, 2026-10-06: 46 of 50 sampled; the other 4 had changed in the live file). Under
+// --names display (the default) the record carries that name, under stored the stored one. The master
+// is the stored node symbolData names, a library copy included, whether or not it is a record; with no
+// name to show instead, the stored one stays. A TEXT keeps its stored name: an empty one is left to
+// Figma's autoRename by the builder. An INSTANCE with no stored name stays "": what Pixso shows for it
+// was not measured (U 2 527).
+function recordName(cx, p, n) {
+  const stored = typeof n.name === "string" ? n.name : "";
+  const N = cx.stats.names;
+  if (p.type === "TEXT" && stored === "") N.emptyTexts++;
+  if (p.type !== "INSTANCE") return stored;
+  if (typeof n.name !== "string") N.unnamedInstances++;
+  if (!AUTO_INSTANCE_NAME.test(stored)) return stored;
+  N.autoInstances++;
+  const sid = n.symbolData && n.symbolData.symbolID ? guidStr(n.symbolData.symbolID) : null;
+  const m = sid ? cx.byGuid.get(sid) : null;
+  const up = m && m.parentIndex ? cx.byGuid.get(guidStr(m.parentIndex.guid)) : null;
+  const set = !!up && !!up.isStateGroup && cx.typeName(up) === "FRAME";
+  const shown = set ? up.name : m ? m.name : undefined;
+  if (typeof shown !== "string" || shown === "") return stored;
+  N[set ? "toSet" : "toMaster"]++;
+  return cx.settings.names === "display" ? shown : stored;
 }
 
 const isLostBorderShape = (cx, n) => n.styleType === undefined && visiblePaint(n.strokePaints) && weightOf(n) > 0 && !SIDE_FIELDS.some((k) => n[k] !== undefined);

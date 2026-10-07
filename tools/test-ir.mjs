@@ -40,7 +40,7 @@ function header(kind) {
       : { authoredOverrides: true, resolvedOverrides: false, overrideKeys: true, publishIds: true,
         symbolVersions: true, derivedBoxes: true, inkBounds: false, renders: false },
     settings: Object.assign({ mode: "design", overrides: "fidelity", drift: "link", deleted: "publish",
-      resync: "pixso-unless-edited", textFit: "widen", booleans: "auto", spaceEvenlySingle: "between" }, m2aSettings(), { kitmaps: "default" }),
+      resync: "pixso-unless-edited", textFit: "widen", booleans: "auto", spaceEvenlySingle: "between" }, m2aSettings(), { names: "display", kitmaps: "default" }),
   };
 }
 // The thirteen settings version 3 added (docs/M2A.md §3), at their defaults.
@@ -426,6 +426,20 @@ for (const k of schema.M2A_SETTINGS) {
   for (const k of S.M2A_SETTINGS) if (!S.SETTINGS[k] || S.SETTING_DEFAULTS[k] === undefined) bad.push(k + " has no values or no default");
   if (bad.length) bad.forEach((b) => fail("settings: " + b));
   else ok("settings: the thirteen M2a settings each have values, a default and a flag of their own");
+}
+// docs/M1.md §15.16: names joined the header after version 3 IRs were written. An IR without it was
+// read with stored names and stays valid; one with it holds a value of its own.
+expectValid("an IR read before --names existed (no names in its settings)", mut(minimal, (ir) => { delete ir.header.settings.names; }));
+expectValid("the names setting stored", mut(minimal, (ir) => { ir.header.settings.names = "stored"; }));
+expectError("the names setting outside its enum", mut(minimal, (ir) => { ir.header.settings.names = "shown"; }), "header.settings.names", true);
+expectError("a setting that is not a later one, missing", mut(minimal, (ir) => { delete ir.header.settings.textFit; }), "header.settings.textFit", true);
+{
+  const S = schema;
+  const old = { settings: { textFit: "widen" } }, now = { settings: { names: "display" } };
+  if (S.SETTING_DEFAULTS.names === "display" && S.SETTING_FLAGS.names === "--names" && S.LATER_SETTINGS.names === "stored" &&
+      S.headerSetting(old, "names") === "stored" && S.headerSetting(now, "names") === "display" && S.headerSetting(old, "textFit") === "widen" && S.headerSetting(old, "booleans") === undefined)
+    ok("settings: names defaults to display (--names); a header without it reads stored, and only a later setting has such a value");
+  else fail("settings: names, LATER_SETTINGS or headerSetting");
 }
 if (example) {
   const OV = (ir) => ir.nodes[1].instance.overrides;

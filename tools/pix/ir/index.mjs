@@ -10,6 +10,8 @@
 //   scope               "file" | "pages:<guid>,<guid>…" (the chosen pages or top-level objects; every master
 //                       an instance in scope names is carried with its top-level object)
 //   mode                design | kit                  (recorded only; M1 reads both alike)
+//   names               display | stored              (docs/M1.md §15.16: an INSTANCE named "Instance <n>"
+//                       takes its master's or its set's name, as Pixso shows it; stored keeps the name)
 //   the thirteen M2a settings (docs/M2A.md §3; schema.M2A_SETTINGS, each defaulting to SETTING_DEFAULTS):
 //   variantSets parse | frames, variantGrammar names | vocabulary, axisOrder vocabulary | names,
 //   swapDangling skip | strict, swapReset on | off, swapFallback derived | off, swapDefault layer | definition,
@@ -43,6 +45,9 @@
 //     populationCounts, records, nonInstance, instances, vectors, text, spaceEvenly, strokeAlignDecided,
 //     cornerRadiusOnly, lostBorderSections, counterFillKeptFixed, thinStrokes, staleBooleans,
 //     styles: { fill | stroke | effect: { same, styleWins, missing, noValue } } (tools/pix/ir/styles.mjs),
+//     names: { autoInstances, toSet, toMaster, unnamedInstances, emptyTexts } (nodes.mjs recordName: the
+//       carried INSTANCE records named "Instance <n>" and the name Pixso shows them under, the ones with no
+//       stored name, the TEXT records named ""; counted under either --names),
 //     m2a: newM2aStats() below, filled by parts A-C (docs/M2A.md §6) }
 //   ms also holds m2a: { families, props, resolve, instances }, the M2a phases inside ms.ir.
 // The balance of docs/M1.md §8.2: stored = records + notCarried (every term), checked here.
@@ -63,13 +68,13 @@ import { makeResolver } from "./resolve.mjs";
 import { instanceData } from "./overrides.mjs";
 import { staleBooleans } from "../../ir/operands.mjs";
 
-export const READER_SETTINGS = ["booleans", "spaceEvenlySingle", "textFit", "scope", "mode"].concat(M2A_SETTINGS);
+export const READER_SETTINGS = ["booleans", "spaceEvenlySingle", "textFit", "scope", "mode", "names"].concat(M2A_SETTINGS);
 
 export function readerSettings(given) {
   const m2a = {};
   for (const k of M2A_SETTINGS) m2a[k] = SETTING_DEFAULTS[k];
   const s = Object.assign({ booleans: SETTING_DEFAULTS.booleans, spaceEvenlySingle: SETTING_DEFAULTS.spaceEvenlySingle,
-    textFit: SETTING_DEFAULTS.textFit, scope: "file", mode: "design" }, m2a, given || {});
+    textFit: SETTING_DEFAULTS.textFit, scope: "file", mode: "design", names: SETTING_DEFAULTS.names }, m2a, given || {});
   for (const k of Object.keys(s)) {
     if (READER_SETTINGS.indexOf(k) < 0) throw new Error("pixToIR: unknown setting " + JSON.stringify(k) + "; one of " + READER_SETTINGS.join(", "));
     if (k === "scope") {
@@ -120,6 +125,7 @@ function newStats() {
     text: { fontFromStyle: 0, rawLineHeight: 0, percentOneAuto: 0, styleValueOverridden: 0, trailingBaseStyleIds: 0 },
     spaceEvenly: { between: 0, single: 0 }, strokeAlignDecided: {}, cornerRadiusOnly: {}, lostBorderSections: 0, counterFillKeptFixed: 0, thinStrokes: 0, staleBooleans: 0,
     styles: { fill: style0(), stroke: style0(), effect: style0() },
+    names: { autoInstances: 0, toSet: 0, toMaster: 0, unnamedInstances: 0, emptyTexts: 0 },
     m2a: newM2aStats(),
   };
 }

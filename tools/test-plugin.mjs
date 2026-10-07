@@ -355,7 +355,7 @@ function bareHost(opts) {
 // A valid task of the IR path (tools/ir/task.mjs): the fonts preflight, the smallest there is.
 const FONTS_TASK = () => ({ format: "pix2fig.task", version: 1, op: "fonts", runId: "0123456789abcdef", taskNo: 1, of: 1,
   snapshot: "pix:" + "0".repeat(62) + "a1", irVersion: IR_VERSION,
-  settings: { textFit: "widen", layoutOrder: "creation", textRead: "measure", fallbackFont: { family: "Inter", style: "Regular" } },
+  settings: { textFit: "widen", layoutOrder: "creation", textRead: "measure", fallbackFont: { family: "Inter", style: "Regular" }, names: "display" },
   page: null, roots: [], nodes: [], notes: [], values: {}, fonts: [{ family: "Inter", style: "Regular" }], images: [], expect: null });
 
 {

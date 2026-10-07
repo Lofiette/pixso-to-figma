@@ -11,7 +11,9 @@
 //     [--swap-dangling skip|strict] [--swap-reset on|off] [--swap-fallback derived|off] [--swap-default layer|definition]
 //     [--rejected-props copy|none] [--default-assignments keep|drop] [--override-merge last|first|outer]
 //     [--echo drop|keep] [--instance-own overrides|own] [--derived-geometry changed|all|none]
+//     [--names display|stored]
 //
+// --names (docs/M1.md §15.16) is a reader setting as well, and the builder's for an empty-named text.
 // The thirteen M2a flags (docs/M2A.md §3) are the component reader's settings: each goes to the reader,
 // into the IR header, and into the run folder's settings hash, so a run under IR version 3 never
 // resumes a folder of version 2. A folder whose states.json records another IR version is refused,
@@ -36,7 +38,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { CODE, M2A_SETTINGS, SETTINGS as IR_SETTINGS, SETTING_DEFAULTS, SETTING_FLAGS, VERSION as IR_VERSION, canonicalJSON, fnv1a64 } from "./ir/schema.mjs";
+import { CODE, M2A_SETTINGS, SETTINGS as IR_SETTINGS, SETTING_DEFAULTS, SETTING_FLAGS, VERSION as IR_VERSION, canonicalJSON, fnv1a64, headerSetting } from "./ir/schema.mjs";
 import { TASK_SETTINGS, maxTaskChars } from "./ir/task.mjs";
 import { validate } from "./ir/validate.mjs";
 import { assertOutsideRepo } from "./ir/outside-repo.mjs";
@@ -60,6 +62,7 @@ export const SETTINGS = {
   "--text-fit": ["textFit", IR_SETTINGS.textFit, "widen"],
   "--layout-order": ["layoutOrder", TASK_SETTINGS.layoutOrder, "deepestFirst"],   // P5, 2026-10-05
   "--text-read": ["textRead", TASK_SETTINGS.textRead, "measure"],
+  "--names": ["names", IR_SETTINGS.names, SETTING_DEFAULTS.names],   // Pixso's names, measured live on U, 2026-10-06
   "--images": ["images", (v) => parseLinks(v).join(","), LINKS.join(",")],
   "--missing-fonts": ["missingFonts", ["ask", "substitute"], "ask"],
   "--fallback-font": ["fallbackFont", (v) => { const m = /^([^/]+)\/(.+)$/.exec(v); if (!m) throw new RangeError("--fallback-font is Family/Style"); return m[1] + "/" + m[2]; }, "Inter/Regular"],
@@ -107,12 +110,13 @@ export function parseArgs(argv) {
 // The reader's settings an IR was read with (its header), which --from-ir must keep: the planner
 // and the run folder describe the IR, not the command line's defaults. A flag given that
 // contradicts one is refused; one not given takes the header's value. Returns the refusal, or null.
-export const READER_FLAGS = { booleans: "--booleans", spaceEvenlySingle: "--space-evenly-single", textFit: "--text-fit", scope: "--scope" };
+export const READER_FLAGS = { booleans: "--booleans", spaceEvenlySingle: "--space-evenly-single", textFit: "--text-fit", scope: "--scope", names: "--names" };
 for (const k of M2A_SETTINGS) READER_FLAGS[k] = SETTING_FLAGS[k];
 export function adoptIrSettings(o, header) {
   const hs = (header && header.settings) || {};
   const sc = header && header.scope;
-  const fromHeader = { booleans: hs.booleans, spaceEvenlySingle: hs.spaceEvenlySingle, textFit: hs.textFit,
+  // An IR read before --names existed carries stored names (schema.LATER_SETTINGS).
+  const fromHeader = { booleans: hs.booleans, spaceEvenlySingle: hs.spaceEvenlySingle, textFit: hs.textFit, names: header ? headerSetting(header, "names") : undefined,
     scope: sc && sc.kind === "pages" && Array.isArray(sc.ids) ? "pages:" + sc.ids.join(",") : sc && sc.kind === "file" ? "file" : undefined };
   for (const k of M2A_SETTINGS) fromHeader[k] = hs[k];
   for (const k of Object.keys(READER_FLAGS)) {
@@ -127,7 +131,7 @@ export function adoptIrSettings(o, header) {
 // The reader's settings of a parsed command line, as pixToIR takes them (mode is recorded only, and
 // pix-run reads every file in the reader's default mode).
 export function readerSettingsOf(o) {
-  const s = { booleans: o.booleans, spaceEvenlySingle: o.spaceEvenlySingle, textFit: o.textFit, scope: o.scope };
+  const s = { booleans: o.booleans, spaceEvenlySingle: o.spaceEvenlySingle, textFit: o.textFit, scope: o.scope, names: o.names };
   for (const k of M2A_SETTINGS) s[k] = o[k];
   return s;
 }
@@ -139,7 +143,7 @@ export function runSettings(o) {
   const s = { source: o.source, scope: o.scope, m1Scope: o.m1Scope, booleans: o.booleans, spaceEvenlySingle: o.spaceEvenlySingle, textFit: o.textFit,
     layoutOrder: o.layoutOrder, textRead: o.textRead, images: o.images, noPixso: o.noPixso, missingFonts: o.missingFonts,
     fallbackFont: { family, style }, maxTaskMb: o.maxTaskMb, livenessWarnS: o.livenessWarnS, livenessFailS: o.livenessFailS,
-    ceilingMsPerNode: o.ceilingMsPerNode };
+    ceilingMsPerNode: o.ceilingMsPerNode, names: o.names };
   for (const k of M2A_SETTINGS) s[k] = o[k];
   return s;
 }
@@ -254,7 +258,7 @@ export async function main(argv) {
   const links = parseLinks(o.images);
   let verdicts = null;
   try { verdicts = JSON.parse(readFileSync(join(HERE, "double", "verdicts.json"), "utf8")); } catch (e) { say("note: tools/double/verdicts.json not readable; every probe pending"); }
-  const planOpts = { m1Scope: o.m1Scope, settings: { textFit: o.textFit, layoutOrder: o.layoutOrder, textRead: o.textRead, fallbackFont: settings.fallbackFont,
+  const planOpts = { m1Scope: o.m1Scope, settings: { textFit: o.textFit, layoutOrder: o.layoutOrder, textRead: o.textRead, fallbackFont: settings.fallbackFont, names: o.names,
     maxTaskMb: o.maxTaskMb, ceilingMsPerNode: o.ceilingMsPerNode, scope: o.scope } };
   let plan;
   try { plan = planM1(ir, stats, Object.assign({}, planOpts, { images: tableFromIR(ir) })); }

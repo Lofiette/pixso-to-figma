@@ -336,7 +336,12 @@ function createOne(st, k) {
   st.builtType[k] = bt;
   ctx.S.nodes[String(i)] = node.id;
   GUIDS.map[String(i)] = rec.guid;
-  node.name = String(rec.name);
+  // Pixso shows a TEXT whose name is empty under its characters (measured live on U, 2026-10-06: 47 of
+  // 50, the rest with line breaks as spaces; docs/M1.md §15.16). A Figma text follows its characters
+  // while autoRename is on, and writing the name turns that off, so under names display such a text is
+  // left unnamed and takes its name from the characters written below; one with no characters keeps
+  // the empty name. names stored writes the name as stored.
+  if (!(rec.type === "TEXT" && rec.name === "" && st.settings.names !== "stored" && String(ctx.prop(rec, "characters") || "") !== "")) node.name = String(rec.name);
   B.set(st, node, i, "relativeTransform", U.matrix(st.want[k].rt));
   // A vector's size is its paths' (Figma sizes it from them), and resizing would scale them.
   if (rec.type !== "VECTOR") {

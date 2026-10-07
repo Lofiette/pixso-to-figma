@@ -21,6 +21,7 @@
 import { CODE, isComponentNote } from "./schema.mjs";
 import { BUILT_TYPE, taskType } from "./task.mjs";
 import { SCRIPTS } from "./mcp-readonly.mjs";
+import { shownNames } from "./names.mjs";
 
 export const SAMPLE_SIZE = 20;
 const CHANGED_BY_READER = [CODE.SOURCE_FEATURE_UNSUPPORTED, CODE.BOOLEAN_FLATTENED, CODE.GEOMETRY_INVALID];
@@ -66,12 +67,16 @@ export function compareIdentity(ir, expectName, open, sampled, answers) {
   else parts.push(user.length + " of " + user.length + " user pages open");
   const s = { asked: sampled.length, agree: 0, missing: 0, typeDiffers: 0, nameDiffers: 0 };
   const byId = new Map((Array.isArray(answers) ? answers : []).filter((a) => a && typeof a.id === "string").map((a) => [a.id, a]));
+  // Measured on U's audit (2026-10-06): the 3 of 20 names that differed on a file not renamed were two
+  // instances named "Instance <n>" and an empty-named text, which Pixso shows under other names.
+  const guidIndex = new Map(ir.nodes.map((r, i) => [r.guid, i]));
+  const indexOf = (g) => guidIndex.get(g);
   for (const i of sampled) {
     const r = ir.nodes[i];
     const a = byId.get(r.guid);
     if (!a || a.missing) { s.missing++; continue; }
     const types = SAME_TYPE[r.type] || [r.type];
-    const typeOk = types.indexOf(a.type) >= 0, nameOk = a.name === r.name;
+    const typeOk = types.indexOf(a.type) >= 0, nameOk = shownNames(ir, i, indexOf).indexOf(a.name) >= 0;
     if (!typeOk) s.typeDiffers++;
     if (!nameOk) s.nameDiffers++;
     if (typeOk && nameOk) s.agree++;

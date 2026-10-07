@@ -64,6 +64,9 @@ export const SETTINGS = {
   echo: ["drop", "keep"],                           // D9
   instanceOwn: ["overrides", "own"],                // D11
   derivedGeometry: ["changed", "all", "none"],      // D10
+  // docs/M1.md §15.16: a layer's name as Pixso shows it (an instance named "Instance <n>" under its
+  // master's or its set's name; an empty-named text left to Figma's autoRename), or as stored.
+  names: ["display", "stored"],
 };
 // The thirteen settings M2a adds (docs/M2A.md §3), in the order of that table.
 export const M2A_SETTINGS = ["variantSets", "variantGrammar", "axisOrder", "swapDangling", "swapReset", "swapFallback",
@@ -74,7 +77,7 @@ export const SETTING_FLAGS = { mode: "--mode", overrides: "--overrides", drift: 
   variantSets: "--variant-sets", variantGrammar: "--variant-grammar", axisOrder: "--axis-order", swapDangling: "--swap-dangling",
   swapReset: "--swap-reset", swapFallback: "--swap-fallback", swapDefault: "--swap-default", rejectedProps: "--rejected-props",
   defaultAssignments: "--default-assignments", overrideMerge: "--override-merge", echo: "--echo", instanceOwn: "--instance-own",
-  derivedGeometry: "--derived-geometry", kitmaps: "--kitmaps" };
+  derivedGeometry: "--derived-geometry", names: "--names", kitmaps: "--kitmaps" };
 // The owner's default for each (docs/M1.md §3, docs/M2A.md §3, REWRITE.md §11). mode has none: it is
 // chosen per run. overrideMerge is "outer" from part C's measurement (docs/M2A.md D17: on P's six
 // conflicting texts derived data agrees with outer and first, never with last; outer equals last where
@@ -83,7 +86,16 @@ export const SETTING_DEFAULTS = { overrides: "fidelity", drift: "link", deleted:
   resync: "pixso-unless-edited", textFit: "widen", booleans: "auto", spaceEvenlySingle: "center",   // spaceEvenlySingle: P18, 2026-10-05
   variantSets: "parse", variantGrammar: "names", axisOrder: "vocabulary", swapDangling: "skip", swapReset: "on",
   swapFallback: "derived", swapDefault: "layer", rejectedProps: "copy", defaultAssignments: "keep", overrideMerge: "outer",
-  echo: "drop", instanceOwn: "overrides", derivedGeometry: "changed", kitmaps: "default" };
+  echo: "drop", instanceOwn: "overrides", derivedGeometry: "changed", kitmaps: "default",
+  names: "display" };   // names: Pixso's names measured live on U, 2026-10-06 (docs/M1.md §15.16)
+// Settings added to IR version 3 after IRs of it were written (docs/M1.md §15.16): an IR whose header
+// lacks one was read before it existed, with the value given here, and stays valid. Every IR the reader
+// writes now records them.
+export const LATER_SETTINGS = { names: "stored" };
+export function headerSetting(header, k) {
+  const S = (header && header.settings) || {};
+  return S[k] !== undefined ? S[k] : Object.prototype.hasOwnProperty.call(LATER_SETTINGS, k) ? LATER_SETTINGS[k] : undefined;
+}
 
 // Figma's node types, which the IR speaks. Pixso never produces SLOT, but the Figma Сова kit uses
 // it inside its components, and the matcher and verifier read Figma trees with this same list.
@@ -447,6 +459,7 @@ export function validateIR(ir, options) {
   else {
     closed(S, SETTING_KEYS, "header.settings");
     for (const k of Object.keys(SETTINGS)) {
+      if (S[k] === undefined && Object.prototype.hasOwnProperty.call(LATER_SETTINGS, k)) continue;
       if (SETTINGS[k].indexOf(S[k]) < 0) err("header.settings." + k, (S[k] === undefined ? "missing" : "got " + show(S[k])) + "; must be one of " + SETTINGS[k].join(", ") + " (" + SETTING_FLAGS[k] + ")");
     }
     if (!(isStr(S.kitmaps) && S.kitmaps.length > 0)) err("header.settings.kitmaps", "must be \"default\" or the directory given with --kitmaps; got " + show(S.kitmaps));

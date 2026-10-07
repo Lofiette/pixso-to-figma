@@ -714,7 +714,42 @@ try {
   const r5 = run(file, "--out", join(tmp, "y.json"), "--booleans", "frame");
   if (r5.status === 2 && /booleans/.test(r5.stderr)) ok("pix-to-ir refuses a setting outside its values");
   else fail("pix-to-ir with --booleans frame: exit " + r5.status);
+  const r6 = run(file, "--out", join(tmp, "z.json"), "--names", "stored"), r7 = run(file, "--out", join(tmp, "w.json"), "--names", "shown");
+  if (r6.status === 0 && JSON.parse(readFileSync(join(tmp, "z.json"), "utf8")).header.settings.names === "stored" && r7.status === 2 && /names/.test(r7.stderr) && !existsSync(join(tmp, "w.json")))
+    ok("pix-to-ir takes --names stored into the header and refuses a value outside display, stored");
+  else fail("pix-to-ir --names: exit " + r6.status + " and " + r7.status + ", " + JSON.stringify((r7.stderr || "").slice(0, 200)));
 } finally { rmSync(tmp, { recursive: true, force: true }); }
+
+// ---------- 14. layer names (docs/M1.md §15.16) ----------
+// Pixso shows an instance named "Instance <n>" under its master's name, or its state group's when the
+// master is a variant of one, and an empty-named text under its characters (measured live on U,
+// 2026-10-06). Planted on the fixture: the Button instance (a variant of the state group "Button"), the
+// Badge instance (the library copy "Badge"), the trailing icon inside Card's master ("Icon/Star"), a
+// name that only looks like the pattern, an instance with no stored name and two empty-named texts.
+{
+  const plant = (v, at) => {
+    at("1:61").name = "Instance 7"; at("1:62").name = "Instance 12"; at("1:33").name = "Instance 3";
+    at("1:32").name = "Instance 7a"; delete at("1:60").name;
+    at(IDS.text).name = ""; at(IDS.textNoLines).name = "";
+  };
+  const file = mutated(plant);
+  const D = pixToIR(file), S = pixToIR(file, { settings: { names: "stored" } }), F = pixToIR(file, { settings: { variantSets: "frames" } });
+  const names = (r) => ["1:61", "1:62", "1:33", "1:32", "1:60", IDS.text, IDS.textNoLines].map((g) => rec(g, r.ir).name);
+  check("the IR validates under --names display and stored", () => [D, S, F].every((r) => validate(r.ir).ok) && D.ir.header.settings.names === "display" && S.ir.header.settings.names === "stored");
+  check("--names display (the default): \"Instance <n>\" takes its set's or its master's name; any other name and an empty text's stay", () =>
+    eq(names(D), ["Button", "Badge", "Icon/Star", "Instance 7a", "", "", ""]));
+  check("--names stored keeps every stored name (\"\" where none is stored)", () => eq(names(S), ["Instance 7", "Instance 12", "Instance 3", "Instance 7a", "", "", ""]));
+  check("the set's name comes from the stored state group, whatever --variant-sets makes of it", () => eq(rec("1:61", F.ir).name, "Button"));
+  check("stats.names counts the population under either setting", () => {
+    eq(D.stats.names, { autoInstances: 3, toSet: 1, toMaster: 2, unnamedInstances: 1, emptyTexts: 2 });
+    eq(S.stats.names, D.stats.names);
+    eq(stats.names, { autoInstances: 0, toSet: 0, toMaster: 0, unnamedInstances: 0, emptyTexts: 0 });
+  });
+  check("the setting changes names and the header, nothing else: overrides, components and sets are the same", () => {
+    const strip = (r) => { const c = JSON.parse(JSON.stringify(r.ir)); delete c.header.settings.names; c.nodes.forEach((n) => { delete n.name; }); return JSON.stringify(c); };
+    return strip(D) === strip(S);
+  });
+}
 
 console.log("");
 console.log(failed ? failed + " reader check" + (failed === 1 ? "" : "s") + " FAILED" : "all reader checks pass");

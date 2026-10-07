@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CODE, ORACLE_PROPS, VERSION as IR_VERSION, M2A_SETTINGS, SETTING_DEFAULTS } from "./ir/schema.mjs";
+import { CODE, ORACLE_PROPS, VERSION as IR_VERSION, M2A_SETTINGS, SETTING_DEFAULTS, headerSetting } from "./ir/schema.mjs";
 import { SERVICE_PAGE_GUID, taskChars } from "./ir/task.mjs";
 import { validate, validateTask } from "./ir/validate.mjs";
 import { cleanTaskFor, derivePopulations, planM1, PLAN_DEFAULTS, CEILING_BASE_MS } from "./ir/plan.mjs";
@@ -26,7 +26,7 @@ import { GATES, m1Gates, m1Verdict, sumJs, BUILT_NOT_AUDITED } from "./ir/verdic
 import { emptyJ, checkJShape, TOTALS_SHAPE } from "./ir/judge.mjs";
 import { REPO_ROOT } from "./ir/outside-repo.mjs";
 import { fakePixso } from "./test/fake-pixso.mjs";
-import { adoptIrSettings, parseArgs, SETTINGS as RUN_SETTINGS } from "./pix-run.mjs";
+import { adoptIrSettings, parseArgs, runDirName, runSettings, SETTINGS as RUN_SETTINGS } from "./pix-run.mjs";
 import { accept, legacyLostBorders } from "./m1-accept.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -752,7 +752,7 @@ function pixRunGroup() {
     const c = run(join(flipped, "tmp-data"));
     check(c.code === 1 && /inside the repository/.test(c.out), "pix-run refuses the repository named with its drive letter in the other case");
   } else console.log("skip the drive-letter case: not Windows");
-  check(Object.keys(RUN_SETTINGS).length === 19 + M2A_SETTINGS.length, "every setting of §3 is a pix-run flag (with --data, --only, --from-ir and --stats, and docs/M2A.md §3's thirteen)");
+  check(Object.keys(RUN_SETTINGS).length === 20 + M2A_SETTINGS.length, "every setting of §3 is a pix-run flag (with --data, --only, --from-ir and --stats, --names of docs/M1.md §15.16, and docs/M2A.md §3's thirteen)");
   {
     // Review S7: --from-ir keeps the reader's settings the IR header records.
     const header = { settings: { textFit: "source-box", booleans: "flatten", spaceEvenlySingle: "center" }, scope: { kind: "pages", ids: ["0:4"] } };
@@ -773,11 +773,63 @@ function pixRunGroup() {
 }
 
 // ============================================================================================
+// layer names (docs/M1.md §15.16): the identity check, the planner and pix-run
+// ============================================================================================
+async function namesGroup() {
+  const { makeFixture, IDS } = await import("./pix/fixture.mjs");
+  const { pixToIR } = await import("./pix/ir/index.mjs");
+  // Planted as U holds them: instances named "Instance <n>" (a variant of the state group "Button", the
+  // library copy "Badge", "Icon/Star" inside Card's master) and two empty-named texts, one with a line
+  // break in its characters.
+  const at = (v, g) => v.pixsoNodes.find((n) => n.guid.sessionID + ":" + n.guid.localID === g);
+  const pix = makeFixture("valid", { mutate: (v) => {
+    at(v, "1:61").name = "Instance 7"; at(v, "1:62").name = "Instance 12"; at(v, "1:33").name = "Instance 3";
+    at(v, IDS.text).name = ""; at(v, IDS.textNoLines).name = "";
+  } }).pix;
+  const D = pixToIR(pix), S = pixToIR(pix, { settings: { names: "stored" } }), F = pixToIR(pix, { settings: { names: "stored", variantSets: "frames" } });
+  // What Pixso's API answers for them (measured live on U, 2026-10-06): the set's or the master's name,
+  // and the characters with the line break shown as a space.
+  const shown = { "1:61": "Button", "1:62": "Badge", "1:33": "Icon/Star", [IDS.text]: "Hi \u{1F600} there second", [IDS.textNoLines]: "plain" };
+  const ask = (r, wrong) => {
+    const said = Object.assign({}, shown, wrong || {});
+    const ix = (g) => r.ir.nodes.findIndex((n) => n.guid === g);
+    const sampled = Object.keys(shown).concat(["1:60", IDS.textFromStyle]).map(ix);
+    const answers = r.ir.nodes.map((n) => ({ id: n.guid, type: n.type, name: Object.prototype.hasOwnProperty.call(said, n.guid) ? said[n.guid] : n.name }));
+    return compareIdentity(r.ir, "Fixture", { file: "Fixture", pageIds: r.ir.pages.filter((p) => !p.internal).map((p) => p.guid) }, sampled, answers);
+  };
+  const qs = [ask(D), ask(S), ask(F)];
+  check(qs.every((q) => q.same && q.q5 && q.sample.nameDiffers === 0 && q.sample.agree === 7),
+    "identity: Pixso's names agree with an IR read under --names display, and with one read under stored (frames too): \"Instance <n>\" as its set or master, an empty text as its characters",
+    JSON.stringify(qs.map((q) => q.detail)));
+  const wrong = [ask(S, { "1:61": "Renamed", "1:33": "Badge", [IDS.text]: "plain" }), ask(D, { "1:61": "Renamed", "1:33": "Badge", [IDS.text]: "plain" })];
+  check(wrong.every((q) => !q.q5 && q.sample.nameDiffers === 3),
+    "identity: a rename, another master's name, or another text's characters still differ", JSON.stringify(wrong.map((q) => q.detail)));
+  // The planner hands the builder the header's names; an IR read before the setting had stored names.
+  const old = JSON.parse(JSON.stringify(S.ir)); delete old.header.settings.names;
+  const namesOf = (ir, o) => [...new Set(planM1(ir, null, Object.assign({ runId: RUN }, o || {})).tasks.map((t) => t.settings.names))];
+  const t0 = planM1(D.ir, D.stats, { runId: RUN }).tasks.find((t) => t.op === "build");
+  const bare = JSON.parse(JSON.stringify(t0)); delete bare.settings.names;
+  check(same(namesOf(D.ir), ["display"]) && same(namesOf(S.ir), ["stored"]) && validate(old).ok && headerSetting(old.header, "names") === "stored" && same(namesOf(old), ["stored"]) &&
+    same(namesOf(D.ir, { settings: { names: "stored" } }), ["stored"]) && validateTask(t0).ok && !validateTask(bare).ok &&
+    validateTask(bare).errors.some((e) => e.path === "settings.names"),
+    "the planner writes the IR header's names into every task (stored for an IR read before the setting), and a task without it is refused",
+    JSON.stringify([namesOf(D.ir), namesOf(S.ir), validate(old).errors.slice(0, 2), validateTask(bare).errors.slice(0, 2)]));
+  // pix-run: a flag, a reader setting --from-ir keeps, and part of the run folder's name.
+  const a = parseArgs(["--from-ir", "x.json"]), b = parseArgs(["--from-ir", "x.json", "--names", "display"]);
+  const whyA = adoptIrSettings(a, old.header), whyB = adoptIrSettings(b, old.header);
+  const sha = "ab".repeat(32), dirOf = (v) => runDirName(sha, runSettings(parseArgs(["x.pix", "--names", v])));
+  check(parseArgs(["x.pix"]).names === "display" && parseArgs(["x.pix", "--names", "stored"]).names === "stored" && /one of display, stored/.test(threw(() => parseArgs(["x.pix", "--names", "shown"]))) &&
+    whyA === null && a.names === "stored" && /--names display contradicts the IR, which was read with stored/.test(whyB) && dirOf("display") !== dirOf("stored"),
+    "pix-run: --names defaults to display, --from-ir keeps the IR's (stored before the setting), and the two settings never share a run folder", JSON.stringify([a.names, whyB]));
+}
+
+// ============================================================================================
 try {
   await imageGroup();
   await runGroup();
   acceptGroup();
   pixRunGroup();
+  await namesGroup();
 } catch (e) { check(false, "a test group threw", (e && e.stack) || e); }
 if (failed) console.log("test-pixrun: scratch kept in " + TMP);
 else { try { rmSync(TMP, { recursive: true, force: true }); } catch (e) { /* a scratch folder left behind is harmless */ } }
