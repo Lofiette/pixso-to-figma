@@ -2,9 +2,11 @@
 // Pixso, compared, and written as the audit report tools/m1-accept.mjs --audit reads.
 //
 //   node tools/ir-audit.mjs <runDir> [--max-side 800] [--max-scale 1] [--ink 191] [--gross-max 0.01]
-//     [--mean-max 5] [--tile 32] [--tile-mean-max 0] [--size-tol 1] [--section crop|children|none]
-//     [--placeholders mask|compare] [--mask-pad 2] [--image-placeholders compare|mask]
-//     [--opacity undo|apply] [--undo-opacity-min 0.05]
+//     [--mean-max 5] [--tile 32] [--tile-mean-max 0] [--size-tol 1] [--size-by drawn|picture] [--drawn-alpha 16]
+//     [--register bounds|top-left] [--register-fit-px 4] [--section crop|children|none]
+//     [--placeholders mask|compare] [--placeholder-extent drawn|box] [--mask-pad 2] [--image-placeholders compare|mask]
+//     [--glyph-notes mask|skip|compare] [--hairlines band|pixel] [--opacity both|none|undo|apply] [--undo-opacity-min 0.05]
+//     [--blank not-compared|compare] [--hidden-in-source skip|compare]
 //     [--pictures failed|all|none] [--render-timeout-s 120] [--accept-identity-mismatch "<why>"]
 //     [--mcp-url <url>] [--fresh]
 //
@@ -32,8 +34,8 @@
 // come back is tried once more with the window raised again (tools/focus-figma.mjs).
 //
 // Exit code: 0 every root ok; 3 a root differs or a render is missing; 2 nothing failed but some root
-// was not compared; 4 the identity check stopped it; 1 the run folder, Pixso or the plugin could not
-// be reached.
+// was not compared (nothing left once masked, neither engine draws anything, or hidden in the source);
+// 4 the identity check stopped it; 1 the run folder, Pixso or the plugin could not be reached.
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -145,11 +147,16 @@ export async function auditFolder(runDir, opts, io) {
   const C = audit.counts;
   log("");
   log("RENDER AUDIT  " + String(states.snapshot).slice(0, 16) + "…  run " + states.runId);
-  log("roots: " + C.roots + "; ok " + C.ok + ", not ok " + C.failed + " (render missing " + C.missing + "), not compared " + C.notCompared +
-    "; placeholder roots left to G11: " + C.placeholderRoots);
-  const placed = {};
-  for (const e of audit.roots) for (const side of ["figma", "pixso"]) if (e[side] && e[side].place) placed[side + " " + e[side].place] = (placed[side + " " + e[side].place] || 0) + 1;
+  log("roots: " + C.roots + "; ok " + C.ok + ", not ok " + C.failed + " (render missing " + C.missing + ", holding texts with invalid stored glyphs " +
+    C.sourceGlyphs + "), not compared " + C.notCompared + " (neither engine draws anything " + C.blank + ", hidden in the source " + C.hiddenInSource +
+    "); placeholder roots left to G11: " + C.placeholderRoots);
+  const placed = {}, registered = {};
+  for (const e of audit.roots) {
+    for (const side of ["figma", "pixso"]) if (e[side] && e[side].place) placed[side + " " + e[side].place] = (placed[side + " " + e[side].place] || 0) + 1;
+    for (const r of e.register ? e.register.rule : []) registered[r] = (registered[r] || 0) + 1;
+  }
   log("pictures placed by: " + (Object.keys(placed).map((k) => k + " " + placed[k]).join(", ") || "none"));
+  log("pictures registered by (per axis): " + (Object.keys(registered).map((k) => k + " " + registered[k]).join(", ") || "none"));
   log("settings: " + JSON.stringify(S));
   log("audit: " + file);
   log("verdict: node tools/m1-accept.mjs " + JSON.stringify(runDir) + " --audit " + JSON.stringify(file));

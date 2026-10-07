@@ -233,8 +233,9 @@ export const SCRIPTS = Object.freeze({
       "return { n: by.length, d: b64(by), w: node.width, h: node.height };"].join(NL);
   },
   // The render audit's picture of one node (tools/ir-audit.mjs, docs/M1.md §16): a PNG at the scale
-  // the audit gives both engines, with the node's size, type and opacity (Pixso's export leaves its
-  // own opacity out, §15.11), its box and, when Pixso has them, the bounds of what it draws.
+  // the audit gives both engines, with the node's size, type and opacity (Pixso's export applies its
+  // own opacity, as Figma's does, §16.2), its box and, when Pixso has them, the bounds of what it draws.
+  // A node that draws nothing exports 0 bytes (n 0, d ""), which the audit reads as an answer.
   auditRender(guid, opts) {
     const scale = opts && opts.scale;
     need(GUID.test(guid), "a guid");

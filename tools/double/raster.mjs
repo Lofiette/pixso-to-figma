@@ -13,9 +13,10 @@
 // tree   { abs: [[a, b, tx], [c, d, ty]] (absolute), type, w, h, opacity, visible, clips, fills, children }
 //        fills: [{ type, color: { r, g, b }, opacity, visible }]; only visible SOLID paints draw
 // scale  pixels per node unit
-// ownOpacity  whether the root's own opacity is applied (Figma's export: yes; Pixso's: no, docs/M1.md
-//        §15.11). It is applied as a group opacity: the subtree is drawn whole, then its alpha scaled.
-//        A descendant's opacity scales each of its paints (the same rule on both sides).
+// ownOpacity  whether the root's own opacity is applied (Figma's export and Pixso's both apply it,
+//        docs/M1.md §16.2; §15.11 had read Pixso's picture as opaque). It is applied as a group opacity:
+//        the subtree is drawn whole, then its alpha scaled. A descendant's opacity scales each of its
+//        paints (the same rule on both sides).
 // margin node units of empty space around the root's box on every side (a model of Figma's wider
 //        margin around an exported SECTION, §15.11: that it is wider is measured, how much is not)
 import { encodePNG } from "../pngutil.mjs";

@@ -9,13 +9,15 @@
 // through the real generated dist/code.js and its RENDER "export" on the double (whose exportAsync draws
 // with the toy rasteriser, tools/double/raster.mjs, applying a node's own opacity and a section's wider
 // margin, as Figma does), and in "Pixso" through the fake Pixso (tools/test/fake-pixso.mjs), which draws
-// the IR with the same rasteriser the way Pixso exports: the node's own opacity left out, no margin, an
-// instance drawn as its content. What it proves:
-//   - the clean run: every root ok, the placeholder roots left to G11, and m1-accept reads PASS with it;
+// the IR with the same rasteriser the way Pixso exports: with the node's own opacity (as Figma does,
+// docs/M1.md §16.2), no margin, an instance drawn as its content. What it proves:
+//   - the clean run: every root that draws something is ok, every root the toy rasteriser draws nothing
+//     for (a text, a vector) is not compared, the placeholder roots are left to G11; with the first
+//     pass's --blank compare every root is ok and m1-accept reads PASS;
 //   - a planted colour difference fails, and m1-accept reads FAIL (audit);
 //   - a placeholder's region is masked (with --placeholders compare the same root fails);
-//   - a 32 % opacity root passes (undone in Figma's picture, or applied to Pixso's; compared raw it
-//     would fail);
+//   - a 32 % opacity root passes, its opacity undone in both pictures (the first pass's one-sided rules
+//     fail it now that Pixso's picture carries the opacity too);
 //   - a section's margin passes when cropped to its box, and child by child (compared as it comes, it
 //     fails on size);
 //   - a missing render fails, in Figma and in Pixso, and never counts as ok; a root its masks cover whole
@@ -25,7 +27,14 @@
 //   - a second pass keeps the roots already ok; the RENDER export refuses another snapshot's copy;
 //   - the verdict: a root not compared covers nothing and fails nothing, INSTANCE roots are not required;
 //   - a root whose verify is not done, or whose verified node is gone while an earlier run's copy is in
-//     the file, is a missing render; a section's children pair by index only when the counts match.
+//     the file, is a missing render; a section's children pair by index only when the counts match;
+//   - what the first live pass taught the audit (§16.2), each on pictures drawn here and handed to
+//     auditRun directly: pictures registered in the node's box frame (an arrow connector whose cap
+//     reaches further in Figma, an instance drawn beyond its box); a root neither engine draws, and
+//     Pixso's empty export, not compared; a root under a hidden ancestor not compared and not
+//     rendered; a placeholder masked by what its master draws; a text with invalid stored glyphs in its
+//     own class; a 1-device-pixel line on a pixel boundary compared by its two-row band, and every
+//     real stroke difference there still failing. Each fails under the first pass's settings.
 // Everything is synthetic, and everything written goes to the system's temporary folder.
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -51,7 +60,8 @@ import { sampleGuids } from "./ir/identity.mjs";
 import { SCRIPTS, assertReadOnlyScript, makeMcpClient, readOnlyProblems } from "./ir/mcp-readonly.mjs";
 import { IDENTITY_SCRIPT } from "./extract-lib.mjs";
 import { fakePixso } from "./test/fake-pixso.mjs";
-import { AUDIT_SETTINGS, auditRoots, comparePictures, defaultAuditSettings, parseAuditArgs, placeBox, scaleAlpha } from "./ir/render-audit.mjs";
+import { AUDIT_SETTINGS, GLYPH_NOTE_CODES, auditRoots, auditRun, comparePictures, defaultAuditSettings, guidIndex, parseAuditArgs, placeBox, placeholderBoxes, scaleAlpha } from "./ir/render-audit.mjs";
+import { CODE } from "./ir/schema.mjs";
 import { auditFolder, main as auditMain, readRun } from "./ir-audit.mjs";
 import { decodePNG } from "./pngutil.mjs";
 
@@ -192,16 +202,18 @@ function pixsoNode(i) {
         const cs = [[0, 0], [dw, 0], [0, dh], [dw, dh]].map(([x, y]) => [at[0] * x + at[1] * y + at[2], at[3] * x + at[4] * y + at[5]]);
         const rx = Math.min(...cs.map((q) => q[0])), ry = Math.min(...cs.map((q) => q[1]));
         const render = { x: rx, y: ry, width: Math.max(...cs.map((q) => q[0])) - rx, height: Math.max(...cs.map((q) => q[1])) - ry };
-        const png = pngOf(rasterize({ abs: to2(at), type: r.type, w: dw, h: dh, fills: [], children: [] }, { scale, ownOpacity: false, margin: 0 }));
+        const png = pngOf(rasterize({ abs: to2(at), type: r.type, w: dw, h: dh, opacity: r.props.opacity, fills: [], children: [] }, { scale, ownOpacity: true, margin: 0 }));
         const bs = [[0, 0], [t.w, 0], [0, t.h], [t.w, t.h]].map(([x, y]) => [abs[0] * x + abs[1] * y + abs[2], abs[3] * x + abs[4] * y + abs[5]]);
         const bx = Math.min(...bs.map((q) => q[0])), by = Math.min(...bs.map((q) => q[1]));
         const box = { x: bx, y: by, width: Math.max(...bs.map((q) => q[0])) - bx, height: Math.max(...bs.map((q) => q[1])) - by };
-        return { w: t.w, h: t.h, type: r.type, opacity: 1, box, render, n: png.length, d: png.toString("base64") };
+        return { w: t.w, h: t.h, type: r.type, opacity: typeof r.props.opacity === "number" ? r.props.opacity : 1, box, render, n: png.length, d: png.toString("base64") };
       }
       const xs = [[0, 0], [t.w, 0], [0, t.h], [t.w, t.h]].map(([x, y]) => [abs[0] * x + abs[1] * y + abs[2], abs[3] * x + abs[4] * y + abs[5]]);
       const x0 = Math.min(...xs.map((q) => q[0])), y0 = Math.min(...xs.map((q) => q[1]));
       const box = { x: x0, y: y0, width: Math.max(...xs.map((q) => q[0])) - x0, height: Math.max(...xs.map((q) => q[1])) - y0 };
-      const png = pngOf(rasterize(t, { scale, ownOpacity: false, margin: 0 }));
+      // Pixso's export carries the node's own opacity, as Figma's does (§16.2: max alpha 51 = 0.2 × 255
+      // on both sides of the U audit's roots at 0.2); this fake left it out until then.
+      const png = pngOf(rasterize(t, { scale, ownOpacity: true, margin: 0 }));
       return { w: t.w, h: t.h, type: r.type, opacity: typeof r.props.opacity === "number" ? r.props.opacity : 1, box, render: null, n: png.length, d: png.toString("base64") };
     } };
 }
@@ -240,8 +252,10 @@ const rootOf = (res, i) => res.audit.roots.find((e) => e.i === i);
 // ============================================================================================
 {
   const d = defaultAuditSettings();
-  check(d.maxSide === 800 && d.ink === 191 && d.grossMax === 0.01 && d.meanMax === 5 && d.section === "crop" && d.placeholders === "mask" && d.opacity === "undo" &&
-    d.sizeTol === 1 && d.tileMeanMax === 0 && Object.keys(AUDIT_SETTINGS).every((f) => AUDIT_SETTINGS[f][2] !== undefined),
+  check(d.maxSide === 800 && d.ink === 191 && d.grossMax === 0.01 && d.meanMax === 5 && d.section === "crop" && d.placeholders === "mask" && d.opacity === "both" &&
+    d.sizeTol === 1 && d.tileMeanMax === 0 && d.register === "bounds" && d.registerFitPx === 4 && d.sizeBy === "drawn" && d.drawnAlpha === 16 &&
+    d.placeholderExtent === "drawn" && d.glyphNotes === "mask" && d.hairlines === "band" && d.blank === "not-compared" && d.hiddenInSource === "skip" &&
+    Object.keys(AUDIT_SETTINGS).every((f) => AUDIT_SETTINGS[f][2] !== undefined),
     "every policy is a setting with a stated default (" + Object.keys(AUDIT_SETTINGS).length + " settings)");
   let refused = 0;
   for (const bad of [["x", "--section", "middle"], ["x", "--gross-max", "2"], ["x", "--max-side", "nope"], ["x", "--accept-identity-mismatch"], ["x", "--wat"], []]) {
@@ -294,10 +308,23 @@ let CLEAN;
   const mcp = makeMcpClient({ dir: join(SCRATCH, "mcp-clean"), url: PX.url });
   CLEAN = await auditOf(GOOD, { mcp, figmaExport: FIG.exportJob });
   const A = CLEAN.audit;
-  const notOk = A ? A.roots.filter((e) => e.ok !== true) : [];
-  check(CLEAN.code === 0 && A && A.counts.failed === 0 && A.counts.notCompared === 0 && notOk.length === 0,
-    "the clean run, through the real Pixso channel: every root is ok (" + (A ? A.counts.ok : 0) + " of " + (A ? A.counts.roots : 0) + ")",
-    show(notOk.map((e) => [e.i, e.type, e.why])) + " " + quietLog.slice(-5).join(" | "));
+  // The toy rasteriser draws no text, path or line: a root holding only those draws nothing in either
+  // engine, and is not compared (two blank pictures prove nothing).
+  const blank = A ? A.roots.filter((e) => e.ok === null) : [];
+  const notOk = A ? A.roots.filter((e) => e.ok !== true && !(e.ok === null && e.class === "blank" && /^not compared: neither engine draws anything/.test(e.why))) : [];
+  check(CLEAN.code === 2 && A && A.counts.failed === 0 && A.counts.notCompared === blank.length && A.counts.blank === blank.length && blank.length > 0 && notOk.length === 0 &&
+    A.counts.ok + A.counts.blank === A.counts.roots,
+    "the clean run, through the real Pixso channel: every root that draws is ok (" + (A ? A.counts.ok : 0) + " of " + (A ? A.counts.roots : 0) + "), the " +
+    blank.length + " that draw nothing in either engine are not compared", show(notOk.map((e) => [e.i, e.type, e.why])) + " " + quietLog.slice(-5).join(" | "));
+  const accB = accept(GOOD.runDir, { audit: A });
+  check(/^BUILT, NOT VISUALLY AUDITED/.test(accB.gates.verdict) && new RegExp(blank.length + " not compared").test(accB.gates.auditLine),
+    "m1-accept with it reads BUILT, NOT VISUALLY AUDITED: a root not compared covers nothing", accB.gates.verdict + " | " + accB.gates.auditLine);
+  PX.scripts.length = 0;
+  // The first pass's rule kept: two blank pictures compare equal, every root is ok, and PASS reads.
+  CLEAN = await auditOf(GOOD, { mcp, figmaExport: FIG.exportJob }, ["--blank", "compare"]);
+  const B = CLEAN.audit;
+  check(CLEAN.code === 0 && B && B.counts.failed === 0 && B.counts.notCompared === 0 && B.counts.ok === B.counts.roots,
+    "with --blank compare (the first pass's rule) every root is ok (" + (B ? B.counts.ok : 0) + " of " + (B ? B.counts.roots : 0) + ")", show(B && B.counts));
   check(PX.scripts.every((s) => readOnlyProblems(s).length === 0) && PX.scripts.some((s) => s.indexOf("// px:audit-render") === 0) &&
     PX.scripts.findIndex((s) => s.indexOf("px:identity") >= 0) < PX.scripts.findIndex((s) => s.indexOf("// px:audit-render") === 0),
     "every script Pixso received is read-only, and the identity check came before the first render");
@@ -309,11 +336,13 @@ let CLEAN;
     "the audit is version 2 and names its run: snapshot, runId and each root's guid; audit.json and roots.jsonl are in the run folder");
   const acc = accept(GOOD.runDir, { audit: JSON.parse(readFileSync(join(GOOD.runDir, "audit", "audit.json"), "utf8")) });
   check(/^PASS/.test(acc.gates.verdict) && /placeholder roots left to G11/.test(acc.gates.auditLine),
-    "m1-accept with this audit reads PASS: every built root covered, the placeholder roots left to G11", acc.gates.verdict + " | " + acc.gates.auditLine);
+    "m1-accept with that audit reads PASS: every built root covered, the placeholder roots left to G11", acc.gates.verdict + " | " + acc.gates.auditLine);
+  CLEAN = await auditOf(GOOD, { mcp: localPixso(), figmaExport: FIG.exportJob });
 
   const r8 = rootOf(CLEAN, 8);
-  check(r8 && r8.ok === true && r8.compared && r8.opacity.value === 0.32 && r8.opacity.rule === "undone in Figma's picture" && r8.metrics.mean === 0,
-    "a root at 32 % opacity passes: Figma's picture has it, Pixso's does not, and the audit undoes it in Figma's", show(r8));
+  check(r8 && r8.ok === true && r8.compared && r8.opacity.value === 0.32 && r8.opacity.rule === "undone in both pictures" && r8.metrics.mean === 0 &&
+    r8.opacity.maxAlpha.figma === 82 && r8.opacity.maxAlpha.pixso === 82 && r8.opacity.maxAlpha.atOpacity === 82,
+    "a root at 32 % opacity passes: both engines export it at its opacity (max alpha 82 on both sides), and the audit undoes it in both", show(r8 && r8.opacity));
   const r2 = rootOf(CLEAN, 2);
   check(r2 && r2.ok === true && r2.masks.placeholders === 1 && r2.masks.maskedShare > 0 && r2.metrics.gross === 0,
     "a placeholder's region is masked out of both pictures (" + (r2 ? (r2.masks.maskedShare * 100).toFixed(2) : "?") + " % of the root) and the root passes", show(r2));
@@ -333,16 +362,30 @@ const LP = localPixso();
   const r2 = rootOf(cmp, 2);
   check(r2 && r2.ok === false && r2.compared && /ink on one side|mean/.test(r2.why || ""),
     "with --placeholders compare the placeholder's root fails: Pixso draws the instance, Figma an empty frame", show(r2 && [r2.why, r2.metrics]));
-  const none = await auditOf(GOOD, { mcp: LP, figmaExport: FIG.exportJob }, ["--section", "none"]);
+  const none = await auditOf(GOOD, { mcp: LP, figmaExport: FIG.exportJob }, ["--section", "none", "--register", "top-left", "--size-by", "picture"]);
   const s0 = rootOf(none, 50);
-  check(s0 && s0.ok === false && /differ in size/.test(s0.why || ""), "with --section none the section fails on its margin", show(s0 && s0.why));
+  const noneR = await auditOf(GOOD, { mcp: LP, figmaExport: FIG.exportJob }, ["--section", "none"]);
+  const s0r = rootOf(noneR, 50);
+  check(s0 && s0.ok === false && /differ in size/.test(s0.why || "") && s0r && s0r.ok === true && s0r.register.offset.join() === "5,5",
+    "with --section none the section fails on its margin under the first pass's top-left registration and picture sizes; registered, its empty margin is no difference",
+    show([s0 && s0.why, s0r && [s0r.why, s0r.register]]));
   const kids = await auditOf(GOOD, { mcp: LP, figmaExport: FIG.exportJob }, ["--section", "children"]);
   const s1 = rootOf(kids, 50);
   check(s1 && s1.ok === true && Array.isArray(s1.children) && s1.children.length === 1 && s1.children[0].i === 51 && s1.children[0].ok === true && /own fill is not compared/.test(s1.section),
     "with --section children the section passes child by child, and says its own fill is not compared", show(s1 && s1.children));
+  // The first pass's rules assumed Pixso's picture opaque: undoing the opacity in Figma's picture only
+  // fails the root (as it failed the U audit's 3 roots at 0.2), and applying it again to Pixso's makes
+  // the pictures differ (at this low contrast, under the threshold).
+  const undo = await auditOf(GOOD, { mcp: LP, figmaExport: FIG.exportJob }, ["--opacity", "undo"]);
+  const u8 = rootOf(undo, 8);
   const apply = await auditOf(GOOD, { mcp: LP, figmaExport: FIG.exportJob }, ["--opacity", "apply"]);
   const a8 = rootOf(apply, 8);
-  check(a8 && a8.ok === true && a8.opacity.rule === "applied to Pixso's picture", "with --opacity apply the 32 % root passes too, the opacity applied to Pixso's picture", show(a8 && a8.opacity));
+  const raw = await auditOf(GOOD, { mcp: LP, figmaExport: FIG.exportJob }, ["--opacity", "none"]);
+  const n8 = rootOf(raw, 8);
+  check(u8 && u8.ok === false && u8.opacity.rule === "undone in Figma's picture" && a8 && a8.metrics.mean > 0 && a8.opacity.rule === "applied to Pixso's picture" &&
+    n8 && n8.ok === true && n8.metrics.mean === 0 && n8.opacity.rule === "compared as exported",
+    "the first pass's one-sided rules make the 32 % root's pictures differ (--opacity undo fails it: " + (u8 && u8.why) + "); --opacity none compares them as exported",
+    show([u8 && u8.why, a8 && a8.metrics, n8 && n8.opacity]));
   // Root 2 holds an image the archive does not hold: Figma drew the grey IMAGE_PLACEHOLDER paint.
   const tight = await auditOf(GOOD, { mcp: LP, figmaExport: FIG.exportJob }, ["--mean-max", "0.1"]);
   const t2 = rootOf(tight, 2);
@@ -351,10 +394,10 @@ const LP = localPixso();
   check(t2 && t2.ok === false && t2.masks.imagePlaceholders === 1 && /IMAGE_PLACEHOLDER/.test(t2.why) && m2 && m2.ok === true && m2.masks.masked === 2 && m2.metrics.mean === 0,
     "an image the run could not carry differs by default and the root says it holds an IMAGE_PLACEHOLDER; --image-placeholders mask leaves it out", show([t2 && t2.why, m2 && m2.masks]));
   // A mask that covers the whole root leaves nothing to compare: not compared, never ok.
-  const all = await auditOf(GOOD, { mcp: LP, figmaExport: FIG.exportJob }, ["--mask-pad", "1000"]);
+  const all = await auditOf(GOOD, { mcp: LP, figmaExport: FIG.exportJob }, ["--mask-pad", "1000", "--blank", "compare"]);
   const n2 = rootOf(all, 2);
   const accN = accept(GOOD.runDir, { audit: all.audit });
-  check(all.code === 2 && n2 && n2.ok === null && !n2.compared && /not compared/.test(n2.why) && all.audit.counts.notCompared === 1 &&
+  check(all.code === 2 && n2 && n2.ok === null && !n2.compared && n2.class === "masked" && /not compared/.test(n2.why) && all.audit.counts.notCompared === 1 &&
     /^BUILT, NOT VISUALLY AUDITED/.test(accN.gates.verdict) && /1 not compared/.test(accN.gates.auditLine),
     "a root its masks cover whole is not compared (ok null, never true): the verdict stays BUILT, NOT VISUALLY AUDITED", show([n2 && n2.why, accN.gates.auditLine]));
   const sc = await auditOf(GOOD, { mcp: LP, figmaExport: FIG.exportJob }, ["--max-side", "100"]);
@@ -370,7 +413,7 @@ const LP = localPixso();
   BAD.nodeOf(20).fills = [{ type: "SOLID", visible: true, opacity: 1, blendMode: "NORMAL", color: { r: 0.1, g: 0.1, b: 0.9 } }];
   const res = await auditOf(BAD, { mcp: LP, figmaExport: figmaHost(BAD.D).exportJob });
   const r19 = rootOf(res, 19);
-  const others = res.audit.roots.filter((e) => e.i !== 19 && e.ok !== true);
+  const others = res.audit.roots.filter((e) => e.i !== 19 && e.ok === false);
   check(res.code === 3 && r19 && r19.ok === false && r19.compared && /ink on one side|mean/.test(r19.why || "") && !others.length,
     "a rectangle painted another colour in Figma after the build fails its root (" + (r19 ? r19.why : "?") + "), and only that root", show(others.map((e) => [e.i, e.why])));
   check(existsSync(join(BAD.runDir, "audit", "pictures", "19.figma.png")) && existsSync(join(BAD.runDir, "audit", "pictures", "19.pixso.png")) &&
@@ -424,7 +467,7 @@ const LP = localPixso();
   check(code === 1 && said.some((l) => /Pixso is not reachable/.test(l)) && !said.some((l) => /plugin build|Код/.test(l)) && !existsSync(join(GOOD.runDir, "audit", "audit.json")),
     "tools/ir-audit.mjs with Pixso away stops before the plugin session is opened, and writes no audit", said.join(" | "));
   const go = await auditOf(GOOD, { mcp: P3, figmaExport: FIG.exportJob }, ["--accept-identity-mismatch", "renamed nodes"]);
-  check(go.code === 0 && go.audit.identity.code === "SOURCE_IDENTITY_MISMATCH" && go.audit.identity.accepted === "renamed nodes" && /root name differs/.test(go.audit.identity.detail),
+  check(go.code === 2 && go.audit.counts.failed === 0 && go.audit.identity.code === "SOURCE_IDENTITY_MISMATCH" && go.audit.identity.accepted === "renamed nodes" && /root name differs/.test(go.audit.identity.detail),
     "--accept-identity-mismatch goes on and records the difference and the reason in the audit", show(go.audit && go.audit.identity));
 }
 
@@ -476,10 +519,13 @@ const LP = localPixso();
   const again = await auditFolder(GOOD.runDir, o, { mcp: LP, figmaExport: FIG.exportJob, log: qlog });
   const n1 = FIG.calls();
   const fresh = await auditFolder(GOOD.runDir, Object.assign({}, o, { fresh: true }), { mcp: LP, figmaExport: FIG.exportJob, log: qlog });
-  check(again.code === 0 && n1 === n0 && fresh.code === 0 && FIG.calls() - n1 === fresh.audit.counts.roots,
-    "a second pass keeps every root already ok under the same settings and run (no render); --fresh renders them all again");
+  // Only a root that was ok is kept: the ones not compared are rendered again.
+  const nc = again.audit ? again.audit.counts.notCompared : -1;
+  check(again.code === 2 && nc > 0 && n1 - n0 === nc && fresh.code === 2 && FIG.calls() - n1 === fresh.audit.counts.roots,
+    "a second pass keeps every root already ok under the same settings and run (no render; the " + nc + " not compared are rendered again); --fresh renders them all again");
+  const n2 = FIG.calls();
   const other = await auditFolder(GOOD.runDir, parseAuditArgs([GOOD.runDir, "--mean-max", "4"]), { mcp: LP, figmaExport: FIG.exportJob, log: qlog });
-  check(other.code === 0 && FIG.calls() - n1 - fresh.audit.counts.roots === other.audit.counts.roots, "a pass under another threshold renders every root again");
+  check(other.code === 2 && FIG.calls() - n2 === other.audit.counts.roots, "a pass under another threshold renders every root again");
 
   const r = rootOf(CLEAN, 19);
   const wrong = await FIG.exportJob({ op: "export", id: r.figma.id, src: r.guid, snap: "0".repeat(16), constraint: { type: "SCALE", value: 1 } });
@@ -625,6 +671,217 @@ const LP = localPixso();
     try { decodePNG(png); refused.push(what + ": decoded"); } catch (e) { if (!/depth|PLTE|palette|CRC|colour/.test(e.message)) refused.push(what + ": " + e.message); }
   }
   check(refused.length === 0, "a PNG the standard does not allow, an indexed PNG without a palette, and an index past the palette are refused with a reason", show(refused));
+}
+
+// ============================================================================================
+// 10. what the first live pass taught the audit (docs/M1.md §16.2)
+// ============================================================================================
+// Each case is a small IR and two pictures drawn here, handed to auditRun directly: "Figma" and "Pixso"
+// answer as the plugin's export and the read-only script do (a PNG, the box, the render bounds when the
+// engine has them, the opacity). A picture is drawn from rectangles with box-filter coverage, so an
+// edge at a fraction of a pixel is anti-aliased, and it starts at what it draws, as both engines'
+// exports do. Every case is also run under the first pass's settings, where it fails.
+{
+  const OLD = ["--register", "top-left", "--size-by", "picture", "--placeholder-extent", "box", "--opacity", "undo", "--blank", "compare",
+    "--hidden-in-source", "compare", "--glyph-notes", "compare", "--hairlines", "pixel"];
+  const art = (W, H, rects) => {
+    const rgba = Buffer.alloc(W * H * 4);
+    for (const q of rects || []) {
+      const [x0, y0, x1, y1] = q.box, c = q.c || [30, 30, 30], a = q.a === undefined ? 1 : q.a;
+      for (let y = Math.max(0, Math.floor(y0)); y < Math.min(H, Math.ceil(y1)); y++) {
+        const cy = Math.min(y + 1, y1) - Math.max(y, y0);
+        for (let x = Math.max(0, Math.floor(x0)); x < Math.min(W, Math.ceil(x1)); x++) {
+          const al = (Math.min(x + 1, x1) - Math.max(x, x0)) * cy * a;
+          if (al <= 0) continue;
+          const k = (y * W + x) * 4, da = rgba[k + 3] / 255, oa = al + da * (1 - al);
+          for (let ch = 0; ch < 3; ch++) rgba[k + ch] = Math.round((c[ch] * al + rgba[k + ch] * da * (1 - al)) / oa);
+          rgba[k + 3] = Math.round(oa * 255);
+        }
+      }
+    }
+    return { W, H, rgba };
+  };
+  let gs = 0;
+  const rec = (parent, type, w, h, x, y, props, extra) => Object.assign({ parent, guid: "9:" + (++gs), type, name: type,
+    props: Object.assign({ relativeTransform: [1, 0, x, 0, 1, y], width: w, height: h }, props || {}) }, extra || {});
+  // F, P: { record index: { img, box, render, opacity } }; P's { empty: true } is Pixso's 0-byte export.
+  const unit = async (ir, roots, F, P, args, more) => {
+    const S = parseAuditArgs(["unit"].concat(args || [])).settings;
+    const states = { snapshot: "5".repeat(16), runId: RUN, tasks: [{ op: "build", taskNo: 1, roots }, { op: "verify", taskNo: 2, state: "built", build: 1 }] };
+    const reports = new Map([[2, { taskNo: 2, roots: roots.map((i) => ({ i, found: true, id: "u:" + i })) }]]);
+    const byGuid = new Map(ir.nodes.map((r, i) => [r.guid, i]));
+    const calls = { figma: 0, pixso: 0 };
+    const A = await auditRun(Object.assign({ states, ir, reports, builds: new Map(), settings: S,
+      figmaExport: async (job) => {
+        calls.figma++;
+        const i = byGuid.get(job.src), f = F[i], r = ir.nodes[i], png = pngOf(f.img);
+        return { w: r.props.width, h: r.props.height, type: r.type, opacity: f.opacity === undefined ? 1 : f.opacity, box: f.box, render: f.render || null, bytes: png.length, d: png.toString("base64") };
+      },
+      pixsoRender: async (guid) => {
+        calls.pixso++;
+        const i = byGuid.get(guid), p = P[i], r = ir.nodes[i];
+        const head = { w: r.props.width, h: r.props.height, type: r.type, opacity: p.opacity === undefined ? 1 : p.opacity, box: p.box, render: p.render || null };
+        if (p.empty) return { ok: true, value: Object.assign(head, { n: 0, d: "" }) };
+        const png = pngOf(p.img);
+        return { ok: true, value: Object.assign(head, { n: png.length, d: png.toString("base64") }) };
+      } }, more || {}));
+    return { A, calls, e: (i) => A.roots.find((x) => x.i === i) };
+  };
+  const BLUE = [23, 120, 234], DARK = [30, 30, 30];
+  // A condition (or a value for a message) that reads a field the first pass did not write is false
+  // (undefined), not a crash: the checks run on the first pass's code as well.
+  const holds = (f) => { try { return !!f(); } catch (err) { return false; } };
+  const val = (f) => { try { return f(); } catch (err) { return undefined; } };
+  const blank1 = art(1, 1, []);
+
+  // C20. An arrow connector (the U audit's 32): a 2 px shaft whose ARROW_LINES cap reaches 7.4 px from it
+  // in Figma and 6.66 px in Pixso, so the pictures, each starting at what it draws, are 15 and 14 px
+  // across the line and the shaft lies 0.74 px apart in them. Figma reports render bounds, Pixso none.
+  {
+    const ir = { nodes: [rec(-1, "VECTOR", 100, 0, 0, 50)], values: [], notes: [] };
+    const arrow = (reach) => art(100, Math.ceil(reach * 2), [{ box: [0, reach - 1, 100, reach + 1] }, { box: [96, 0, 100, reach * 2] }]);
+    const box = { x: 0, y: 50, width: 100, height: 0 };
+    const F = { 0: { img: arrow(7.4), box, render: { x: 0, y: 50 - 7.4, width: 100, height: 14.8 } } };
+    const P = { 0: { img: arrow(6.66), box } };
+    const now = await unit(ir, [0], F, P), old = await unit(ir, [0], F, P, ["--register", "top-left"]);
+    const e = now.e(0), o = old.e(0);
+    check(holds(() => e.ok === true && e.register.rule.join() === "same extent,fitted" && Math.abs(e.register.offset[1] - 0.74) <= 0.15 && o.ok === false && o.metrics.mean > 5),
+      "an arrow connector whose cap reaches 7.4 px in Figma and 6.66 in Pixso passes registered (offset found " + val(() => e.register.offset[1]) + " px, mean " +
+      val(() => e.metrics.mean) + "); aligned at the top left it fails (mean " + val(() => o.metrics.mean) + ")", show([e.register, e.metrics, o.why]));
+    const P2 = { 0: { img: arrow(6.66), box, render: { x: 0, y: 50 - 6.66, width: 100, height: 13.32 } } };
+    const r = (await unit(ir, [0], F, P2)).e(0);
+    check(holds(() => r.ok === true && r.register.rule.join() === "render bounds,render bounds" && r.register.offset.join() === "0,0.74"),
+      "with render bounds from both engines the offset is theirs, not searched (0.74 px)", show(r.register));
+    const far = (await unit(ir, [0], F, P, ["--register-fit-px", "0"])).e(0);
+    check(holds(() => far.register.rule[1] === "placed (render bounds, centred (guessed))" && Math.abs(far.register.offset[1] - (7.4 - 7)) < 1e-6),
+      "with --register-fit-px 0 nothing is searched: each picture is placed by its own rule (Pixso's centred, recorded so)", show(far.register));
+  }
+
+  // C20 and C25 together (one root of the U audit): Pixso draws the instance's dot 1 px above its box
+  // and its star 2 px below, its picture 3 rows taller and starting 1 row higher; Figma's placeholder is
+  // an empty frame. The instance is masked by what its master draws, and the pictures registered.
+  {
+    const nodes = [rec(-1, "COMPONENT", 60, 20, 0, 0), null, rec(0, "RECTANGLE", 20, 10, 32, 5), rec(-1, "COMPONENT", 20, 20, 0, 100, { clipsContent: false }),
+      null, null];
+    nodes[1] = rec(0, "INSTANCE", 20, 20, 0, 0, {}, { instance: { master: { guid: nodes[3].guid } } });
+    nodes[4] = rec(3, "ELLIPSE", 4, 4, 14, -1);
+    nodes[5] = rec(3, "RECTANGLE", 6, 3, 2, 19);
+    const ir = { nodes, values: [], notes: [] };
+    const box = { x: 0, y: 0, width: 60, height: 20 };
+    const F = { 0: { img: art(60, 20, [{ box: [32, 5, 52, 15], c: BLUE }]), box, render: box } };
+    const P = { 0: { img: art(60, 23, [{ box: [32, 6, 52, 16], c: BLUE }, { box: [0, 1, 20, 21], c: [200, 200, 200] }, { box: [14, 0, 18, 4], c: [220, 30, 30] }, { box: [2, 20, 8, 23] }]), box } };
+    const e = (await unit(ir, [0], F, P)).e(0), o = (await unit(ir, [0], F, P, OLD)).e(0);
+    check(holds(() => e.ok === true && e.masks.overflow === 1 && e.register.offset[1] === -1 && e.metrics.mean < 1 && o.ok === false && /differ in size/.test(o.why)),
+      "an instance Pixso draws beyond its box (1 px above, 2 below) is masked by what its master draws, and the pictures registered 1 row apart: ok (mean " +
+      val(() => e.metrics.mean) + "); under the first pass's settings it fails (" + (o.why || "").slice(0, 80) + ")", show([e.register, e.masks, e.metrics, o.why]));
+  }
+
+  // C25. The verifier's case: a 100x20 instance in a clipping 200x300 frame, its master not clipping and
+  // holding an ABSOLUTE 100x200 child 24 below its top, which casts a 4 px shadow 4 px down; Pixso draws
+  // the child (a drop-down) and its shadow, Figma's placeholder nothing.
+  {
+    const nodes = [rec(-1, "FRAME", 200, 300, 0, 0, { clipsContent: true }), null, rec(-1, "COMPONENT", 100, 20, 0, 500, { clipsContent: false }), null];
+    nodes[1] = rec(0, "INSTANCE", 100, 20, 10, 10, {}, { instance: { master: { guid: nodes[2].guid } } });
+    nodes[3] = rec(2, "FRAME", 100, 200, 0, 24, { effects: 0 });
+    const ir = { nodes, values: [[{ type: "DROP_SHADOW", visible: true, radius: 4, spread: 0, offset: { x: 0, y: 4 } }]], notes: [] };
+    const box = { x: 0, y: 0, width: 200, height: 300 };
+    const white = { box: [0, 0, 200, 300], c: [255, 255, 255] };
+    const F = { 0: { img: art(200, 300, [white]), box, render: box } };
+    const P = { 0: { img: art(200, 300, [white, { box: [10, 10, 110, 30], c: [200, 200, 200] }, { box: [10, 34, 110, 234], c: DARK }, { box: [6, 234, 114, 242], c: DARK, a: 0.3 }]), box } };
+    const pb = placeholderBoxes(ir, 0, null, new Set(), { drawn: true, byGuid: guidIndex(ir), memo: new Map() });
+    const e = (await unit(ir, [0], F, P)).e(0), o = (await unit(ir, [0], F, P, ["--placeholder-extent", "box"])).e(0);
+    check(holds(() => show(pb.instances) === show([[6, 10, 114, 242]]) && pb.overflow === 1 && e.ok === true && e.masks.overflow === 1 && e.masks.maskedShare > 0.4 &&
+      o.ok === false && o.masks.overflow === 0),
+      "a placeholder is masked by what its master draws: an ABSOLUTE child 24 below and its shadow make [6, 10, 114, 242] of a 100x20 box, " +
+      (val(() => e.masks.maskedShare) * 100).toFixed(1) + " % of the root masked, and the root passes; masked by its box (--placeholder-extent box) it fails",
+      show([pb, e.masks, o.why]));
+    // A resized instance takes its master's overflow, not its master's size; a clipping frame cuts it.
+    const n2 = [rec(-1, "FRAME", 200, 100, 0, 0, { clipsContent: false }), null, rec(-1, "COMPONENT", 100, 40, 0, 500, { clipsContent: true }), rec(2, "RECTANGLE", 100, 60, 0, 0),
+      rec(0, "FRAME", 120, 30, 0, 50, { clipsContent: true }), null, rec(-1, "COMPONENT", 50, 10, 0, 600, { clipsContent: false }), rec(6, "RECTANGLE", 50, 40, 0, 0)];
+    n2[1] = rec(0, "INSTANCE", 100, 10, 0, 0, {}, { instance: { master: { guid: n2[2].guid } } });
+    n2[5] = rec(4, "INSTANCE", 50, 10, 5, 5, {}, { instance: { master: { guid: n2[6].guid } } });
+    const ir2 = { nodes: n2, values: [], notes: [] };
+    const pb2 = placeholderBoxes(ir2, 0, null, new Set(), { drawn: true, byGuid: guidIndex(ir2), memo: new Map() });
+    check(holds(() => show(pb2.instances) === show([[0, 0, 100, 10], [5, 55, 55, 80]]) && pb2.overflow === 1),
+      "an instance shorter than its master (which clips its taller child) is not grown; one whose master draws 30 below is cut to its clipping frame", show(pb2));
+  }
+
+  // C22, C23. Roots neither engine draws: a component at opacity 0 (Figma exports a transparent 1x1,
+  // Pixso a transparent box), a hidden text and an empty one (Pixso's export is 0 bytes).
+  {
+    const ir = { nodes: [rec(-1, "COMPONENT", 20, 20, 0, 0, { opacity: 0 }), rec(-1, "TEXT", 0, 17, 50, 0, { characters: "" }), rec(-1, "TEXT", 40, 17, 100, 0, { visible: false, characters: "x" }),
+      rec(-1, "COMPONENT", 20, 20, 150, 0), rec(-1, "TEXT", 40, 17, 200, 0, { characters: "x" })], values: [], notes: [] };
+    const b = (i) => ({ x: ir.nodes[i].props.relativeTransform[2], y: 0, width: ir.nodes[i].props.width, height: ir.nodes[i].props.height });
+    const F = { 0: { img: blank1, box: b(0), opacity: 0 }, 1: { img: blank1, box: b(1) }, 2: { img: blank1, box: b(2) }, 3: { img: blank1, box: b(3) },
+      4: { img: art(40, 17, [{ box: [2, 3, 30, 14] }]), box: b(4), render: b(4) } };
+    const P = { 0: { img: art(20, 20, []), box: b(0), opacity: 0 }, 1: { empty: true, box: b(1) }, 2: { empty: true, box: b(2) },
+      3: { img: art(20, 20, [{ box: [8, 8, 12, 12] }]), box: b(3) }, 4: { empty: true, box: b(4) } };
+    const now = await unit(ir, [0, 1, 2, 3, 4], F, P), old = await unit(ir, [0, 1, 2, 3, 4], F, P, OLD);
+    const e = now.e, o = old.e;
+    check(holds(() => [0, 1, 2].every((i) => e(i).ok === null && e(i).class === "blank" && !e(i).compared) && /its opacity is 0/.test(e(0).why) && /an empty text/.test(e(1).why) &&
+      /it is hidden/.test(e(2).why) && /Pixso's export 0 bytes/.test(e(1).why) && now.A.counts.blank === 3 && now.A.counts.notCompared === 3),
+      "a root neither engine draws (opacity 0, an empty text, a hidden text: Pixso's export 0 bytes) is not compared, with its own reason and count (" + now.A.counts.blank + ")",
+      show([0, 1, 2].map((i) => [e(i).ok, e(i).why])));
+    check(holds(() => e(3).ok === false && e(4).ok === false && /Pixso draws nothing \(its export is 0 bytes\)/.test(e(4).why) && now.A.counts.missing === 0 && !/render missing/.test(e(4).why)),
+      "a picture blank on one side only still fails, and Pixso's 0-byte export is an answer, not a missing render", show([e(3).why, e(4).why, now.A.counts]));
+    check(holds(() => o(0).ok === false && /differ in size: Figma 1x1, Pixso 20x20/.test(o(0).why) && /^pixso render missing: no picture/.test(o(1).why) && old.A.counts.missing === 3),
+      "under the first pass's settings the opacity-0 root fails on size and the empty and hidden texts as missing renders", show([o(0).why, o(1).why, old.A.counts]));
+  }
+
+  // C24. Roots under a hidden ancestor in the source (the U audit's 8 masters of a hidden component set):
+  // Pixso exports a transparent box, Figma draws the master the planner put on a page of its own.
+  {
+    const ir = { nodes: [rec(-1, "FRAME", 100, 40, 0, 0, { visible: false }), rec(0, "COMPONENT", 20, 20, 10, 10), rec(-1, "COMPONENT", 20, 20, 200, 0)], values: [], notes: [] };
+    const dot = art(20, 20, [{ box: [5, 5, 15, 15], c: BLUE }]), b = (x, y) => ({ x, y, width: 20, height: 20 });
+    const F = { 1: { img: dot, box: b(10, 10), render: b(10, 10) }, 2: { img: dot, box: b(200, 0), render: b(200, 0) } };
+    const P = { 1: { img: art(20, 20, []), box: b(10, 10) }, 2: { img: dot, box: b(200, 0) } };
+    const now = await unit(ir, [1, 2], F, P), old = await unit(ir, [1, 2], F, P, ["--hidden-in-source", "compare"]);
+    const e = now.e(1);
+    check(holds(() => e.ok === null && e.class === "hidden-in-source" && e.hiddenBy.i === 0 && /hidden in the source/.test(e.why) && now.e(2).ok === true &&
+      now.calls.figma === 1 && now.calls.pixso === 1 && now.A.counts.hiddenInSource === 1 && old.e(1).ok === false),
+      "a root under a hidden ancestor in the source is not compared and not rendered (counted: " + now.A.counts.hiddenInSource + "); its visible twin is compared; " +
+      "--hidden-in-source compare fails it (" + old.e(1).why + ")", show([e, now.calls]));
+  }
+
+  // C06. A text whose stored glyph outlines are not glyphs: Pixso draws them (here: nothing), Figma the
+  // characters. The reader's note code may not be in this vocabulary yet: the audit looks it up by name,
+  // and the case gives it the code as the text reader would write it.
+  {
+    const GLYPHS = "TEXT_GLYPHS_INVALID";
+    const ir = { nodes: [rec(-1, "FRAME", 100, 40, 0, 0), rec(0, "TEXT", 60, 20, 10, 10, { characters: "ab" })], values: [], notes: [{ code: GLYPHS, node: 1, detail: "planted" }] };
+    const box = { x: 0, y: 0, width: 100, height: 40 }, white = { box: [0, 0, 100, 40], c: [255, 255, 255] };
+    const F = { 0: { img: art(100, 40, [white, { box: [12, 13, 50, 27] }]), box, render: box } }, P = { 0: { img: art(100, 40, [white]), box } };
+    const more = { glyphNoteCodes: [GLYPHS] };
+    const m = (await unit(ir, [0], F, P, [], more)).e(0), c = await unit(ir, [0], F, P, ["--glyph-notes", "compare"], more), s = (await unit(ir, [0], F, P, ["--glyph-notes", "skip"], more)).e(0);
+    const plain = (await unit(ir, [0], F, P, [], { glyphNoteCodes: [] })).e(0);
+    check(holds(() => m.ok === true && m.masks.glyphTexts === 1 && m.glyphTexts === 1 && c.e(0).ok === false && c.e(0).class === "source-glyphs" &&
+      /stored glyph outlines are not glyphs/.test(c.e(0).why) && c.A.counts.sourceGlyphs === 1 && s.ok === null && s.class === "source-glyphs" && plain.ok === false && !plain.class &&
+      GLYPH_NOTE_CODES.every((x) => CODE[x] === x) && GLYPH_NOTE_CODES.length === (CODE[GLYPHS] ? 1 : 0)),
+      "a text with invalid stored glyphs (the reader's note) is masked and the root passes; compared, the root fails in its own class; skip does not compare it; " +
+      "without the note it is an ordinary failure (the vocabulary " + (CODE[GLYPHS] ? "has" : "does not have yet") + " the code)", show([m.masks, c.e(0).why, s.why, plain.why]));
+  }
+
+  // C16. A 1 px CENTER line at the bottom edge of a 50x20 link (the U audit's underlines): one opaque
+  // row above the boundary in Figma's 50x20, two rows at alpha 128 in Pixso's 50x21.
+  {
+    const ir = { nodes: [rec(-1, "COMPONENT", 50, 20, 0, 0), rec(0, "RECTANGLE", 40, 10, 5, 4), rec(0, "LINE", 50, 0, 0, 20, { strokeAlign: "CENTER", strokeWeight: 1, strokes: 0 })],
+      values: [[{ type: "SOLID", color: { r: 23 / 255, g: 120 / 255, b: 234 / 255 } }]], notes: [] };
+    const box = { x: 0, y: 0, width: 50, height: 20 }, text = { box: [5, 4, 45, 14], c: DARK };
+    const F = { 0: { img: art(50, 20, [text, { box: [0, 19, 50, 20], c: BLUE }]), box, render: box } };
+    const pix = (line) => ({ 0: { img: art(50, 21, [text].concat(line)), box } });
+    const half = { box: [0, 19, 50, 21], c: BLUE, a: 128 / 255 };
+    const e = (await unit(ir, [0], F, pix([half]))).e(0), px = (await unit(ir, [0], F, pix([half]), ["--hairlines", "pixel"])).e(0);
+    check(holds(() => e.ok === true && e.hairlines.found === 1 && e.hairlines.compared === 1 && e.metrics.mean < 1 && px.ok === false),
+      "a 1-device-pixel line on a pixel boundary, one crisp row in Figma and two half rows in Pixso, is compared by its two-row band and passes (mean " +
+      val(() => e.metrics.mean) + "); pixel by pixel it fails (" + px.why + ")", show([e.hairlines, e.metrics, px.why]));
+    // Everything else about the line still differs: dashes, colour, a line a whole row away, a shorter line.
+    const dashed = [0, 8, 16, 24, 32, 40].map((x) => ({ box: [x, 19, x + 4, 21], c: BLUE, a: 128 / 255 }));
+    const cases = { "dashes": dashed, "another colour": [{ box: [0, 19, 50, 21], c: [220, 30, 30], a: 128 / 255 }], "a crisp line a row lower": [{ box: [0, 20, 50, 21], c: BLUE }],
+      "a shorter line": [{ box: [0, 19, 30, 21], c: BLUE, a: 128 / 255 }] };
+    const still = [];
+    for (const k of Object.keys(cases)) { const r = (await unit(ir, [0], F, pix(cases[k]))).e(0); if (r.ok !== false) still.push(k + ": " + show([r.ok, r.metrics, r.hairlines])); }
+    check(still.length === 0, "the band hides only where the line's ink sits in it: dashes, another colour, a crisp line a row lower and a shorter line all still fail", still.join(" | "));
+  }
 }
 
 await PX.close();
