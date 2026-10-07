@@ -18,10 +18,14 @@
 // most nodes that store an align, so it, a reach of half the weight, and any other profile are
 // guesses: the type's default, counted under "guess:" (part F, review R1). With no path, or no
 // visible stroke, it is the type's default.
+//
+// A dash pattern with no gap is drawn solid by Pixso; under dashNoGap "solid" it is not written
+// (dashNoGap below). A LINE whose size has a height is turned onto the segment Pixso draws where its
+// stored stroke area says so (lineSegment below). Both docs/M1.md §15.15.
 import { CODE } from "../../ir/schema.mjs";
 import * as E from "./enums.mjs";
 import { paintsOf } from "./paints.mjs";
-import { r2, isFin, blobPolylines, insideAny, blobPointBounds, unionBox } from "./util.mjs";
+import { r2, r4, isFin, blobPolylines, insideAny, blobPointBounds, unionBox, matrixOf } from "./util.mjs";
 
 export const SIDE_FIELDS = ["borderTopWeight", "borderRightWeight", "borderBottomWeight", "borderLeftWeight"];
 export const CORNER_FIELDS = ["rectangleTopLeftCornerRadius", "rectangleTopRightCornerRadius", "rectangleBottomRightCornerRadius",
@@ -113,6 +117,52 @@ export function bandProfile(cx, n, W, w) {
   return [-w / 2, w / 2, 1.5 * w].map((y) => (insideAny(subs, W / 2, y) ? "1" : "0")).join("");
 }
 
+// Whether a dash pattern, as the IR writes it, has no gap: every gap (odd place, the pattern repeated
+// once when its length is odd) is 0. Pixso draws such a stroke solid: on every one of them (U 27, O 4:
+// [1, 0] and [1.5, 0], LINEs and VECTORs) the stored stroke area holds the whole centre line, while
+// every dash with a gap of 1 or more sampled the same way leaves a gap. Figma draws the pieces where two
+// meet in one pixel at the coverage of one (the first render audit of U, 2026-10-07: a 0.5 px [1, 0]
+// line at alpha 64 against Pixso's 128), so under dashNoGap "solid" no pattern is written
+// (stats.dashNoGap).
+export function dashNoGap(dash) {
+  const d = dash.length % 2 ? dash.concat(dash) : dash;
+  return d.every((v, i) => i % 2 === 0 || !(v > 0));
+}
+
+// A LINE's segment (docs/M1.md D13, §15.15). Pixso draws a LINE from (0, 0) to (size.x, size.y); Figma
+// draws one from (0, 0) to (width, 0). The stored stroke area runs along Pixso's segment on every LINE
+// of U, P and I (470, 97, 18 of them), and the first render audit of U (2026-10-07) drew its one
+// vertical LINE (0.001 px wide) at its full height, where the IR had built it 0 long. M's 23 LINEs with a
+// height and 14 of O's 27 store an area that runs flat along x instead (O's other 13 along the segment),
+// and what Pixso draws for those is not measured. lineDirection "stored" follows each LINE's own area
+// (with none, the segment, as drawn in U); "size" always takes the segment; "flat" drops the height, as
+// M1 was first built. A height that rounds to 0 at the IR's two decimals (U 157, O 46, M 44, P 88, I 1:
+// 0.001 px) is no height.
+// Returns null for a LINE drawn along its width, else { flat: true, why } or { width, transform }: the
+// LINE's length and its matrix turned onto the segment, both at the IR's precision. Counted in
+// stats.lines.
+export function lineSegment(cx, n) {
+  const L = cx.stats.lines;
+  if (!n.size || !isFin(n.size.x) || !isFin(n.size.y) || n.size.y === 0) return null;
+  if (r2(n.size.y) === 0) { L.subPrecision++; return null; }
+  const mode = (cx.settings && cx.settings.lineDirection) || "stored";
+  const sx = n.size.x, sy = n.size.y;
+  let along = mode === "size";
+  if (mode === "stored") {
+    let box = null;
+    for (const p of n.strokePaddingPath || []) { const b = cx.blob(p.blobIndex); if (b && b.length) box = unionBox(box, blobPointBounds(b)); }
+    // A stroked segment's area is centred on the segment's middle whatever its weight and caps, so the
+    // area's middle in y says which of the two Pixso stored: sy / 2 along the segment, 0 along x.
+    if (!box) { along = true; L.noStoredArea++; }
+    else along = Math.abs((box.y0 + box.y1) / 2 - sy / 2) < Math.abs((box.y0 + box.y1) / 2);
+  }
+  if (!along) { L.flat++; return { flat: true, why: mode === "flat" ? "--line-direction flat" : "its stored stroke area runs along x" }; }
+  L.alongSize++;
+  const len = Math.hypot(sx, sy), ux = sx / len, uy = sy / len;
+  const [a, b, tx, c, d, ty] = matrixOf(n.transform);
+  return { width: r2(len), transform: [a * ux + b * uy, b * ux - a * uy, tx, c * ux + d * uy, d * ux - c * uy, ty].map(r4) };
+}
+
 // The paint and stroke props of a record. `put` writes a prop the type knows (props.mjs).
 export function strokeProps(cx, n, type, put, opts) {
   put("fills", paintsOf(cx, n.fillPaints));
@@ -129,7 +179,11 @@ export function strokeProps(cx, n, type, put, opts) {
   const dashCap = cx.en("PixsoNode", "dashCap")(n.dashCap);
   if (dashCap !== undefined && dashCap !== "NONE") cx.feature("dashCap");
   if (n.miterLimit !== undefined) put("strokeMiterLimit", miterRatio(n.miterLimit));
-  if ((n.dashPattern || []).length) put("dashPattern", n.dashPattern.map((v) => r2(isFin(v) ? Math.max(0, v) : 0)));
+  if ((n.dashPattern || []).length) {
+    const dash = n.dashPattern.map((v) => r2(isFin(v) ? Math.max(0, v) : 0));
+    if (dashNoGap(dash) && (cx.settings && cx.settings.dashNoGap) !== "keep") cx.stats.dashNoGap++;
+    else put("dashPattern", dash);
+  }
 
   // Sides: only rectangle-like records have them, and never an instance (its border is its master's).
   let weight = sw;

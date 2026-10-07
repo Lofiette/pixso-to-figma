@@ -85,7 +85,7 @@ import { KNOWN_PROPS, DEFAULTS, NEVER_OMIT, OVERRIDE_FIELDS, OVERRIDE_FIELD_CLAS
 import * as EN from "./enums.mjs";
 import { r2, r4, r6, isFin, matrixOf, matrixFinite, guidStr, guidSet } from "./util.mjs";
 import { effectsOf, exportSettingsOf, paintsOf } from "./paints.mjs";
-import { strokeProps, cornerProps } from "./strokes.mjs";
+import { strokeProps, cornerProps, lineSegment } from "./strokes.mjs";
 import { frameLayoutProps, childLayoutProps, isAutoLayout } from "./layout.mjs";
 import { textProps } from "./text.mjs";
 import { drawnStyles } from "./styles.mjs";
@@ -297,9 +297,11 @@ export function lookOf(q, n, type, parentNode, need) {
     if (!NEVER.has(k) && own(DEFAULTS, k) && canon(v) === canon(DEFAULTS[k])) return;
     props[k] = v;
   };
-  if (matrixFinite(n.transform)) put("relativeTransform", matrixOf(n.transform).map(r4));
+  // A LINE Pixso draws along its height is turned onto that segment, as nodes.mjs propsOf writes it.
+  const seg = type === "LINE" && matrixFinite(n.transform) ? lineSegment(q, n) : null, turned = !!seg && !seg.flat;
+  if (matrixFinite(n.transform)) put("relativeTransform", turned ? seg.transform : matrixOf(n.transform).map(r4));
   if (n.size && isFin(n.size.x) && isFin(n.size.y)) {
-    put("width", Math.max(0, r2(n.size.x)));
+    put("width", turned ? seg.width : Math.max(0, r2(n.size.x)));
     put("height", type === "LINE" ? 0 : Math.max(0, r2(n.size.y)));
   }
   if (n.visible === false) put("visible", false);

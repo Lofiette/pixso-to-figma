@@ -43,8 +43,9 @@ function header(kind) {
       resync: "pixso-unless-edited", textFit: "widen", booleans: "auto", spaceEvenlySingle: "between" }, m2aSettings(), { kitmaps: "default" }),
   };
 }
-// The thirteen settings version 3 added (docs/M2A.md §3), at their defaults.
-function m2aSettings() { const o = {}; for (const k of schema.M2A_SETTINGS) o[k] = schema.SETTING_DEFAULTS[k]; return o; }
+// The thirteen settings version 3 added (docs/M2A.md §3) and the two of the first render audit
+// (docs/M1.md §15.15), at their defaults.
+function m2aSettings() { const o = {}; for (const k of schema.M2A_SETTINGS.concat(schema.AUDIT_READER_SETTINGS)) o[k] = schema.SETTING_DEFAULTS[k]; return o; }
 
 // The props a record of each kind always carries in version 2: its box, and the NEVER_OMIT props of
 // its type (values[0] is the empty list in every IR below).
@@ -413,7 +414,7 @@ if (example) {
 }
 
 // ---------- version 3: settings, overrides, derived entries, instances, preferred values, notes (docs/M2A.md §5.1) ----------
-for (const k of schema.M2A_SETTINGS) {
+for (const k of schema.M2A_SETTINGS.concat(schema.AUDIT_READER_SETTINGS)) {
   expectError("the " + k + " setting missing", mut(minimal, (ir) => { delete ir.header.settings[k]; }), "header.settings." + k, true);
   expectError("the " + k + " setting outside its enum", mut(minimal, (ir) => { ir.header.settings[k] = "sometimes"; }), "header.settings." + k, true);
   for (const v of schema.SETTINGS[k]) if (v !== schema.SETTING_DEFAULTS[k]) expectValid("the " + k + " setting " + v, mut(minimal, (ir) => { ir.header.settings[k] = v; }));
@@ -423,9 +424,12 @@ for (const k of schema.M2A_SETTINGS) {
   if (S.M2A_SETTINGS.length !== 13) bad.push("M2A_SETTINGS has " + S.M2A_SETTINGS.length + " keys, not the thirteen of docs/M2A.md §3");
   for (const k of S.SETTING_KEYS) if (!S.SETTING_FLAGS[k] || !/^--[a-z]+(-[a-z]+)*$/.test(S.SETTING_FLAGS[k])) bad.push(k + " has no flag");
   if (new Set(Object.values(S.SETTING_FLAGS)).size !== Object.keys(S.SETTING_FLAGS).length) bad.push("two settings share a flag");
-  for (const k of S.M2A_SETTINGS) if (!S.SETTINGS[k] || S.SETTING_DEFAULTS[k] === undefined) bad.push(k + " has no values or no default");
+  for (const k of S.M2A_SETTINGS.concat(S.AUDIT_READER_SETTINGS)) if (!S.SETTINGS[k] || S.SETTING_DEFAULTS[k] === undefined) bad.push(k + " has no values or no default");
+  // docs/M1.md §15.15: the two reader settings of the first render audit, defaulting to what Pixso's stored
+  // stroke area shows.
+  if (S.SETTING_DEFAULTS.lineDirection !== "stored" || S.SETTING_DEFAULTS.dashNoGap !== "solid") bad.push("lineDirection and dashNoGap do not default to stored and solid");
   if (bad.length) bad.forEach((b) => fail("settings: " + b));
-  else ok("settings: the thirteen M2a settings each have values, a default and a flag of their own");
+  else ok("settings: the thirteen M2a settings and the render audit's two each have values, a default and a flag of their own");
 }
 if (example) {
   const OV = (ir) => ir.nodes[1].instance.overrides;

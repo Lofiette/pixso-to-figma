@@ -34,6 +34,7 @@ const { pixToIR, decodeVectorNetwork } = await import("./pix/ir/index.mjs");
 const { validate } = await import("./ir/validate.mjs");
 const { CODE, REASON_CODES, canonicalJSON } = await import("./ir/schema.mjs");
 const { closeLoop } = await import("./pix/ir/vector.mjs");
+const { dashNoGap } = await import("./pix/ir/strokes.mjs");
 
 let failed = 0;
 const ok = (m) => console.log("ok   " + m);
@@ -87,7 +88,7 @@ check("the header: format, version 3, pix source, file scope, the settings", () 
   return /^[0-9a-f]{64}$/.test(ir.header.source.sha256);
 });
 check("an unknown setting or value is refused, naming the choices", () => {
-  for (const s of [{ booleans: "frame" }, { spaceEvenlySingle: "left" }, { textFit: "x" }, { scope: "page:1" }, { colour: "red" }]) {
+  for (const s of [{ booleans: "frame" }, { spaceEvenlySingle: "left" }, { textFit: "x" }, { scope: "page:1" }, { colour: "red" }, { lineDirection: "diagonal" }, { dashNoGap: "dotted" }]) {
     let threw = false;
     try { read(s); } catch (e) { threw = /pixToIR:/.test(e.message); }
     if (!threw) throw new Error("accepted " + JSON.stringify(s));
@@ -182,6 +183,17 @@ check("a dashed border and a border with no stroke-area path have no oracle", ()
   eq([rec(IDS.dashed).props.oracleSides, rec(IDS.noPath).props.oracleSides], [undefined, undefined]);
   eq(val(rec(IDS.dashed).props.dashPattern), [4, 2]);
   return codesOf(IDS.dashed).includes(CODE.SOURCE_FEATURE_UNSUPPORTED);
+});
+check("a dash pattern with no gap is solid: not written under dashNoGap solid, counted; written under keep (§15.15)", () => {
+  const dashed = (pattern, settings) => pixToIR(mutated((v, at) => { at(IDS.dashed).dashPattern = pattern; }), { settings });
+  const solid = dashed([1, 0]), kept = dashed([1, 0], { dashNoGap: "keep" }), odd = dashed([1.5, 0, 2]), under = dashed([2, 0.001]);
+  const p = rec(IDS.dashed, solid.ir).props;
+  eq([p.dashPattern, val(p.strokes, solid.ir).length, p.strokeWeight, solid.stats.dashNoGap, stats.dashNoGap, solid.ir.header.settings.dashNoGap], [undefined, 1, 1, 1, 0, "solid"]);
+  eq([val(rec(IDS.dashed, kept.ir).props.dashPattern, kept.ir), kept.stats.dashNoGap, kept.ir.header.settings.dashNoGap], [[1, 0], 0, "keep"]);
+  // An odd pattern repeats, so [1.5, 0, 2] has the gaps 0, 1.5, 0 in turn: dashed. A gap under the IR's
+  // two decimals is no gap.
+  eq([val(rec(IDS.dashed, odd.ir).props.dashPattern, odd.ir), rec(IDS.dashed, under.ir).props.dashPattern, under.stats.dashNoGap], [[1.5, 0, 2], undefined, 1]);
+  eq([[1, 0], [0, 0], [2, 0, 3, 0], [4, 2], [1, 0, 1], [1.5, 0, 2]].map(dashNoGap), [true, true, true, false, false, false]);
 });
 check("the side census: population, checked, agree, unproven, and why there is no oracle", () => {
   // The M2a cases add one: Row's background, a stroked rectangle with no stroke-area path.
@@ -498,10 +510,37 @@ check("a CONNECTLINE is a VECTOR from its network, SOURCE_FEATURE_UNSUPPORTED", 
   eq([r.type, val(r.props.vectorNetwork).segments.length], ["VECTOR", 1]);
   eq(notesOf(IDS.connect).map((n) => n.detail), ["CONNECTLINE"]);
 });
-check("a LINE with height and no stored geometry stays a line, its height dropped and noted", () => {
+check("a LINE with a height and no stored stroke area runs along its size: turned onto (0,0)-(w,h), its width the length (§15.15)", () => {
+  // The fixture's 20 x 6 LINE at (220, 240): 20.88 long, turned by atan2(6, 20). Its end, 220 + 0.9578 *
+  // 20.88 and 240 + 0.2873 * 20.88, is (240, 246): the node's (w, h).
   const r = rec(IDS.lineHeight);
-  eq([r.type, r.props.width, r.props.height], ["LINE", 20, 0]);
-  return notesOf(IDS.lineHeight)[0].detail.indexOf("LINE with height") === 0;
+  eq([r.type, r.props.width, r.props.height, r.props.relativeTransform], ["LINE", 20.88, 0, [0.9578, -0.2873, 220, 0.2873, 0.9578, 240]]);
+  eq([notesOf(IDS.lineHeight), stats.lines, ir.header.settings.lineDirection], [[], { alongSize: 1, flat: 0, noStoredArea: 1, subPrecision: 0 }, "stored"]);
+});
+check("a LINE follows its own stored stroke area; --line-direction size and flat override it; a height under 0.005 is none", () => {
+  const line = (edit, settings) => pixToIR(mutated((v, at) => {
+    const n = at(IDS.lineHeight);
+    if (edit.area) { v.blobs.push({ bytes: encodePath(edit.area) }); n.strokePaddingPath = [Object.assign({}, at(IDS.ring).strokePaddingPath[0], { blobIndex: v.blobs.length - 1 })]; }
+    if (edit.size) n.size = edit.size;
+    if (edit.transform) n.transform = edit.transform;
+  }), { settings });
+  const lineOf = (r) => { const p = rec(IDS.lineHeight, r.ir).props; return [p.width, p.height, p.relativeTransform, notesOf(IDS.lineHeight, r.ir).map((n) => n.detail), r.stats.lines]; };
+  const L = (alongSize, flat, noStoredArea, subPrecision) => ({ alongSize, flat, noStoredArea, subPrecision });
+  // Pixso's stroke area of the 1 px line along x (flat), and along (20, 6): its middle in y says which.
+  const flatArea = [[1, 0, -0.5], [2, 20, -0.5], [2, 20, 0.5], [2, 0, 0.5], [0]];
+  const segArea = [[1, 0.14, -0.48], [2, 20.14, 5.52], [2, 19.86, 6.48], [2, -0.14, 0.48], [0]];
+  const turned = [20.88, 0, [0.9578, -0.2873, 220, 0.2873, 0.9578, 240]], flat = [20, 0, [1, 0, 220, 0, 1, 240]];
+  eq(lineOf(line({ area: segArea })), [...turned, [], L(1, 0, 0, 0)]);
+  eq(lineOf(line({ area: flatArea })), [...flat, ["LINE with height: its stored stroke area runs along x: built flat, height dropped"], L(0, 1, 0, 0)]);
+  eq(lineOf(line({ area: flatArea }, { lineDirection: "size" })), [...turned, [], L(1, 0, 0, 0)]);
+  eq(lineOf(line({ area: segArea }, { lineDirection: "flat" })), [...flat, ["LINE with height: --line-direction flat: built flat, height dropped"], L(0, 1, 0, 0)]);
+  // A vertical LINE as U's audited one (made up here): 0.001 x 30, its area x -0.5..0.5, y 0..30. Turned
+  // a quarter, 30 long, where the IR had built it 0 long.
+  eq(lineOf(line({ size: { x: 0.001, y: 30 }, area: [[1, 0.5, 0], [2, 0.5, 30], [2, -0.5, 30], [2, -0.5, 0], [0]] })), [30, 0, [0, -1, 220, 1, 0, 240], [], L(1, 0, 0, 0)]);
+  // The turn composes with the node's own matrix: mirrored in x, the end is (220 - 20, 240 + 6).
+  eq(lineOf(line({ transform: { m00: -1, m01: 0, m02: 220, m10: 0, m11: 1, m12: 240 } })).slice(0, 3), [20.88, 0, [-0.9578, 0.2873, 220, 0.2873, 0.9578, 240]]);
+  // 0.001 px of height (U 157, P 88 such LINEs) is under the IR's precision: no turn, no note.
+  eq(lineOf(line({ size: { x: 20, y: 0.001 } })), [...flat, [], L(0, 0, 0, 1)]);
 });
 check("a LINE with height and stored fill geometry is a VECTOR from it", () => {
   const r = pixToIR(mutated((v, at) => { at(IDS.lineHeight).fillGeometry = [{ blobIndex: 14, windingRule: at(IDS.heart).fillGeometry[0].windingRule }]; }));
@@ -651,8 +690,13 @@ check("an archive entry whose SHA-1 is not its name: IMAGE_HASH_MISMATCH, treate
 });
 check("image paints: STRETCH is CROP with its transform; TILE scales; rotation under 360; Figma's filters only", () => {
   eq(val(rec(IDS.jpegRect).props.fills)[0], { type: "IMAGE", scaleMode: "CROP", imageHash: fx.jpeg.hash.toString("hex"), imageTransform: [[0.5, 0, 0.25], [0, 0.5, 0.25]] });
-  eq(val(rec(IDS.mismatchRect).props.fills)[0], { type: "IMAGE", scaleMode: "TILE", imageHash: fx.mismatch.name.toString("hex"), scalingFactor: 0.5, rotation: 90, filters: { exposure: 0.25 } });
-  eq(notesOf(IDS.mismatchRect).map((n) => n.detail), ["vibrance"]);
+  // Pixso's vibrance is Figma's saturation (Pixso's plugin API reports it so; §15.15); hue has no Figma
+  // field and is dropped and noted.
+  eq(val(rec(IDS.mismatchRect).props.fills)[0], { type: "IMAGE", scaleMode: "TILE", imageHash: fx.mismatch.name.toString("hex"), scalingFactor: 0.5, rotation: 90, filters: { exposure: 0.25, saturation: 0.5 } });
+  eq([notesOf(IDS.mismatchRect), stats.unsupported.vibrance], [[], undefined]);
+  const hue = pixToIR(mutated((v, at) => { at(IDS.mismatchRect).fillPaints[0].paintFilter.hue = 0.25; }));
+  eq(val(rec(IDS.mismatchRect, hue.ir).props.fills, hue.ir)[0].filters, { exposure: 0.25, saturation: 0.5 });
+  eq(notesOf(IDS.mismatchRect, hue.ir).map((n) => n.detail), ["hue filter"]);
 });
 check("a STAR and a POLYGON with no stored geometry: no oracle, and a SOURCE_FEATURE_UNSUPPORTED note that says so (review S3)", () => {
   for (const [g, t, pc] of [[IDS.starShape, "STAR", 5], [IDS.polygonShape, "POLYGON", 6]]) {

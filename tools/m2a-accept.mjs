@@ -42,7 +42,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertOutsideRepo } from "./ir/outside-repo.mjs";
-import { CODE, M2A_SETTINGS, NOTE_CLASSES, PROPERTY_REF_FIELDS, PROPERTY_TYPES, VERSION } from "./ir/schema.mjs";
+import { AUDIT_READER_SETTINGS, CODE, M2A_SETTINGS, NOTE_CLASSES, PROPERTY_REF_FIELDS, PROPERTY_TYPES, VERSION } from "./ir/schema.mjs";
 import { validate } from "./ir/validate.mjs";
 
 export const EXPECT_FORMAT = "pix2fig.m2a-expect";
@@ -368,7 +368,7 @@ export function readerSettingsOf(header) {
   const hs = header.settings || {};
   const s = { booleans: hs.booleans, spaceEvenlySingle: hs.spaceEvenlySingle, textFit: hs.textFit, mode: hs.mode,
     scope: header.scope && header.scope.kind === "pages" ? "pages:" + header.scope.ids.join(",") : "file" };
-  for (const k of M2A_SETTINGS) s[k] = hs[k];
+  for (const k of M2A_SETTINGS.concat(AUDIT_READER_SETTINGS)) s[k] = hs[k];
   return s;
 }
 

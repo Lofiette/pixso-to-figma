@@ -7,9 +7,11 @@
 //        [--swap-dangling skip|strict] [--swap-reset on|off] [--swap-fallback derived|off] [--swap-default layer|definition]
 //        [--rejected-props copy|none] [--default-assignments keep|drop] [--override-merge last|first|outer]
 //        [--echo drop|keep] [--instance-own overrides|own] [--derived-geometry changed|all|none]
+//        [--line-direction stored|size|flat] [--dash-no-gap solid|keep]
 //
-// The last thirteen are the component reader's settings (docs/M2A.md §3), each defaulting to
-// schema.SETTING_DEFAULTS and recorded in the IR header; the reader refuses a value outside its list.
+// The thirteen before the last two are the component reader's settings (docs/M2A.md §3), and the last
+// two the reader settings the first render audit added (docs/M1.md §15.15); each defaults to
+// schema.SETTING_DEFAULTS and is recorded in the IR header; the reader refuses a value outside its list.
 //
 // The IR names the file's real layers, so --out must be outside this repository (docs/M1.md D17:
 // tools/ir/outside-repo.mjs refuses it otherwise, through junctions and in any drive-letter case).
@@ -24,10 +26,12 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pixToIR } from "./pix/ir/index.mjs";
 import { assertOutsideRepo } from "./ir/outside-repo.mjs";
-import { M2A_SETTINGS, SETTINGS, SETTING_FLAGS } from "./ir/schema.mjs";
+import { AUDIT_READER_SETTINGS, M2A_SETTINGS, SETTINGS, SETTING_FLAGS } from "./ir/schema.mjs";
+
+const LISTED = M2A_SETTINGS.concat(AUDIT_READER_SETTINGS);
 
 export const FLAGS = { "--booleans": "booleans", "--space-evenly-single": "spaceEvenlySingle", "--text-fit": "textFit", "--scope": "scope", "--mode": "mode" };
-for (const k of M2A_SETTINGS) FLAGS[SETTING_FLAGS[k]] = k;
+for (const k of LISTED) FLAGS[SETTING_FLAGS[k]] = k;
 
 export function parseArgs(argv) {
   const a = { file: null, out: null, statsOnly: false, settings: {} };
@@ -39,7 +43,7 @@ export function parseArgs(argv) {
       const v = argv[++i];
       if (v === undefined) throw usage(k + " needs a value");
       const key = FLAGS[k];
-      if (M2A_SETTINGS.indexOf(key) >= 0 && SETTINGS[key].indexOf(v) < 0) throw usage(k + " is one of " + SETTINGS[key].join(", ") + "; got " + JSON.stringify(v));
+      if (LISTED.indexOf(key) >= 0 && SETTINGS[key].indexOf(v) < 0) throw usage(k + " is one of " + SETTINGS[key].join(", ") + "; got " + JSON.stringify(v));
       a.settings[key] = v;
     } else if (k.startsWith("--")) throw usage("unknown option " + k);
     else if (a.file === null) a.file = k;
@@ -52,7 +56,7 @@ export function parseArgs(argv) {
 function usage(msg) {
   const e = new Error(msg + "\nusage: node tools/pix-to-ir.mjs <file.pix> --out <ir.json> [--booleans auto|native|flatten] " +
     "[--space-evenly-single between|center] [--text-fit widen|source-box] [--scope file|pages:<guid>,…] [--mode design|kit] [--stats-only] " +
-    M2A_SETTINGS.map((k) => "[" + SETTING_FLAGS[k] + " " + SETTINGS[k].join("|") + "]").join(" "));
+    LISTED.map((k) => "[" + SETTING_FLAGS[k] + " " + SETTINGS[k].join("|") + "]").join(" "));
   e.usage = true;
   return e;
 }
@@ -66,7 +70,8 @@ export function summary(stats) {
     notCarried: stats.notCarried, populations: pop, populationCounts: stats.populationCounts,
     booleans: stats.booleans, sides: stats.sides, images: stats.images, vectors: stats.vectors, notes: stats.notes,
     unsupported: stats.unsupported, spaceEvenly: stats.spaceEvenly, strokeAlignDecided: stats.strokeAlignDecided,
-    cornerRadiusOnly: stats.cornerRadiusOnly, lostBorderSections: stats.lostBorderSections, text: stats.text, ms: stats.ms,
+    cornerRadiusOnly: stats.cornerRadiusOnly, lostBorderSections: stats.lostBorderSections, text: stats.text,
+    lines: stats.lines, dashNoGap: stats.dashNoGap, ms: stats.ms,
     m2a: stats.m2a,
   };
 }

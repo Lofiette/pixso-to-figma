@@ -11,11 +11,13 @@
 //     [--swap-dangling skip|strict] [--swap-reset on|off] [--swap-fallback derived|off] [--swap-default layer|definition]
 //     [--rejected-props copy|none] [--default-assignments keep|drop] [--override-merge last|first|outer]
 //     [--echo drop|keep] [--instance-own overrides|own] [--derived-geometry changed|all|none]
+//     [--line-direction stored|size|flat] [--dash-no-gap solid|keep]
 //
 // The thirteen M2a flags (docs/M2A.md §3) are the component reader's settings: each goes to the reader,
 // into the IR header, and into the run folder's settings hash, so a run under IR version 3 never
 // resumes a folder of version 2. A folder whose states.json records another IR version is refused,
-// naming the commit that can resume it (M1_COMMIT in tools/m2a-accept.mjs).
+// naming the commit that can resume it (M1_COMMIT in tools/m2a-accept.mjs). The two flags after them are
+// reader settings the first render audit added (docs/M1.md §15.15), carried the same way.
 //
 // Every policy is a setting with the default of docs/M1.md §3 (SETTINGS below). --dry reads, plans,
 // runs the image chain's offline link and prints the preflight and the balance, without Figma.
@@ -36,7 +38,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { CODE, M2A_SETTINGS, SETTINGS as IR_SETTINGS, SETTING_DEFAULTS, SETTING_FLAGS, VERSION as IR_VERSION, canonicalJSON, fnv1a64 } from "./ir/schema.mjs";
+import { CODE, M2A_SETTINGS, AUDIT_READER_SETTINGS, SETTINGS as IR_SETTINGS, SETTING_DEFAULTS, SETTING_FLAGS, VERSION as IR_VERSION, canonicalJSON, fnv1a64 } from "./ir/schema.mjs";
 import { TASK_SETTINGS, maxTaskChars } from "./ir/task.mjs";
 import { validate } from "./ir/validate.mjs";
 import { assertOutsideRepo } from "./ir/outside-repo.mjs";
@@ -73,7 +75,9 @@ export const SETTINGS = {
   "--stats": ["statsFile", (v) => v, null],
 };
 // docs/M2A.md §3: the thirteen component reader settings, each with its stated default.
-for (const k of M2A_SETTINGS) SETTINGS[SETTING_FLAGS[k]] = [k, IR_SETTINGS[k], SETTING_DEFAULTS[k]];
+// docs/M1.md §15.15: the reader settings the first render audit added, the same way.
+const READ_SETTINGS = M2A_SETTINGS.concat(AUDIT_READER_SETTINGS);
+for (const k of READ_SETTINGS) SETTINGS[SETTING_FLAGS[k]] = [k, IR_SETTINGS[k], SETTING_DEFAULTS[k]];
 const SWITCHES = { "--no-pixso": "noPixso", "--dry": "dry", "--yes": "yes" };
 function posNum(v, f) { const n = Number(v); if (!(n > 0)) throw new RangeError(f + " is a positive number"); return n; }
 
@@ -108,13 +112,13 @@ export function parseArgs(argv) {
 // and the run folder describe the IR, not the command line's defaults. A flag given that
 // contradicts one is refused; one not given takes the header's value. Returns the refusal, or null.
 export const READER_FLAGS = { booleans: "--booleans", spaceEvenlySingle: "--space-evenly-single", textFit: "--text-fit", scope: "--scope" };
-for (const k of M2A_SETTINGS) READER_FLAGS[k] = SETTING_FLAGS[k];
+for (const k of READ_SETTINGS) READER_FLAGS[k] = SETTING_FLAGS[k];
 export function adoptIrSettings(o, header) {
   const hs = (header && header.settings) || {};
   const sc = header && header.scope;
   const fromHeader = { booleans: hs.booleans, spaceEvenlySingle: hs.spaceEvenlySingle, textFit: hs.textFit,
     scope: sc && sc.kind === "pages" && Array.isArray(sc.ids) ? "pages:" + sc.ids.join(",") : sc && sc.kind === "file" ? "file" : undefined };
-  for (const k of M2A_SETTINGS) fromHeader[k] = hs[k];
+  for (const k of READ_SETTINGS) fromHeader[k] = hs[k];
   for (const k of Object.keys(READER_FLAGS)) {
     const v = fromHeader[k];
     if (v === undefined) continue;
@@ -128,7 +132,7 @@ export function adoptIrSettings(o, header) {
 // pix-run reads every file in the reader's default mode).
 export function readerSettingsOf(o) {
   const s = { booleans: o.booleans, spaceEvenlySingle: o.spaceEvenlySingle, textFit: o.textFit, scope: o.scope };
-  for (const k of M2A_SETTINGS) s[k] = o[k];
+  for (const k of READ_SETTINGS) s[k] = o[k];
   return s;
 }
 
@@ -140,7 +144,7 @@ export function runSettings(o) {
     layoutOrder: o.layoutOrder, textRead: o.textRead, images: o.images, noPixso: o.noPixso, missingFonts: o.missingFonts,
     fallbackFont: { family, style }, maxTaskMb: o.maxTaskMb, livenessWarnS: o.livenessWarnS, livenessFailS: o.livenessFailS,
     ceilingMsPerNode: o.ceilingMsPerNode };
-  for (const k of M2A_SETTINGS) s[k] = o[k];
+  for (const k of READ_SETTINGS) s[k] = o[k];
   return s;
 }
 

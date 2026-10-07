@@ -80,5 +80,9 @@ export const EFFECT_TYPE = { INNER_SHADOW: "INNER_SHADOW", DROP_SHADOW: "DROP_SH
   BACKGROUND_BLUR: "BACKGROUND_BLUR" };
 export const EXPORT_FORMAT = { PNG: "PNG", JPEG: "JPG", SVG: "SVG", PDF: "PDF" };
 export const EXPORT_CONSTRAINT = { CONTENT_SCALE: "SCALE", CONTENT_WIDTH: "WIDTH", CONTENT_HEIGHT: "HEIGHT" };
-// The image filters Figma has. Pixso's vibrance and hue have no Figma field.
-export const IMAGE_FILTERS = ["exposure", "contrast", "temperature", "tint", "highlights", "shadows"];
+// The image filters Figma has, and the paintFilter field each is stored under where Pixso names it
+// otherwise: vibrance is Pixso's Saturation slider, which its own plugin API reports as `saturation`
+// (the API dump of one O and U image: the same 8 fields, float for float; docs/M1.md §15.15). Hue has
+// no Figma field.
+export const IMAGE_FILTERS = ["exposure", "contrast", "saturation", "temperature", "tint", "highlights", "shadows"];
+export const IMAGE_FILTER_SOURCE = { saturation: "vibrance" };

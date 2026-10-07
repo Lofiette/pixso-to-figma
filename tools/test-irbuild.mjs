@@ -1081,6 +1081,39 @@ check(DOUBLE_FEATURES.layout === true && DOUBLE_FEATURES.text === true, "the dou
   }
 }
 
+// ============================================================================================
+// 15. the first render audit (2026-10-07, docs/M1.md §15.15): the reader's turned LINEs
+// ============================================================================================
+{
+  // The reader now writes a LINE Pixso draws along its height as a LINE turned onto that segment, its
+  // width the length: a vertical one (0.001 x 80 -> 80 long, a quarter turn) and a diagonal one ABSOLUTE
+  // in a horizontal flow, as U's are (600 x 32 here -> 600.85 long, the matrix at the IR's four
+  // decimals). The builder writes both as any turned node: the same matrix and length back, no pin out
+  // of a flow (the diagonal one is ABSOLUTE already), and the judge finds nothing off.
+  const line = (i, parent, box, p) => rec(i, parent, "LINE", box, painted(Object.assign({ strokes: [SOLID(0.27, 0.33, 0.44)], strokeAlign: "CENTER" }, p || {})));
+  const DIAG = [0.9986, -0.0533, 0, 0.0533, 0.9986, 35.5];
+  const nodes = [frame(0, -1, [T6(0, 0), 1200, 200], { clipsContent: false }),
+    line(1, 0, [ROT90(40, 20), 80, 0]),
+    component(2, 0, [T6(60, 0), 600, 36], { layoutMode: "HORIZONTAL", clipsContent: false }),
+    rect(3, 2, [T6(0, 0), 40, 36], { fills: [SOLID(1, 1, 1)] }),
+    line(4, 2, [DIAG, 600.85, 0], { layoutPositioning: "ABSOLUTE", strokeAlign: "OUTSIDE" })];
+  const task = mkTask({ nodes });
+  valid("turned LINEs", task);
+  const E = env();
+  const { R, ctx } = await build(E, task);
+  const vt = Object.assign({}, task, { op: "verify" });
+  const V = await E.IR.ops.verify(E.IR.makeCtx(E.figma, vt, { id: "v" }), vt);
+  const values = []; for (const k of Object.keys(task.values)) values[Number(k)] = task.values[k];
+  const ir = { nodes: task.nodes.map((t) => ({ parent: t.parent, guid: t.guid, type: t.type, name: t.name, props: t.props })), values, notes: [] };
+  const J = judgeTask({ ir, task, build: R, verify: JSON.parse(JSON.stringify(V)) });
+  const v = nodeOf(E, ctx, 1), d = nodeOf(E, ctx, 4);
+  check(R.failures.length === 0 && v.type === "LINE" && near(v.width, 80, 1e-6) && v.height === 0 && sameM(flat(v.relativeTransform), ROT90(40, 20)) &&
+    d.type === "LINE" && near(d.width, 600.85, 1e-6) && d.height === 0 && sameM(flat(d.relativeTransform), DIAG) && d.layoutPositioning === "ABSOLUTE" &&
+    R.counters.rotPinned === 0 && J.count.ok && J.geometry.visibleOver05 === 0 && J.geometry.sizeVisibleOver05 === 0,
+    "lines: a LINE turned onto its segment (a quarter turn; a diagonal ABSOLUTE in a flow) is built with the IR's matrix and length, and judged in place",
+    JSON.stringify([R.failures, v.width, v.relativeTransform, d.width, d.relativeTransform, d.layoutPositioning, R.counters.rotPinned, J.geometry.worst]));
+}
+
 console.log("");
 if (failed) { console.log(failed + " IR builder check" + (failed === 1 ? "" : "s") + " failed"); process.exit(1); }
 console.log("all IR builder checks pass");

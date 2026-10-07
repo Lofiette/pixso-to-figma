@@ -32,7 +32,11 @@ MCP reader ──┘
     `includeBorders` becomes `strokesIncludedInLayout`, and `frameMaskDisabled` becomes `clipsContent: false`;
   - a minimum or maximum size stored as NaN or FLT_MAX is unset, and is left out;
   - `count` becomes `pointCount` and `starInnerScale` becomes `innerRadius`;
-  - a colour's `a` becomes the paint's `opacity`.
+  - a colour's `a` becomes the paint's `opacity`;
+  - an image filter's `vibrance` becomes `saturation` (Pixso's own plugin API names it so);
+  - a LINE, drawn by Pixso from (0, 0) to its size's (w, h), is turned onto that segment with the segment's
+    length as its width, where its stored stroke area runs along it (`lineDirection`); a dash pattern with no gap
+    is not written (`dashNoGap`; both `docs/M1.md` §15.15).
 - **It says what it knows.** The header's capabilities declare what the source provides. The builder, the kit-map
   resolver and the verifier use only what is declared, and the validator refuses content that the header does not
   declare.
@@ -162,9 +166,12 @@ it, and records the outcome in its own state (`docs/M1.md` D9, SOURCE_IDENTITY_M
 | `echo` | `drop`, `keep` | `--echo` | `drop` (D9) |
 | `instanceOwn` | `overrides`, `own` | `--instance-own` | `overrides` (D11) |
 | `derivedGeometry` | `changed`, `all`, `none` | `--derived-geometry` | `changed` (D10) |
+| `lineDirection` | `stored`, `size`, `flat` | `--line-direction` | `stored`: a LINE whose size has a height runs as its own stored stroke area does, along (0,0)-(w,h) or along x (`docs/M1.md` §15.15) |
+| `dashNoGap` | `solid`, `keep` | `--dash-no-gap` | `solid`: a dash pattern with no gap is not written, as Pixso draws it solid (`docs/M1.md` §15.15) |
 
-`SETTING_DEFAULTS` in the schema holds the defaults of this table, and `M2A_SETTINGS` lists the thirteen keys version
-3 added (the D-numbers are `docs/M2A.md`'s).
+`SETTING_DEFAULTS` in the schema holds the defaults of this table, `M2A_SETTINGS` lists the thirteen keys version
+3 added (the D-numbers in those rows are `docs/M2A.md`'s), and `AUDIT_READER_SETTINGS` the two the first render
+audit added within version 3 (an IR read before them lacks them and is refused, as any IR missing a setting).
 
 ## 5. Pages
 
@@ -238,8 +245,8 @@ Version 2's decisions about what a record is (`docs/M1.md` §2):
   carries a `VECTOR_FROM_GEOMETRY`, `BOOLEAN_FLATTENED` or `SOURCE_FEATURE_UNSUPPORTED` note saying why it is built
   from geometry. `strokeGeometry` is never a source on its own. `LINE`, `STAR`, `POLYGON` and `BOOLEAN_OPERATION`
   are built natively and carry no build-source geometry, only, optionally, `oracleFillGeometry`. A Pixso CONNECTLINE
-  becomes a `VECTOR` from its network and a LINE with a height a `VECTOR` from its geometry, each with a
-  `SOURCE_FEATURE_UNSUPPORTED` note. Where the network and the stored geometry disagree in a known way the record has
+  becomes a `VECTOR` from its network and a LINE with a height and stored fill geometry a `VECTOR` from that
+  geometry, each with a `SOURCE_FEATURE_UNSUPPORTED` note; a LINE with a height and none stays a `LINE` (§1). Where the network and the stored geometry disagree in a known way the record has
   a `VECTOR_ORACLE_DIFFERS` note whose detail starts with the class (`region-no-fill`, `network-bounds`,
   `winding`). A native `BOOLEAN_OPERATION` whose stored result is out of date against its own operands (a union
   that leaves one out by more than 1 px, and every boolean made from such a one) has a `VECTOR_ORACLE_DIFFERS` note
@@ -499,7 +506,7 @@ from the preflight and the kit-map resolution, and *build* codes come from Figma
 | `OVERRIDE_FIELD_DROPPED` | read | an override field not carried; one note per instance and class, the detail the class, then `: ` and the fields with counts. Classes: `no-equivalent`, `not-on-type`, `layer-not-carried`, `root-box`, `unknown` | named here (§3) |
 | `NODE_TYPE_UNSUPPORTED` | read | a source node type the IR has no type for; it and its subtree are not carried | named here (§7, §8) |
 | `TEXT_LINES_UNKNOWN` | read | a buildable text with no stored baselines; it has no `lines` | named here (§3) |
-| `SOURCE_FEATURE_UNSUPPORTED` | read | a Pixso feature Figma lacks, named in the detail, which starts with the feature from an open list (CONNECTLINE, LINE with height, SECTION strokes, SECTION corner radius, RIGHT_ANGLE, vibrance, hue filter, dashCap, deformationTransform, fontVariations, GRID, counter alignment <X>, strokeCap <X>, effect <TYPE>, export format <X>, paint type <X>, image paint without an image, text without a font name, inverse winding, open region loop, operand strokes under `--booleans native`, an operand without fill geometry, boolean without stored geometry, built natively, no stored geometry (a STAR or POLYGON), layoutGrids, fontVariantNumeric, fontVariantPosition, OpenType features, COLOR property), optionally followed by `: ` and text; dropped or converted, and counted per feature in `stats.unsupported`. The judge excuses a vector's paths only for the features that change the drawing (`judge.mjs` SFU_GEOMETRY, docs/M1.md §8.3) | named here (§7) |
+| `SOURCE_FEATURE_UNSUPPORTED` | read | a Pixso feature Figma lacks, named in the detail, which starts with the feature from an open list (CONNECTLINE, LINE with height, SECTION strokes, SECTION corner radius, RIGHT_ANGLE, hue filter, dashCap, deformationTransform, fontVariations, GRID, counter alignment <X>, strokeCap <X>, effect <TYPE>, export format <X>, paint type <X>, image paint without an image, text without a font name, inverse winding, open region loop, operand strokes under `--booleans native`, an operand without fill geometry, boolean without stored geometry, built natively, no stored geometry (a STAR or POLYGON), layoutGrids, fontVariantNumeric, fontVariantPosition, OpenType features, COLOR property), optionally followed by `: ` and text; dropped or converted, and counted per feature in `stats.unsupported`. The judge excuses a vector's paths only for the features that change the drawing (`judge.mjs` SFU_GEOMETRY, docs/M1.md §8.3) | named here (§7) |
 | `GEOMETRY_INVALID` | read | a NaN size, transform or path, or a boolean with no operand and no geometry; the box comes from the geometry or the children, or the node is not carried | named here (§7) |
 | `IMAGE_HASH_MISMATCH` | read | an archive image entry whose SHA-1 is not its name; treated as missing | named here (§4) |
 | `VECTOR_ORACLE_DIFFERS` | read | the stored network and the stored fill geometry disagree in a pre-registered class (`region-no-fill`, `network-bounds`, `winding`), or a boolean's stored result is out of date against its operands (`boolean-operands`) | named here (§3) |
@@ -639,7 +646,7 @@ one starting with its class. `tools/test-ir.mjs` validates this block.
       "variantSets": "parse", "variantGrammar": "names", "axisOrder": "vocabulary", "swapDangling": "skip",
       "swapReset": "on", "swapFallback": "derived", "swapDefault": "layer", "rejectedProps": "copy",
       "defaultAssignments": "keep", "overrideMerge": "last", "echo": "drop", "instanceOwn": "overrides",
-      "derivedGeometry": "changed", "kitmaps": "default" }
+      "derivedGeometry": "changed", "lineDirection": "stored", "dashNoGap": "solid", "kitmaps": "default" }
   },
   "pages": [
     { "guid": "0:1", "name": "Page 1", "internal": false, "background": 0 },

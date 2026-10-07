@@ -249,6 +249,17 @@ check("Entries: the merged Bg fill (last: yellow), the echoed opacity, the neste
   same(notesOf(I, M2A.iOverrideKey, schema.CODE.OVERRIDE_STALE).map((x) => [x.path, x.detail]), [[["50:73"], "not-derived"]]);
   same(notesOf(I, M2A.iEntries, schema.CODE.OVERRIDE_ECHO).map((x) => x.detail), ["1 field: opacity 1"]);
 });
+check("an override's dash pattern with no gap is solid, as on a node: an echo over no dash, [] over a dash (dashNoGap, docs/M1.md §15.15)", () => {
+  // Planted: Entries' two [Bg] entries carry the dash; Row's Bg carries none, or [4, 2].
+  const withDash = (dash, masterDash, settings) => read(settings, (value) => {
+    const at = (s, l) => value.pixsoNodes.find((n) => n.guid.sessionID === s && n.guid.localID === l);
+    for (const o of at(5, 520).symbolData.symbolOverrides) if (o.guidPath.guids.length === 1 && o.guidPath.guids[0].localID === 404) o.dashPattern = dash;
+    if (masterDash) at(5, 404).dashPattern = masterDash;
+  });
+  const dashOf = (r) => { const o = ovAt(r.ir, M2A.iEntries, P(M2A.rowBg)); return o && o.fields.dashPattern !== undefined ? r.ir.values[o.fields.dashPattern] : "none"; };
+  same([dashOf(withDash([1, 0])), dashOf(withDash([1, 0], null, { dashNoGap: "keep" })), dashOf(withDash([2, 2]))], ["none", [1, 0], [2, 2]]);
+  same([dashOf(withDash([1.5, 0], [4, 2])), dashOf(withDash([1.5, 0], [4, 2], { dashNoGap: "keep" }))], [[], [1.5, 0]]);
+});
 check("a bound text's override is kept against the property's effective value (boundConflicts: Entries' and Text styles' titles)", () => {
   same(ovAt(BASE.ir, M2A.iEntries, P(M2A.rowTitle)).fields, { characters: "Override title" });
   same(BASE.stats.m2a.overrides.boundConflicts, 2);

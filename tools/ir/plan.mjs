@@ -436,12 +436,13 @@ export function balanceOf(ir, stats, ctx) {
   instances.sum = instances.placeholders + sumOf(instances.outOfScope);
   instances.ok = instances.sum === instances.ir;
   const notes = {};
-  // An image filter Figma has no value for (the reader's "hue filter", "vibrance"), dropped from the
-  // paint: counted as FILTER_UNRENDERED on the verdict line (docs/M1.md D10).
+  // An image filter Figma has no value for (the reader's "hue filter"), dropped from the paint: counted
+  // as FILTER_UNRENDERED on the verdict line (docs/M1.md D10). Vibrance is Figma's saturation since
+  // §15.15, so the reader no longer drops it.
   let filtersUnrendered = 0;
   for (const n of ir.notes || []) if (!Number.isInteger(n.node) || ctx.B[n.node]) {
     notes[n.code] = (notes[n.code] || 0) + 1;
-    if (n.code === CODE.SOURCE_FEATURE_UNSUPPORTED && typeof n.detail === "string" && /^(hue filter|vibrance)(:|$)/.test(n.detail)) filtersUnrendered++;
+    if (n.code === CODE.SOURCE_FEATURE_UNSUPPORTED && typeof n.detail === "string" && /^hue filter(:|$)/.test(n.detail)) filtersUnrendered++;
   }
   return { ok: stored.ok && nonInstance.ok && instances.ok, stored, nonInstance, instances, notes, filtersUnrendered, planCodes: ctx.planCodes,
     populations: Object.keys(P).reduce((o, k) => { o[k] = P[k].records; return o; }, {}) };
