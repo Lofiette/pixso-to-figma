@@ -136,7 +136,8 @@ second source the planner may use beside a `.pix` (missing images, renders), and
 the planner checks that the open file is the `.pix` (root name, page guids, a sample of node guids) before it uses
 it, and records the outcome in its own state (`docs/M1.md` D9, SOURCE_IDENTITY_MISMATCH).
 
-**`settings`.** Every policy in REWRITE.md §11, plus the mode; all keys are required.
+**`settings`.** Every policy in REWRITE.md §11, plus the mode; all keys are required, except a later one
+(`LATER_SETTINGS`): `names`, which an IR read before it existed (2026-10-07) lacks and was read as `stored`.
 
 | key | values | flag | owner's default |
 |---|---|---|---|
@@ -162,6 +163,7 @@ it, and records the outcome in its own state (`docs/M1.md` D9, SOURCE_IDENTITY_M
 | `echo` | `drop`, `keep` | `--echo` | `drop` (D9) |
 | `instanceOwn` | `overrides`, `own` | `--instance-own` | `overrides` (D11) |
 | `derivedGeometry` | `changed`, `all`, `none` | `--derived-geometry` | `changed` (D10) |
+| `names` | `display`, `stored` | `--names` | `display`, Pixso's names measured live on U (`docs/M1.md` §15.16); the builder reads it too |
 
 `SETTING_DEFAULTS` in the schema holds the defaults of this table, and `M2A_SETTINGS` lists the thirteen keys version
 3 added (the D-numbers are `docs/M2A.md`'s).
@@ -207,7 +209,7 @@ as plain strings).
 | `page` | top-level records only: index into `pages` |
 | `guid` | the source guid, unique in the IR |
 | `type` | one of `FRAME GROUP SECTION COMPONENT COMPONENT_SET INSTANCE RECTANGLE ELLIPSE POLYGON STAR LINE VECTOR BOOLEAN_OPERATION TEXT SLICE SLOT` |
-| `name` | the layer name |
+| `name` | the layer name: as Pixso shows it under `names` `display` (an `INSTANCE` stored as "Instance <n>" takes its master's or its state group's name), as stored under `stored`; an empty `TEXT` name stays empty either way (`docs/M1.md` §15.16) |
 | `props` | Figma properties, plus the IR's own below |
 | `overrideKey` | the layer's guid in its library's own file (library copies only; capability `overrideKeys`) |
 | `instance` | `INSTANCE` records only, §9 |
@@ -639,7 +641,7 @@ one starting with its class. `tools/test-ir.mjs` validates this block.
       "variantSets": "parse", "variantGrammar": "names", "axisOrder": "vocabulary", "swapDangling": "skip",
       "swapReset": "on", "swapFallback": "derived", "swapDefault": "layer", "rejectedProps": "copy",
       "defaultAssignments": "keep", "overrideMerge": "last", "echo": "drop", "instanceOwn": "overrides",
-      "derivedGeometry": "changed", "kitmaps": "default" }
+      "derivedGeometry": "changed", "names": "display", "kitmaps": "default" }
   },
   "pages": [
     { "guid": "0:1", "name": "Page 1", "internal": false, "background": 0 },
