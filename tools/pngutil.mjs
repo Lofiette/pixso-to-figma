@@ -1,57 +1,95 @@
-// Minimal 8-bit PNG decode/encode plus the one geometric operation the migration needs.
+// PNG decode (every colour type and bit depth of the standard, interlaced or not) and 8-bit RGBA
+// encode, plus the one geometric operation the migration needs.
+//
+// Pixso exports indexed PNGs (colour type 3, 2 to 8 bits per pixel, with tRNS) where Figma exports
+// 8-bit RGBA: the first live render audit (2026-10-06) failed 305 roots on "does not decode" while
+// the decoder took only 8-bit RGB(A) and grey.
 //
 // A node's render comes back from Pixso in screen orientation. Putting it back on that node as a
 // fill re-applies the node's own rotation, so a sideways node gets turned twice. The pixels have to
 // be expressed in the node's local frame first, which is what toLocalFrame does.
 import { inflateSync, deflateSync } from "node:zlib";
 
+const CHANNELS = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
+const DEPTHS = { 0: [1, 2, 4, 8, 16], 2: [8, 16], 3: [1, 2, 4, 8], 4: [8, 16], 6: [8, 16] };
+// Adam7: x0, y0, dx, dy of each pass; one pass covering everything when not interlaced.
+const ADAM7 = [[0, 0, 8, 8], [4, 0, 8, 8], [0, 4, 4, 8], [2, 0, 4, 4], [0, 2, 2, 4], [1, 0, 2, 2], [0, 1, 1, 2]];
+
+function unfilter(f, cur, prev, bpp) {
+  for (let i = 0; i < cur.length; i++) {
+    const a = i >= bpp ? cur[i - bpp] : 0, b = prev[i], c = i >= bpp ? prev[i - bpp] : 0;
+    let v = cur[i];
+    if (f === 1) v += a;
+    else if (f === 2) v += b;
+    else if (f === 3) v += (a + b) >> 1;
+    else if (f === 4) {
+      const pp = a + b - c, pa = Math.abs(pp - a), pb = Math.abs(pp - b), pc = Math.abs(pp - c);
+      v += (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c);
+    } else if (f !== 0) throw new Error("PNG filter type " + f + " is not one of 0 to 4");
+    cur[i] = v & 255;
+  }
+}
+
 export function decodePNG(buf) {
-  let p = 8, W = 0, H = 0, depth = 0, color = 0;
+  let p = 8, W = 0, H = 0, depth = 0, color = 0, interlace = 0, plte = null, trns = null;
   const idat = [];
   while (p < buf.length) {
     const len = buf.readUInt32BE(p);
     const type = buf.toString("ascii", p + 4, p + 8);
     const data = buf.subarray(p + 8, p + 8 + len);
-    if (type === "IHDR") { W = data.readUInt32BE(0); H = data.readUInt32BE(4); depth = data[8]; color = data[9]; }
+    if (type === "IHDR") { W = data.readUInt32BE(0); H = data.readUInt32BE(4); depth = data[8]; color = data[9]; interlace = data[12]; }
+    if (type === "PLTE") plte = data;
+    if (type === "tRNS") trns = data;
     if (type === "IDAT") idat.push(data);
     if (type === "IEND") break;
     p += 12 + len;
   }
-  if (depth !== 8) throw new Error("only 8-bit PNG supported, got depth " + depth);
-  const CH = { 0: 1, 2: 3, 4: 2, 6: 4 }[color];
+  const CH = CHANNELS[color];
   if (!CH) throw new Error("unsupported colour type " + color);
+  if (DEPTHS[color].indexOf(depth) < 0) throw new Error("bit depth " + depth + " is not allowed with colour type " + color);
+  if (color === 3 && !plte) throw new Error("an indexed PNG without a palette (PLTE)");
+  if (interlace > 1) throw new Error("unknown interlace method " + interlace);
+  const bits = CH * depth, bpp = Math.max(1, bits >> 3), max = (1 << depth) - 1;
   const raw = inflateSync(Buffer.concat(idat));
-  const stride = W * CH;
-  const px = Buffer.alloc(H * stride);
-  let off = 0;
-  for (let y = 0; y < H; y++) {
-    const f = raw[off++];
-    const line = raw.subarray(off, off + stride); off += stride;
-    const cur = px.subarray(y * stride, (y + 1) * stride);
-    const prev = y > 0 ? px.subarray((y - 1) * stride, y * stride) : null;
-    for (let i = 0; i < stride; i++) {
-      const a = i >= CH ? cur[i - CH] : 0;
-      const b = prev ? prev[i] : 0;
-      const c = prev && i >= CH ? prev[i - CH] : 0;
-      let v = line[i];
-      if (f === 1) v += a;
-      else if (f === 2) v += b;
-      else if (f === 3) v += (a + b) >> 1;
-      else if (f === 4) {
-        const pp = a + b - c, pa = Math.abs(pp - a), pb = Math.abs(pp - b), pc = Math.abs(pp - c);
-        v += (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c);
-      }
-      cur[i] = v & 255;
-    }
-  }
-  // Normalise to RGBA so callers have one shape to think about.
   const rgba = Buffer.alloc(W * H * 4);
-  for (let i = 0, n = W * H; i < n; i++) {
-    const s = i * CH, d = i * 4;
-    if (CH === 1) { rgba[d] = rgba[d + 1] = rgba[d + 2] = px[s]; rgba[d + 3] = 255; }
-    else if (CH === 2) { rgba[d] = rgba[d + 1] = rgba[d + 2] = px[s]; rgba[d + 3] = px[s + 1]; }
-    else if (CH === 3) { rgba[d] = px[s]; rgba[d + 1] = px[s + 1]; rgba[d + 2] = px[s + 2]; rgba[d + 3] = 255; }
-    else { rgba[d] = px[s]; rgba[d + 1] = px[s + 1]; rgba[d + 2] = px[s + 2]; rgba[d + 3] = px[s + 3]; }
+  // One sample of a scanline: packed below 8 bits, one byte at 8, big-endian at 16.
+  const sample = (line, x, c) => {
+    if (depth < 8) { const bit = x * depth; return (line[bit >> 3] >> (8 - depth - (bit & 7))) & max; }
+    return depth === 8 ? line[x * CH + c] : line.readUInt16BE((x * CH + c) * 2);
+  };
+  const to8 = (v) => (depth === 16 ? v >> 8 : depth === 8 ? v : Math.round((v * 255) / max));
+  // tRNS for grey and RGB: one colour, at the image's own depth, that is fully transparent.
+  const key = trns && (color === 0 || color === 2) ? Array.from({ length: color === 0 ? 1 : 3 }, (_, k) => trns.readUInt16BE(k * 2)) : null;
+  const put = (line, x, d) => {
+    if (color === 3) {
+      const ix = sample(line, x, 0);
+      if (ix * 3 + 2 >= plte.length) throw new Error("palette index " + ix + " is outside the palette (" + plte.length / 3 + " entries)");
+      rgba[d] = plte[ix * 3]; rgba[d + 1] = plte[ix * 3 + 1]; rgba[d + 2] = plte[ix * 3 + 2];
+      rgba[d + 3] = trns && ix < trns.length ? trns[ix] : 255;
+      return;
+    }
+    const s = [];
+    for (let c = 0; c < CH; c++) s.push(sample(line, x, c));
+    if (color === 0 || color === 4) { rgba[d] = rgba[d + 1] = rgba[d + 2] = to8(s[0]); }
+    else { rgba[d] = to8(s[0]); rgba[d + 1] = to8(s[1]); rgba[d + 2] = to8(s[2]); }
+    if (color === 4) rgba[d + 3] = to8(s[1]);
+    else if (color === 6) rgba[d + 3] = to8(s[3]);
+    else rgba[d + 3] = key && key.every((k, c) => k === s[c]) ? 0 : 255;
+  };
+  let off = 0;
+  for (const [x0, y0, dx, dy] of interlace ? ADAM7 : [[0, 0, 1, 1]]) {
+    const pw = Math.ceil((W - x0) / dx), ph = Math.ceil((H - y0) / dy);
+    if (pw <= 0 || ph <= 0) continue;
+    const stride = Math.ceil((pw * bits) / 8);
+    let prev = Buffer.alloc(stride);
+    for (let y = 0; y < ph; y++) {
+      if (off + 1 + stride > raw.length) throw new Error("the image data ends before the last scanline");
+      const f = raw[off++];
+      const cur = Buffer.from(raw.subarray(off, off + stride)); off += stride;
+      unfilter(f, cur, prev, bpp);
+      for (let x = 0; x < pw; x++) put(cur, x, ((y0 + y * dy) * W + x0 + x * dx) * 4);
+      prev = cur;
+    }
   }
   return { W, H, rgba };
 }

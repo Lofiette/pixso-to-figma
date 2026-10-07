@@ -31,6 +31,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createContext, runInContext } from "node:vm";
+import { deflateSync } from "node:zlib";
 import { makeFixture } from "./pix/fixture.mjs";
 import { readPix } from "./pix/read.mjs";
 import { pixToIR } from "./pix/ir/index.mjs";
@@ -527,6 +528,103 @@ const LP = localPixso();
     "a root whose verified node is gone is a missing render, though an earlier run's copy of the same source and snapshot is in the file", show(r19));
   check(r50 && r50.ok === false && /cannot be paired by index/.test(r50.why || ""),
     "with --section children a section whose Figma children outnumber the IR's fails: its children cannot be paired by index", show(r50 && r50.why));
+}
+
+// ============================================================================================
+// 9. the pictures as Pixso exports them: every PNG colour type and bit depth
+// ============================================================================================
+// Pixso exports indexed PNGs (colour type 3 at 2, 4 and 8 bits, with tRNS); the first live audit
+// failed 305 roots on "does not decode" (2026-10-06). The test writes each kind with its own small
+// encoder, every filter type, odd widths so packed rows end mid-byte, and Adam7, and checks the
+// RGBA the decoder gives against the samples it wrote.
+{
+  const crcT = [];
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; crcT[n] = c >>> 0; }
+  const crc = (b) => { let c = 0xffffffff; for (const x of b) c = crcT[(c ^ x) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+  const chunk = (type, data) => { const td = Buffer.concat([Buffer.from(type, "ascii"), data]); const l = Buffer.alloc(4); l.writeUInt32BE(data.length); const c = Buffer.alloc(4); c.writeUInt32BE(crc(td)); return Buffer.concat([l, td, c]); };
+  const CHN = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
+  const ADAM = [[0, 0, 8, 8], [4, 0, 8, 8], [0, 4, 4, 8], [2, 0, 4, 4], [0, 2, 2, 4], [1, 0, 2, 2], [0, 1, 1, 2]];
+  const filterRow = (f, cur, prev, bpp) => {
+    const out = Buffer.alloc(cur.length);
+    for (let i = 0; i < cur.length; i++) {
+      const a = i >= bpp ? cur[i - bpp] : 0, b = prev[i], c = i >= bpp ? prev[i - bpp] : 0;
+      let pr = 0;
+      if (f === 1) pr = a; else if (f === 2) pr = b; else if (f === 3) pr = (a + b) >> 1;
+      else if (f === 4) { const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c); pr = pa <= pb && pa <= pc ? a : pb <= pc ? b : c; }
+      out[i] = (cur[i] - pr) & 255;
+    }
+    return out;
+  };
+  // samples[y][x] = [s0, s1, …] at the image's own depth.
+  const writePNG = (W, H, color, depth, samples, opts) => {
+    const o = opts || {}, CH = CHN[color], bits = CH * depth, bpp = Math.max(1, bits >> 3);
+    const rows = [];
+    let fi = 0;
+    for (const [x0, y0, dx, dy] of o.interlace ? ADAM : [[0, 0, 1, 1]]) {
+      const pw = Math.ceil((W - x0) / dx), ph = Math.ceil((H - y0) / dy);
+      if (pw <= 0 || ph <= 0) continue;
+      const stride = Math.ceil((pw * bits) / 8);
+      let prev = Buffer.alloc(stride);
+      for (let y = 0; y < ph; y++) {
+        const cur = Buffer.alloc(stride);
+        for (let x = 0; x < pw; x++) {
+          const s = samples[y0 + y * dy][x0 + x * dx];
+          for (let c = 0; c < CH; c++) {
+            if (depth < 8) { const bit = x * depth; cur[bit >> 3] |= s[c] << (8 - depth - (bit & 7)); }
+            else if (depth === 8) cur[x * CH + c] = s[c];
+            else cur.writeUInt16BE(s[c], (x * CH + c) * 2);
+          }
+        }
+        const f = fi++ % 5;
+        rows.push(Buffer.from([f]), filterRow(f, cur, prev, bpp));
+        prev = cur;
+      }
+    }
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(W, 0); ihdr.writeUInt32BE(H, 4); ihdr[8] = depth; ihdr[9] = color; ihdr[12] = o.interlace ? 1 : 0;
+    const parts = [Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ihdr)];
+    if (o.plte) parts.push(chunk("PLTE", o.plte));
+    if (o.trns) parts.push(chunk("tRNS", o.trns));
+    parts.push(chunk("IDAT", deflateSync(Buffer.concat(rows))), chunk("IEND", Buffer.alloc(0)));
+    return Buffer.concat(parts);
+  };
+  const W = 13, H = 9, kinds = [];
+  for (const color of [0, 2, 3, 4, 6]) for (const depth of { 0: [1, 2, 4, 8, 16], 2: [8, 16], 3: [1, 2, 4, 8], 4: [8, 16], 6: [8, 16] }[color]) for (const interlace of [false, true]) kinds.push({ color, depth, interlace });
+  const bad = [];
+  for (const k of kinds) {
+    const max = (1 << k.depth) - 1, CH = CHN[k.color];
+    const samples = [];
+    for (let y = 0; y < H; y++) { samples.push([]); for (let x = 0; x < W; x++) samples[y].push(Array.from({ length: CH }, (_, c) => ((x * 7 + y * 13 + c * 29) * 2654435761 >>> 0) % (max + 1))); }
+    const to8 = (v) => (k.depth === 16 ? v >> 8 : k.depth === 8 ? v : Math.round((v * 255) / max));
+    const opts = { interlace: k.interlace };
+    let expect;
+    if (k.color === 3) {
+      const n = max + 1, plte = Buffer.alloc(n * 3), trns = Buffer.alloc(Math.max(1, n >> 1));
+      for (let j = 0; j < n; j++) { plte[j * 3] = (j * 37) & 255; plte[j * 3 + 1] = (j * 91) & 255; plte[j * 3 + 2] = (j * 53) & 255; }
+      for (let j = 0; j < trns.length; j++) trns[j] = (j * 61) & 255;
+      opts.plte = plte; opts.trns = trns;
+      expect = (s) => [plte[s[0] * 3], plte[s[0] * 3 + 1], plte[s[0] * 3 + 2], s[0] < trns.length ? trns[s[0]] : 255];
+    } else if (k.color === 0 || k.color === 2) {
+      const keyS = samples[1][2];
+      const trns = Buffer.alloc(2 * CH); keyS.forEach((v, c) => trns.writeUInt16BE(v, c * 2));
+      opts.trns = trns;
+      expect = (s) => { const g = k.color === 0 ? [s[0], s[0], s[0]] : s; return [to8(g[0]), to8(g[1]), to8(g[2]), s.every((v, c) => v === keyS[c]) ? 0 : 255]; };
+    } else if (k.color === 4) expect = (s) => [to8(s[0]), to8(s[0]), to8(s[0]), to8(s[1])];
+    else expect = (s) => s.map(to8);
+    let im = null, err = null;
+    try { im = decodePNG(writePNG(W, H, k.color, k.depth, samples, opts)); } catch (e) { err = e.message; }
+    let wrong = err ? 1 : 0;
+    if (im) for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const e = expect(samples[y][x]), d = (y * W + x) * 4; if (e.some((v, c) => im.rgba[d + c] !== v)) wrong++; }
+    if (wrong || !im || im.W !== W || im.H !== H) bad.push({ kind: k, wrong, err });
+  }
+  check(bad.length === 0, "every PNG colour type and bit depth decodes to the RGBA it holds, filtered, packed and interlaced (" + kinds.length + " kinds)", show(bad.slice(0, 4)));
+  const refused = [];
+  for (const [what, png] of [["depth 4 RGB", writePNG(2, 2, 2, 8, [[[0, 0, 0], [0, 0, 0]], [[0, 0, 0], [0, 0, 0]]]).fill(4, 24, 25)],
+    ["indexed without PLTE", writePNG(2, 2, 3, 8, [[[0], [0]], [[0], [0]]])],
+    ["index past the palette", writePNG(2, 1, 3, 8, [[[0], [5]]], { plte: Buffer.from([1, 2, 3]) })]]) {
+    try { decodePNG(png); refused.push(what + ": decoded"); } catch (e) { if (!/depth|PLTE|palette|CRC|colour/.test(e.message)) refused.push(what + ": " + e.message); }
+  }
+  check(refused.length === 0, "a PNG the standard does not allow, an indexed PNG without a palette, and an index past the palette are refused with a reason", show(refused));
 }
 
 await PX.close();
