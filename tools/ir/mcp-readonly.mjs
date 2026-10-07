@@ -99,7 +99,11 @@ export function readOnlyProblems(src) {
   const { code, problems } = lex(src);
   if (problems.length) return problems;
   const found = [];
-  const declared = new Set([...code.matchAll(/\bfunction\s+([A-Za-z_$][\w$]*)/g)].map((m) => m[1]));
+  const declared = new Set([...code.matchAll(/\bfunction\s+([A-Za-z_$][\w$]*)/g),
+    ...code.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?function\b/g)].map((m) => m[1]));
+  // Not a write, but a script Pixso cannot parse (see B64 below): refused here, before it is sent.
+  const lines = code.split(NL), decl = lines.findIndex((l) => /\bfunction\s+[A-Za-z_$][\w$]*\s*\(/.test(l));
+  if (decl >= 0 && lines.slice(decl + 1).some((l) => /^\s*await\s/.test(l))) found.push("a function declaration before a statement that starts with await (Pixso cannot parse it: use const f = function …)");
   // Raw text, strings and comments included: a mutating name has no business anywhere in a read script.
   for (const m of String(src).matchAll(/\.\s*([A-Za-z_$][\w$]*)\s*\(/g)) {
     if (MUTATORS.indexOf(m[1]) >= 0) found.push("calls ." + m[1] + "(), which changes the document");
@@ -151,8 +155,11 @@ const args = (o) => "const ARGS = " + JSON.stringify(o) + ";";
 
 // Base64 inside Pixso's sandbox: its native base64Encode when it has one (px-images.mjs measured it
 // byte-identical), else a hand-rolled encoder written to pass the check (no member assignment).
+// Helpers are function expressions, never declarations: Pixso refuses a script in which a function
+// declaration comes before a statement that starts with await ("SyntaxError: expecting ';'", the
+// first live render audit, 2026-10-06), and every library script awaits loadAllPagesAsync.
 const B64 = [
-  "function b64(u) {",
+  "const b64 = function (u) {",
   "  if (typeof pixso.base64Encode === 'function') return pixso.base64Encode(u);",
   "  const A64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';",
   "  const CODES = [];",
@@ -170,7 +177,7 @@ const B64 = [
   "  }",
   "  if (block.length) out.push(String.fromCharCode.apply(null, block));",
   "  return out.join('');",
-  "}",
+  "};",
 ].join(NL);
 
 export const SCRIPTS = Object.freeze({
@@ -233,10 +240,10 @@ export const SCRIPTS = Object.freeze({
     need(GUID.test(guid), "a guid");
     need(Number.isFinite(scale) && scale >= 0.01 && scale <= 16, "scale is 0.01 to 16");
     return ["// px:audit-render (read-only): a PNG of one node at a scale, with where it sits", args({ guid, scale }), B64,
-      "function rect(r) {",
+      "const rect = function (r) {",
       "  if (!r || typeof r.x !== 'number') return null;",
       "  return { x: r.x, y: r.y, width: r.width, height: r.height };",
-      "}",
+      "};",
       "await pixso.loadAllPagesAsync();",
       "const node = pixso.getNodeById(ARGS.guid);",
       "if (!node) return { e: 'no node' };",
@@ -301,11 +308,18 @@ export function makeMcpClient(opts) {
       if (r.code !== 0) return { ok: false, transport: false, refused: false, error: (r.stderr.trim() || "exit " + r.code).split(NL)[0] };
       const text = r.stdout.trim();
       if (/!! isError: true\s*$/.test(text)) return { ok: false, transport: false, refused: false, error: "the script failed in Pixso: " + text.split(NL)[0].slice(0, 300) };
-      try { return { ok: true, value: JSON.parse(text), transport: false, refused: false, error: null }; }
+      let value;
+      try { value = JSON.parse(text); }
       catch (e) {
-        try { return { ok: true, value: JSON.parse(text.split(NL)[0]), transport: false, refused: false, error: null }; }
+        try { value = JSON.parse(text.split(NL)[0]); }
         catch (e2) { return { ok: false, transport: false, refused: false, error: "Pixso's answer is not JSON: " + text.slice(0, 200) }; }
       }
+      // A script Pixso cannot parse or run comes back as an ordinary answer, { error: "<message>" }
+      // with nothing else in it, not as isError (2026-10-06). No library script returns that shape.
+      if (value && typeof value === "object" && !Array.isArray(value) && typeof value.error === "string" && Object.keys(value).length === 1) {
+        return { ok: false, transport: false, refused: false, error: "the script failed in Pixso: " + value.error.slice(0, 300) };
+      }
+      return { ok: true, value, transport: false, refused: false, error: null };
     },
   };
   return client;

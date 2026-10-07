@@ -23,6 +23,16 @@ function argsOf(src) {
   try { return JSON.parse(m[1]); } catch (e) { return null; }
 }
 
+// Pixso refuses to parse a script in which a top-level function declaration comes before a statement
+// that starts with await, and answers { error: "SyntaxError: expecting ';'" } as an ordinary result
+// (measured live 2026-10-06: "function x(){…}" then "await 0;" is refused; the await line first, a
+// "const x = function…" expression, or "const y = await …" are not).
+function refusedParse(src) {
+  const lines = String(src).split(NL);
+  const fn = lines.findIndex((l) => /^(async\s+)?function[\s*]/.test(l));
+  return fn >= 0 && lines.slice(fn + 1).some((l) => /^await\s/.test(l));
+}
+
 // An answer for a script of the M1 library, or null for anything else. served names what was served,
 // so outageAfter can take Pixso away after a given image or render.
 function libraryAnswer(S, src) {
@@ -128,6 +138,7 @@ export function fakePixso() {
       if (msg.method === "tools/call" && msg.params && msg.params.name === "eval_script") {
         const src = String((msg.params.arguments && msg.params.arguments.script) || "");
         S.scripts.push(src);
+        if (refusedParse(src)) { send(res, msg.id, text(JSON.stringify({ error: "SyntaxError: expecting ';'" })), true); return; }
         const lib = libraryAnswer(S, src);
         if (lib) {
           send(res, msg.id, text(JSON.stringify(lib.value)), true);
