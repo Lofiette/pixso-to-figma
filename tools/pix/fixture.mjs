@@ -103,7 +103,7 @@ message TextStyleData { int styleID = 1; float fontSize = 2; float paragraphInde
   Number letterSpacing = 5; Number lineHeight = 6; TextCase textCase = 7; TextDecoration textDecoration = 8;
   FontName fontName = 12; Hyperlink hyperlink = 13; Paint[] fillPaints = 14; FontVariantNumericSpacing fontVariantNumericSpacing = 15;
   OpenTypeFeature[] toggledOnOTFeatures = 16; }
-message FontMetaData { FontName key = 1; }
+message FontMetaData { FontName key = 1; float fontLineHeight = 2; }
 message VectorPaints { int regionId = 1; Paint[] paints = 2; }
 message LayoutGrid { int pattern = 1; float sectionSize = 2; bool visible = 3; Color color = 4; }
 message PluginData { string pluginID = 1; string value = 2; string key = 3; }
@@ -112,9 +112,10 @@ message Baseline { Vector position = 1; float width = 2; float lineY = 3; float 
   int firstCharacter = 6; int endCharacter = 7; }
 message Glyph { int blobIndex = 1; Vector position = 2; int styleID = 3; float fontSize = 4; int firstCharacter = 5;
   float advance = 6; }
-message ParagraphStyle { TextListStyle listType = 1; uint indentationLevel = 2; }
+message ParagraphStyle { TextListStyle listType = 1; uint indentationLevel = 2; uint listStartOffset = 3; }
 message TextData { string characters = 1; int[] characterStyleIDs = 2; TextStyleData[] styleOverrideTable = 3;
-  Vector layoutSize = 4; Baseline[] baselines = 5; Glyph[] glyphs = 6; ParagraphStyle[] paragraphStyle = 12; FontMetaData[] fontMetaData = 13; }
+  Vector layoutSize = 4; Baseline[] baselines = 5; Glyph[] glyphs = 6; ParagraphStyle[] paragraphStyle = 12; FontMetaData[] fontMetaData = 13;
+  int truncationStartIndex = 14; }
 message PropValueData { string property = 1; string[] values = 2; }
 message ComponentPropValue { TextData textValue = 1; GUID guidValue = 2; bool boolValue = 3; }
 message InstanceSwapPreferredValue { InstanceSwapPreferredValueType type = 1; string key = 2; }
@@ -165,9 +166,14 @@ message PixsoNode {
   ExportSettings[] exportSettings = 56;
   FontName fontName = 58;
   float fontSize = 59;
+  float paragraphIndent = 61;
+  float paragraphSpacing = 62;
   TextAlignHorizontal textAlignHorizontal = 63;
+  TextAlignVertical textAlignVertical = 64;
   TextAutoResize textAutoResize = 65;
+  TextCase textCase = 66;
   TextData textData = 67;
+  TextDecoration textDecoration = 68;
   Number letterSpacing = 71;
   Number lineHeight = 72;
   ConstraintType horizontalConstraint = 73;
@@ -214,6 +220,7 @@ message PixsoNode {
   TextTruncation textTruncation = 170;
   MaskType maskType = 171;
   LeadingTrim leadingTrim = 172;
+  OpenTypeFeature[] toggledOnOTFeatures = 179;
   int maxLines = 181;
   float stackCounterSpacing = 184;
   StackAlign stackCounterAlignContent = 185;
@@ -694,8 +701,8 @@ export function fixtureMessage(defs) {
     encodePath([...rectCmds(0, 0, 40, 20), ...rectCmdsCCW(1, 1, 39, 19)]),          // a 1 px ring
     encodePath([...rectCmds(0, 0, 40, 2), ...rectCmds(0, 18, 40, 20)]),             // top and bottom only
     encodePath([...rectCmds(0, 0, 40, 20), ...rectCmdsCCW(1, 1, 39, 19)]),          // dashed: no oracle
-    // 9: a glyph outline.
-    encodePath([[1, 0, 0], [2, 6, 0], [2, 3, 8], [0]]),
+    // 9: a glyph outline, in em as Pixso stores them (a real glyph spans at most 1.2 em; docs/M1.md §15.14).
+    encodePath([[1, 0, 0], [2, 0.6, 0], [2, 0.3, -0.7], [0]]),
     // 10-12: a 10 px square, another, a 10 px circle-ish shape.
     encodePath(rectCmds(0, 0, 10, 10)),
     encodePath(rectCmds(10, 0, 20, 10)),

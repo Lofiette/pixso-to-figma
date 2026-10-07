@@ -294,10 +294,10 @@ check("a missing font comes from the text style by guid; a RAW line height is dr
   eq([val(p.fontName), p.fontSize, p.lineHeight, p.lines], [{ family: "Inter", style: "Medium" }, 16, undefined, 1]);
   eq([stats.text.fontFromStyle, stats.text.rawLineHeight], [1, 1]);
 });
-check("PERCENT 1 is AUTO (the font's natural line height, review R3); PERCENT 1.5 stays 150 %", () => {
+check("PERCENT 1 is 100 %, counted (docs/M1.md §15.14, C08; review R3 read it as AUTO); PERCENT 1.5 stays 150 %", () => {
   const one = pixToIR(mutated((v, at) => { at(IDS.text).lineHeight = { value: 1, units: 3 }; }));
   const half = pixToIR(mutated((v, at) => { at(IDS.text).lineHeight = { value: 1.5, units: 3 }; }));
-  eq([rec(IDS.text, one.ir).props.lineHeight, one.stats.text.percentOneAuto], [undefined, 1]);
+  eq([val(rec(IDS.text, one.ir).props.lineHeight, one.ir), one.stats.text.percentOne], [{ unit: "PERCENT", value: 100 }, 1]);
   eq(val(rec(IDS.text, half.ir).props.lineHeight, half.ir), { unit: "PERCENT", value: 150 });
 });
 check("a text bound to a style takes the style's size (absent: 14), line height and letter spacing; its font by fontMetaData (review R2)", () => {
@@ -319,6 +319,101 @@ check("number forms and OpenType features are counted SOURCE_FEATURE_UNSUPPORTED
   const s = pixToIR(mutated((v, at) => { at(IDS.textNoLines).fontVariantNumericSpacing = 1; }));
   eq(notesOf(IDS.text, r.ir).map((n) => n.detail).filter((d) => d === "fontVariantNumeric" || d === "OpenType features"), ["fontVariantNumeric", "OpenType features"]);
   eq([r.stats.unsupported.fontVariantNumeric, notesOf(IDS.textNoLines, s.ir).some((n) => n.detail === "fontVariantNumeric")], [1, false]);
+});
+
+// ---------- 5b. text after the first render audit (docs/M1.md §15.14) ----------
+// The fixture's enums: TextCase UPPER 2, TextDecoration UNDERLINE 2, NumberUnits PIXELS 2, TextAlignVertical
+// CENTER 2, TextTruncation ENDING 1, LeadingTrim CAP_HEIGHT 1, FontVariantNumericSpacing TABULAR 3.
+const PX = (value) => ({ value, units: 2 });
+check("a text bound to a style takes the style's case, decoration and paragraph fields; a node's own differing one is counted (C05)", () => {
+  const r = pixToIR(mutated((v, at) => {
+    const s = at(IDS.textStyle), t = at(IDS.textFromStyle);
+    s.textCase = 2; s.textDecoration = 2; s.paragraphSpacing = 8; s.paragraphIndent = 4;
+    delete t.textCase; delete t.textDecoration;
+  }));
+  const p = rec(IDS.textFromStyle, r.ir).props;
+  eq([p.textCase, p.textDecoration, p.paragraphSpacing, p.paragraphIndent, r.stats.text.styleValueOverridden], ["UPPER", "UNDERLINE", 8, 4, 0]);
+  const o = pixToIR(mutated((v, at) => { at(IDS.textStyle).textCase = 2; at(IDS.textFromStyle).textCase = 3; }));
+  eq([rec(IDS.textFromStyle, o.ir).props.textCase, o.stats.text.styleValueOverridden], ["UPPER", 1]);
+});
+check("number forms and OpenType features on the text style alone are counted SOURCE_FEATURE_UNSUPPORTED too (C04)", () => {
+  const r = pixToIR(mutated((v, at) => { at(IDS.textStyle).fontVariantNumericSpacing = 3; at(IDS.textStyle).toggledOnOTFeatures = [6]; }));
+  eq(notesOf(IDS.textFromStyle, r.ir).map((n) => n.detail).filter((d) => d === "fontVariantNumeric" || d === "OpenType features"), ["fontVariantNumeric", "OpenType features"]);
+});
+// "Hi 😀 there\nsecond": code points 0-2 and 7-10 are the base style's, 3-6 style 1 (fontSize 20), 11-16 style 2 (Bold).
+const glyphRow = (size, gap, cps) => {
+  let x = 0;
+  return cps.map((c) => { const g = { blobIndex: 9, position: { x, y: 14 }, styleID: 0, fontSize: size, firstCharacter: c, advance: 6 }; x += 6 + gap; return g; });
+};
+check("an absent size and letter spacing come from the stored glyphs where they agree, noted TEXT_VALUE_FROM_GLYPHS (C07)", () => {
+  const r = pixToIR(mutated((v, at) => {
+    const t = at(IDS.text);
+    delete t.fontSize; delete t.letterSpacing;
+    t.textData.glyphs = glyphRow(10, 0.4, [0, 1, 2]).concat([{ blobIndex: 9, position: { x: 30, y: 14 }, styleID: 1, fontSize: 20, firstCharacter: 3, advance: 12 }],
+      glyphRow(10, 0.4, [7, 8, 9]).map((g) => Object.assign(g, { position: { x: g.position.x + 60, y: 14 } })));
+  }));
+  const p = rec(IDS.text, r.ir).props;
+  eq([p.fontSize, val(p.letterSpacing, r.ir), r.stats.text.fontSizeFromGlyphs, r.stats.text.letterSpacingFromGlyphs], [10, { unit: "PIXELS", value: 0.4 }, 1, 1]);
+  eq(notesOf(IDS.text, r.ir).filter((n) => n.code === CODE.TEXT_VALUE_FROM_GLYPHS).map((n) => n.detail.split("; ").slice(0, 2)), [["fontSize 10 (absent: 14)", "letterSpacing 0.4 px (absent: 0)"]]);
+  // At 14 with no gap, or a gap from two pairs only, or a spacing the node stores: nothing changes.
+  const plain = pixToIR(mutated((v, at) => { const t = at(IDS.text); delete t.fontSize; delete t.letterSpacing; t.textData.glyphs = glyphRow(14, 0, [0, 1, 2, 7]); }));
+  const two = pixToIR(mutated((v, at) => { const t = at(IDS.text); delete t.letterSpacing; t.textData.glyphs = glyphRow(14, 0.4, [0, 1, 2]); }));
+  const stored = pixToIR(mutated((v, at) => { at(IDS.text).textData.glyphs = glyphRow(14, 0.4, [0, 1, 2]).concat(glyphRow(14, 0.4, [7, 8, 9])); }));
+  eq([rec(IDS.text, plain.ir).props.fontSize, rec(IDS.text, plain.ir).props.letterSpacing, codesOf(IDS.text, plain.ir).includes(CODE.TEXT_VALUE_FROM_GLYPHS)], [14, undefined, false]);
+  eq([rec(IDS.text, two.ir).props.letterSpacing, val(rec(IDS.text, stored.ir).props.letterSpacing, stored.ir)], [undefined, { unit: "PERCENT", value: 6.25 }]);
+});
+check("list items: listSpacing is the paragraph spacing; a list starting past 1 is SOURCE_FEATURE_UNSUPPORTED (C09)", () => {
+  const r = pixToIR(mutated((v, at) => { const t = at(IDS.text); t.paragraphSpacing = 16; t.textData.paragraphStyle[1].listStartOffset = 4; }));
+  const p = rec(IDS.text, r.ir).props;
+  eq([p.paragraphSpacing, p.listSpacing, r.stats.text.listSpacingFromParagraph], [16, 16, 1]);
+  eq(notesOf(IDS.text, r.ir).filter((n) => /^list start number/.test(n.detail || "")).map((n) => n.detail), ["list start number: a list starts at 5; Figma numbers it from 1"]);
+  const none = pixToIR(mutated((v, at) => { const t = at(IDS.textNoLines); t.paragraphSpacing = 16; }));
+  eq(rec(IDS.textNoLines, none.ir).props.listSpacing, undefined);
+});
+check("a text Pixso cut with an ellipsis has the lines before the cut; an uncut one every stored line (C03)", () => {
+  const cut = pixToIR(mutated((v, at) => { const t = at(IDS.text); t.textTruncation = 1; t.maxLines = 1; t.textData.truncationStartIndex = 8; }));
+  const uncut = pixToIR(mutated((v, at) => { const t = at(IDS.text); t.textTruncation = 1; t.maxLines = 1; t.textData.truncationStartIndex = -1; }));
+  eq([rec(IDS.text, cut.ir).props.lines, cut.stats.text.truncatedLines, rec(IDS.text, uncut.ir).props.lines], [1, 1, 2]);
+});
+check("firstLineShift: written where the stored first baseline is more than 0.5 px off its half-leading place (C01, C02)", () => {
+  // Inter Medium 16 (the style's), natural 1.21 x 16 = 19.36, ascent 15.5, line height 20: half-leading
+  // puts the baseline at (20 - 19.36) / 2 + 15.5 = 15.82 below the line's top.
+  const at16 = (y, more) => pixToIR(mutated((v, at) => {
+    const t = at(IDS.textFromStyle);
+    t.lineHeight = PX(20); t.size = { x: 60, y: more && more.h ? more.h : 20 };
+    t.textData.baselines = [{ position: { x: 0, y }, width: 40, lineY: 0, lineHeight: 20, lineAscent: 15.5, firstCharacter: 0, endCharacter: 6 }];
+    t.textData.fontMetaData = more && more.noMetrics ? [] : [{ key: { family: "Inter", style: "Medium", postscript: "" }, fontLineHeight: 1.21 }];
+    if (more && more.center) t.textAlignVertical = 2;
+    if (more && more.trim) t.leadingTrim = 1;
+  }));
+  const half = at16(16), high = at16(14), low = at16(17.5), center = at16(18, { h: 24, center: true }), trimmed = at16(14, { trim: true }), unknown = at16(14, { noMetrics: true });
+  const shift = (r) => rec(IDS.textFromStyle, r.ir).props.firstLineShift;
+  eq([shift(half), shift(high), shift(low), shift(center), shift(trimmed), shift(unknown)], [undefined, -1.82, 1.68, undefined, undefined, undefined]);
+  // The fixture's other texts have no metrics: counted unknown in every read.
+  eq([half.stats.text.firstLine.halfLeading, high.stats.text.firstLine.shifted, trimmed.stats.text.firstLine.trimmedInSource,
+    unknown.stats.text.firstLine.unknown - half.stats.text.firstLine.unknown], [1, 1, 1, 1]);
+  const v = validate(high.ir);
+  if (!v.ok) throw new Error(JSON.stringify(v.errors.slice(0, 2)));
+  const bad = JSON.parse(JSON.stringify(high.ir));
+  bad.nodes[idx(bad, IDS.textFromStyle)].props.firstLineShift = 0.3;
+  return validate(bad).errors.some((e) => /firstLineShift/.test(e.path)) ? "a shift within 0.5 px is refused by the validator" : false;
+});
+check("TEXT_GLYPHS_INVALID: a text whose stored glyphs are not glyph outlines, by class; a real glyph and an empty space are not (C06)", () => {
+  const read = (blobs, chars) => pixToIR(mutated((v, at) => {
+    const t = at(IDS.text), first = v.blobs.length;
+    for (const b of blobs) v.blobs.push({ bytes: b });
+    t.textData.glyphs = blobs.map((b, k) => ({ blobIndex: first + k, position: { x: 8 * k, y: 14 }, styleID: 0, fontSize: 14, firstCharacter: chars[k], advance: 8 }))
+      .concat([{ blobIndex: 9, position: { x: 80, y: 14 }, styleID: 0, fontSize: 14, firstCharacter: 7, advance: 8 }]);
+  }));
+  const slab = encodePath([[1, 0, 0], [2, 199, 0], [2, 199, -72], [2, 0, -72], [0]]);
+  const far = encodePath([[1, -1.04e34, 0], [2, 0.5, -0.7], [0]]);
+  const none = encodePath([[1, 0, 0], [2, 1e-38, 2e-38], [0]]);
+  const detail = (r) => notesOf(IDS.text, r.ir).filter((n) => n.code === CODE.TEXT_GLYPHS_INVALID).map((n) => n.detail.split(";")[0]);
+  const a = read([none, slab, far], [0, 1, 5]), b = read([slab], [0]), c = read([none], [0]), d = read([none], [2]);
+  eq([detail(a), detail(b), detail(c), detail(d), detail(R.auto)], [["drops-text: 3 of 4 stored glyphs are not glyph outlines (drops-text 1, slab 1, empty 1)"],
+    ["slab: 1 of 2 stored glyphs are not glyph outlines (slab 1)"], ["empty: 1 of 2 stored glyphs are not glyph outlines (empty 1)"], [], []]);
+  eq([a.stats.text.glyphsInvalid["drops-text"], b.stats.text.glyphsInvalid.slab, c.stats.text.glyphsInvalid.empty], [1, 1, 1]);
+  for (const r of [a, b, c]) { const v = validate(r.ir); if (!v.ok) throw new Error(JSON.stringify(v.errors.slice(0, 2))); }
 });
 check("every font used is listed once", () => {
   eq(ir.fonts.map((f) => f.style).sort(), ["Bold", "Medium", "Regular"]);

@@ -47,10 +47,10 @@ B.WRITES = {
   childFlow: ["layoutPositioning", "layoutAlign", "layoutGrow", "constraints"],
   geometry: ["vectorNetwork", "fillGeometry", "strokeGeometry"], boolean: ["booleanOperation"],
   // Not written in M1, each for its reason: styles land in M2b (raw values are written), the
-  // property references with variants in M2a, inkBounds and lines are measurements, and the oracle
-  // never reaches the plugin.
+  // property references with variants in M2a, inkBounds, lines and firstLineShift are measurements
+  // (the textLine pass reads the last), and the oracle never reaches the plugin.
   notWritten: ["fillStyle", "strokeStyle", "textStyle", "effectStyle", "gridStyle", "componentPropertyReferences",
-    "inkBounds", "lines", "oracleFillGeometry", "oracleSides"],
+    "inkBounds", "lines", "firstLineShift", "oracleFillGeometry", "oracleSides"],
 };
 
 B.COUNTER_KEYS = ["sizeRepaired", "sizeRejected", "layoutDroppedForSize", "rotPinned", "flowAligned", "flowAbsolute",

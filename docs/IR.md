@@ -277,7 +277,8 @@ The IR's own `props`:
 | `oracleSides` | `[top, right, bottom, left]` booleans: whether Pixso's stroke-area path draws that side (D15); never in a task |
 | `oracleFillGeometry` | the stored fill geometry of a network-built `VECTOR` or a natively built vector type, a `values` index (D3); never in a task |
 | `textRanges` | `[{ start, end, fields }]`: ascending, non-overlapping ranges in UTF-16 units of `characters` (Figma's indexing; the reader converts Pixso's per-code-point style ids). No bound splits a surrogate pair; `fields` holds only what differs from the node, from `RANGE_FIELDS` |
-| `lines` | the number of lines Pixso drew, from its stored baselines (decision 9); a text with none has no `lines` and a `TEXT_LINES_UNKNOWN` note |
+| `lines` | the number of lines Pixso drew, from its stored baselines (decision 9): all of them, or for a text Pixso cut with an ellipsis (`ENDING` and a stored truncation start) the ones before the cut, at least 1 (`docs/M1.md` §15.14); a text with none has no `lines` and a `TEXT_LINES_UNKNOWN` note |
+| `firstLineShift` | `TEXT` only: how far, in px and positive down, Pixso drew the first baseline from where half-leading puts it in the record's box (the place Figma draws an untrimmed line); written only when that is more than 0.5 px, so absent means at that place or not known. The builder's `textTrim` reads it (`docs/M1.md` §15.14) |
 | `inkBounds` | `[x, y, width, height]` of the rendered ink, in the node's own frame (capability `inkBounds`) |
 | `fillStyle`, `strokeStyle`, `textStyle`, `effectStyle`, `gridStyle` | index into `styles`, of type PAINT, PAINT, TEXT, EFFECT and GRID |
 | `componentPropertyReferences` | `{ characters \| visible \| mainComponent: property id }`, bound to TEXT, BOOLEAN and INSTANCE_SWAP properties of the enclosing definition's family, always by the **root** definition's id: a Pixso binding through a variant-local alias is written with the id its alias chain ends in (`docs/M2A.md` D3, D4), and a binding that cannot be carried is a `PROPERTY_REF_DROPPED` note |
@@ -499,6 +500,8 @@ from the preflight and the kit-map resolution, and *build* codes come from Figma
 | `OVERRIDE_FIELD_DROPPED` | read | an override field not carried; one note per instance and class, the detail the class, then `: ` and the fields with counts. Classes: `no-equivalent`, `not-on-type`, `layer-not-carried`, `root-box`, `unknown` | named here (§3) |
 | `NODE_TYPE_UNSUPPORTED` | read | a source node type the IR has no type for; it and its subtree are not carried | named here (§7, §8) |
 | `TEXT_LINES_UNKNOWN` | read | a buildable text with no stored baselines; it has no `lines` | named here (§3) |
+| `TEXT_GLYPHS_INVALID` | read | a text whose stored glyph outlines, which Pixso draws, are not glyph outlines (a stale glyph table): Pixso draws no text, a slab or nothing where Figma draws the characters. The detail starts with the class (`NOTE_CLASSES`: `drops-text`, an outline past 1e6 em; `slab`, one over 3 em; `empty`, none for a visible character), then the counts. The text is built from its characters (`docs/M1.md` §15.14) | named here (§7) |
+| `TEXT_VALUE_FROM_GLYPHS` | read | a `fontSize` or `letterSpacing` the node and its style leave out, taken from the stored glyphs Pixso draws where they agree on a value other than the absent default; the detail names each field with both values (`docs/M1.md` §15.14) | named here (§7) |
 | `SOURCE_FEATURE_UNSUPPORTED` | read | a Pixso feature Figma lacks, named in the detail, which starts with the feature from an open list (CONNECTLINE, LINE with height, SECTION strokes, SECTION corner radius, RIGHT_ANGLE, vibrance, hue filter, dashCap, deformationTransform, fontVariations, GRID, counter alignment <X>, strokeCap <X>, effect <TYPE>, export format <X>, paint type <X>, image paint without an image, text without a font name, inverse winding, open region loop, operand strokes under `--booleans native`, an operand without fill geometry, boolean without stored geometry, built natively, no stored geometry (a STAR or POLYGON), layoutGrids, fontVariantNumeric, fontVariantPosition, OpenType features, COLOR property), optionally followed by `: ` and text; dropped or converted, and counted per feature in `stats.unsupported`. The judge excuses a vector's paths only for the features that change the drawing (`judge.mjs` SFU_GEOMETRY, docs/M1.md §8.3) | named here (§7) |
 | `GEOMETRY_INVALID` | read | a NaN size, transform or path, or a boolean with no operand and no geometry; the box comes from the geometry or the children, or the node is not carried | named here (§7) |
 | `IMAGE_HASH_MISMATCH` | read | an archive image entry whose SHA-1 is not its name; treated as missing | named here (§4) |
@@ -609,6 +612,13 @@ are closed, a new key changes it too. A change updates this document, `tools/ir/
 - the codes `PROPERTY_REF_DROPPED` to `OVERRIDE_FIELD_DROPPED` in §13, and frozen detail classes (`NOTE_CLASSES`) for
   them and for `VARIANT_SET_REJECTED`, `STALE_ASSIGNMENT` and `OVERRIDE_STALE`; a note with a `path` names its
   instance by `node`.
+
+**Within version 3** (`docs/M1.md` §15.14, 2026-10-07), additions an IR written before them never uses, so every such
+IR still validates; a checkout before them refuses an IR written after them (an unknown prop or code), never misreads
+it. The version stays 3, as for the `boolean-operands` class (`docs/M1.md` §15.13): a bump would refuse every
+version 3 run folder, and the new builder setting `textTrim` already gives every run a new folder:
+- the `TEXT` prop `firstLineShift`, and `lines` counting the drawn lines of a cut text;
+- the codes `TEXT_GLYPHS_INVALID` (with its classes) and `TEXT_VALUE_FROM_GLYPHS`.
 
 ## 16. Complete example
 
