@@ -23,7 +23,7 @@
 //   { format: "pix2fig.task", version: 1, op: "fonts"|"build"|"verify"|"clean",
 //     runId: 16 lowercase hex, taskNo: 1.., of: taskNo.., snapshot: snapshotId(IR header), irVersion: 3,
 //     settings: { textFit: "widen"|"source-box", layoutOrder: "creation"|"deepestFirst",
-//                 textRead: "measure"|"inLoop", fallbackFont: { family, style } },
+//                 textRead: "measure"|"inLoop", textTrim: "source"|"lineHeight"|"none", fallbackFont: { family, style } },
 //     page: { index: IR page index | null, guid: page guid | "m1-service", name, service: bool,
 //             background: values key | null } | null,
 //     roots: [{ i, attachTo: "page" | { i, guid }, place: [x, y] | null }],
@@ -91,8 +91,11 @@ export function taskType(irType) {
   return irType === "COMPONENT_SET" ? "FRAME" : irType;
 }
 // The builder's settings (docs/M1.md §3, D11); textFit's values are the IR's (schema.SETTINGS.textFit).
-export const TASK_SETTINGS = { layoutOrder: ["creation", "deepestFirst"], textRead: ["measure", "inLoop"] };
-export const TASK_SETTING_DEFAULTS = { textFit: "widen", layoutOrder: "deepestFirst", textRead: "measure",
+// textTrim (docs/M1.md §15.14): which texts the textLine pass trims to the cap height: "source", where
+// the IR's firstLineShift says Pixso drew the first line above its half-leading place; "lineHeight",
+// every text whose line height is 1 px or more off the font's natural one (builder4's rule); "none".
+export const TASK_SETTINGS = { layoutOrder: ["creation", "deepestFirst"], textRead: ["measure", "inLoop"], textTrim: ["source", "lineHeight", "none"] };
+export const TASK_SETTING_DEFAULTS = { textFit: "widen", layoutOrder: "deepestFirst", textRead: "measure", textTrim: "source",
   fallbackFont: { family: "Inter", style: "Regular" } };
 export const IMAGE_SOURCES = ["archive", "mcp", "render", "none"];
 // The build op's phase table (docs/M1.md §6 B), in order. ctx.phase is called with these names, the
@@ -165,7 +168,7 @@ export function validateTask(task, deps) {
   const st = task.settings;
   if (!isObj(st)) err("settings", "missing; the builder's settings travel with every task");
   else {
-    closed(st, ["textFit", "layoutOrder", "textRead", "fallbackFont"], "settings");
+    closed(st, ["textFit", "layoutOrder", "textRead", "textTrim", "fallbackFont"], "settings");
     if (S.SETTINGS.textFit.indexOf(st.textFit) < 0) err("settings.textFit", "must be one of " + S.SETTINGS.textFit.join(", ") + "; got " + show(st.textFit));
     for (const k of Object.keys(TASK_SETTINGS)) if (TASK_SETTINGS[k].indexOf(st[k]) < 0) err("settings." + k, "must be one of " + TASK_SETTINGS[k].join(", ") + "; got " + show(st[k]));
     const f = st.fallbackFont;

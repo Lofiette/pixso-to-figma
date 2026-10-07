@@ -11,7 +11,12 @@
 //     (PIXELS; PERCENT / 100 x fontSize; AUTO: the one-line height measured once per font and size on
 //     the same scratch node, kept for the session). paragraphs = the "\n"-separated parts of
 //     characters. With ENDING truncation the count is capped at maxLines, and in a fixed box
-//     (textAutoResize NONE) at the lines that fit its height, at least 1. approx is true when ranges
+//     (textAutoResize NONE) at the lines that fit its height, at least 1, but only where the BUILT node
+//     says the truncation is in effect: textTruncation ENDING and the record's maxLines read back, and
+//     an auto-height box no taller than maxLines lines (docs/M1.md §15.14: on U's first render audit
+//     no ENDING text drew an ellipsis while this count, capped from the record alone, said they did).
+//     The IR's lines are the lines Pixso draws, so a truncation Figma did not apply is a
+//     TEXT_LINES_DIFFER. approx is true when ranges
 //     mix line heights (a range sets lineHeight or paragraphSpacing, or sets fontSize or fontName
 //     while the line height is AUTO or PERCENT), or when L is not a positive number.
 //     The AUTO measurement writes the font writeTextProps writes: the record's, or
@@ -167,10 +172,21 @@ IR.countLines = function (ctx, node, rec) {
   if (!(L > 0) || !isFinite(L)) { lines = H > 0 ? 1 : 0; approx = true; }
   else lines = Math.max(0, Math.round((H - ps * (paragraphs - 1)) / L));
   var maxLines = ctx.prop(rec, "maxLines");
-  var ending = ctx.prop(rec, "textTruncation") === "ENDING";
+  var ending = ctx.prop(rec, "textTruncation") === "ENDING" && truncationHolds(node, maxLines, L);
   if (ending && typeof maxLines === "number" && maxLines >= 1 && lines > maxLines) lines = maxLines;
   // A truncated text in a fixed box draws the lines that fit the box, the last with an ellipsis
   // (part F, review figma F2): counted the same, a one-line label is never widened for overflowing.
   if (ending && ctx.prop(rec, "textAutoResize") === "NONE" && L > 0 && isFinite(L)) lines = Math.min(lines, Math.max(1, Math.floor((node.height + 0.5) / L)));
   return { lines: lines, approx: approx };
 };
+
+// Whether the built node truncates as its record says: textTruncation ENDING read back, maxLines read
+// back as written (when the record has one), and an auto-height box no taller than maxLines lines.
+function truncationHolds(node, maxLines, L) {
+  var t, m, mode, h;
+  try { t = node.textTruncation; m = node.maxLines; mode = node.textAutoResize; h = node.height; } catch (e) { return false; }
+  if (t !== "ENDING") return false;
+  if (typeof maxLines !== "number" || maxLines < 1) return true;
+  if (m !== maxLines) return false;
+  return !(mode === "HEIGHT" && L > 0 && isFinite(L) && h > maxLines * L + 0.5);
+}

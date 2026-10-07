@@ -26,7 +26,7 @@ import { GATES, m1Gates, m1Verdict, sumJs, BUILT_NOT_AUDITED } from "./ir/verdic
 import { emptyJ, checkJShape, TOTALS_SHAPE } from "./ir/judge.mjs";
 import { REPO_ROOT } from "./ir/outside-repo.mjs";
 import { fakePixso } from "./test/fake-pixso.mjs";
-import { adoptIrSettings, parseArgs, SETTINGS as RUN_SETTINGS } from "./pix-run.mjs";
+import { adoptIrSettings, parseArgs, runSettings, SETTINGS as RUN_SETTINGS } from "./pix-run.mjs";
 import { accept, legacyLostBorders } from "./m1-accept.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -728,6 +728,10 @@ function pixRunGroup() {
     /unknown option/.test(threw(() => parseArgs(["x.pix", "--frobnicate"]))) && /below/.test(threw(() => parseArgs(["x.pix", "--liveness-warn-s", "400"]))) &&
     /mcp is M4/.test(threw(() => parseArgs(["x.pix", "--source", "mcp"]))),
     "pix-run refuses values outside each setting's range; --no-pixso is --images archive");
+  // docs/M1.md §15.14: the text trim rule is a setting, source by default, builder4's rule reachable.
+  check(o.textTrim === "source" && parseArgs(["x.pix", "--text-trim", "lineHeight"]).textTrim === "lineHeight" && parseArgs(["x.pix", "--text-trim", "none"]).textTrim === "none" &&
+    /one of/.test(threw(() => parseArgs(["x.pix", "--text-trim", "always"]))) && runSettings(o).textTrim === "source",
+    "--text-trim is source by default, takes lineHeight and none, refuses anything else, and is recorded in the run's settings");
   const S = syntheticIR({});
   const src = join(TMP, "src");
   mkdirSync(src, { recursive: true });
@@ -752,7 +756,7 @@ function pixRunGroup() {
     const c = run(join(flipped, "tmp-data"));
     check(c.code === 1 && /inside the repository/.test(c.out), "pix-run refuses the repository named with its drive letter in the other case");
   } else console.log("skip the drive-letter case: not Windows");
-  check(Object.keys(RUN_SETTINGS).length === 19 + M2A_SETTINGS.length, "every setting of §3 is a pix-run flag (with --data, --only, --from-ir and --stats, and docs/M2A.md §3's thirteen)");
+  check(Object.keys(RUN_SETTINGS).length === 20 + M2A_SETTINGS.length, "every setting of §3 is a pix-run flag (with --data, --only, --from-ir and --stats, and docs/M2A.md §3's thirteen)");
   {
     // Review S7: --from-ir keeps the reader's settings the IR header records.
     const header = { settings: { textFit: "source-box", booleans: "flatten", spaceEvenlySingle: "center" }, scope: { kind: "pages", ids: ["0:4"] } };

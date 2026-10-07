@@ -619,7 +619,7 @@ const widenScene = (by) => {
 // ============================================================================================
 const SNAP = schema.snapshotId({ source: { kind: "pix", sha256: "0".repeat(62) + "a1" } });
 const RUN = "00000000000000c3";
-const SETTINGS = { textFit: "widen", layoutOrder: "creation", textRead: "measure", fallbackFont: { family: "Inter", style: "Regular" } };
+const SETTINGS = { textFit: "widen", layoutOrder: "creation", textRead: "measure", textTrim: "source", fallbackFont: { family: "Inter", style: "Regular" } };
 const NS = "pix2fig";
 const stampRoot = (n, i, guid) => { n.setSharedPluginData(NS, "pxIdx", String(i)); n.setSharedPluginData(NS, "pxSnap", SNAP); n.setSharedPluginData(NS, "pxIr", String(schema.VERSION));
   n.setSharedPluginData(NS, "pxSrc", guid); n.setSharedPluginData(NS, "pxRun", RUN); };
@@ -812,10 +812,26 @@ const textRec = (i, props) => ({ i, parent: i === 0 ? -1 : 0, guid: "8:" + (i + 
   const ctx = IR.makeCtx(figma, task, { id: "c1" });
   const built = figma.createText(); built.textAutoResize = "NONE"; built.fontName = { family: "Inter", style: "Regular" }; built.characters = "x"; built.resize(25, 20);
   const pagesBefore = D.tree().children.length;
-  const got = recs.map((r) => IR.countLines(ctx, built, r));
+  // The built node carries the truncation the builder wrote (docs/M1.md §15.14: countLines reads it back).
+  const asBuilt = (r, fn, t) => {
+    const o = t || r.props, was = { characters: built.characters, fontSize: built.fontSize, lineHeight: built.lineHeight };
+    built.textTruncation = o.textTruncation || "DISABLED"; built.maxLines = o.maxLines === undefined ? null : o.maxLines;
+    // An auto-height built node is drawn with the record's text: the toy sizes it from its own.
+    if (t && t.textAutoResize) { built.characters = r.props.characters; built.fontSize = r.props.fontSize; built.lineHeight = task.values[String(r.props.lineHeight)]; built.textAutoResize = t.textAutoResize; }
+    try { return fn(); }
+    finally { built.textTruncation = "DISABLED"; built.maxLines = null; built.textAutoResize = "NONE"; Object.assign(built, was); built.resize(25, 20); }
+  };
+  const got = recs.map((r) => asBuilt(r, () => IR.countLines(ctx, built, r)));
   const want = [[3, false], [3, false], [3, false], [3, false], [2, false], [2, false], [3, true], [3, false], [3, true], [1, false]];
   const bad = got.map((g, k) => (g.lines === want[k][0] && g.approx === want[k][1] ? "" : k + ": " + show(g) + " want " + show(want[k]))).filter(Boolean);
   check(!bad.length, "countLines through " + label + " on a toy text model: PIXELS, PERCENT, AUTO per font, paragraph spacing, ENDING cap (maxLines, or a fixed box's height), approximate ranges", bad.join("; "));
+  // A truncation Figma did not apply is counted as drawn (C03): truncation read back off, maxLines read
+  // back other than written, or an auto-height box taller than maxLines lines (the toy has no maxLines).
+  const off = [asBuilt(recs[5], () => IR.countLines(ctx, built, recs[5]), { textTruncation: "DISABLED" }),
+    asBuilt(recs[5], () => IR.countLines(ctx, built, recs[5]), { textTruncation: "ENDING" }),
+    asBuilt(recs[9], () => IR.countLines(ctx, built, recs[9]), { textTruncation: "DISABLED" }),
+    asBuilt(recs[5], () => IR.countLines(ctx, built, recs[5]), { textTruncation: "ENDING", maxLines: 2, textAutoResize: "HEIGHT" })].map((g) => g.lines);
+  check(same(off, [3, 3, 3, 3]), "countLines counts every drawn line where the built node does not truncate as its record says (read back off, maxLines dropped, a box taller than maxLines lines)", show(off));
   const tree = D.tree();
   const service = tree.children.find((p) => p.sharedPluginData[NS] && p.sharedPluginData[NS].pxPage === "m1-service");
   const scratch = service && service.children.find((n) => n.sharedPluginData[NS] && n.sharedPluginData[NS].pxScratch === "1" && n.pluginData.pxScratch === "1");
