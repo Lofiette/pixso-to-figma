@@ -10,7 +10,7 @@
 //             are derived from the IR alone (derivePopulations) and the stored-node equation cannot
 //             be checked, so it does not add up (G4 fails, by design)
 //   m1Scope   "default" | "all-masters" | "all" (M1_SCOPES)
-//   settings  { textFit, layoutOrder, textRead, fallbackFont, maxTaskMb, ceilingMsPerNode, scope }, each
+//   settings  { textFit, layoutOrder, textRead, textTrim, fallbackFont, maxTaskMb, ceilingMsPerNode, scope }, each
 //             defaulting to docs/M1.md §3 (PLAN_DEFAULTS); scope is "file" or "pages:<guid,…>" (page
 //             guids or top-level record guids)
 //   images    the image table of resolveImages (tools/ir/images.mjs); without one, tableFromIR
@@ -62,7 +62,7 @@ export const BUILT_BY_SCOPE = {
   all: ["user", "mastersNoInstance", "mastersWithInstanceInternal", "internalLoose", "stateGroupsInternal", "internalUnclassified"],
 };
 export const PLAN_DEFAULTS = Object.freeze({ textFit: TASK_SETTING_DEFAULTS.textFit, layoutOrder: TASK_SETTING_DEFAULTS.layoutOrder,
-  textRead: TASK_SETTING_DEFAULTS.textRead, fallbackFont: TASK_SETTING_DEFAULTS.fallbackFont, maxTaskMb: 4, ceilingMsPerNode: 20,
+  textRead: TASK_SETTING_DEFAULTS.textRead, textTrim: TASK_SETTING_DEFAULTS.textTrim, fallbackFont: TASK_SETTING_DEFAULTS.fallbackFont, maxTaskMb: 4, ceilingMsPerNode: 20,
   scope: "file" });
 export const CEILING_BASE_MS = 120000;
 export const SERVICE_PAGE_NAME = "pix2fig service: S2 masters";
@@ -178,7 +178,7 @@ export function planM1(ir, stats, opts) {
   const { claim, source, lists } = claimRecords(ir, stats, parseScope(st.scope));
   const builtPops = BUILT_BY_SCOPE[m1Scope];
   const B = claim.map((c) => builtPops.indexOf(c) >= 0);
-  const settings = { textFit: st.textFit, layoutOrder: st.layoutOrder, textRead: st.textRead,
+  const settings = { textFit: st.textFit, layoutOrder: st.layoutOrder, textRead: st.textRead, textTrim: st.textTrim,
     fallbackFont: { family: st.fallbackFont.family, style: st.fallbackFont.style } };
   const imgTable = new Map((o.images || tableFromIR(ir)).map((t) => [t.hash, t]));
 

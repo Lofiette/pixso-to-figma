@@ -3,7 +3,8 @@
 //
 //   node tools/pix-run.mjs --source pix <file.pix> [--scope file|pages:<guids>] [--m1-scope default|all-masters|all]
 //     [--booleans auto|native|flatten] [--space-evenly-single between|center] [--text-fit widen|source-box]
-//     [--layout-order creation|deepestFirst] [--text-read measure|inLoop] [--images archive,mcp,render]
+//     [--layout-order creation|deepestFirst] [--text-read measure|inLoop] [--text-trim source|lineHeight|none]
+//     [--images archive,mcp,render]
 //     [--no-pixso] [--missing-fonts ask|substitute] [--fallback-font Family/Style] [--max-task-mb n]
 //     [--liveness-warn-s n] [--liveness-fail-s n] [--ceiling-ms-per-node n] [--only <taskNo>] [--dry] [--yes]
 //     [--data <dir>] [--from-ir <ir.json> [--stats <stats.json>]]
@@ -60,6 +61,7 @@ export const SETTINGS = {
   "--text-fit": ["textFit", IR_SETTINGS.textFit, "widen"],
   "--layout-order": ["layoutOrder", TASK_SETTINGS.layoutOrder, "deepestFirst"],   // P5, 2026-10-05
   "--text-read": ["textRead", TASK_SETTINGS.textRead, "measure"],
+  "--text-trim": ["textTrim", TASK_SETTINGS.textTrim, "source"],   // docs/M1.md §15.14, 2026-10-07
   "--images": ["images", (v) => parseLinks(v).join(","), LINKS.join(",")],
   "--missing-fonts": ["missingFonts", ["ask", "substitute"], "ask"],
   "--fallback-font": ["fallbackFont", (v) => { const m = /^([^/]+)\/(.+)$/.exec(v); if (!m) throw new RangeError("--fallback-font is Family/Style"); return m[1] + "/" + m[2]; }, "Inter/Regular"],
@@ -137,7 +139,7 @@ export function readerSettingsOf(o) {
 export function runSettings(o) {
   const [family, style] = o.fallbackFont.split("/");
   const s = { source: o.source, scope: o.scope, m1Scope: o.m1Scope, booleans: o.booleans, spaceEvenlySingle: o.spaceEvenlySingle, textFit: o.textFit,
-    layoutOrder: o.layoutOrder, textRead: o.textRead, images: o.images, noPixso: o.noPixso, missingFonts: o.missingFonts,
+    layoutOrder: o.layoutOrder, textRead: o.textRead, textTrim: o.textTrim, images: o.images, noPixso: o.noPixso, missingFonts: o.missingFonts,
     fallbackFont: { family, style }, maxTaskMb: o.maxTaskMb, livenessWarnS: o.livenessWarnS, livenessFailS: o.livenessFailS,
     ceilingMsPerNode: o.ceilingMsPerNode };
   for (const k of M2A_SETTINGS) s[k] = o[k];
@@ -254,7 +256,7 @@ export async function main(argv) {
   const links = parseLinks(o.images);
   let verdicts = null;
   try { verdicts = JSON.parse(readFileSync(join(HERE, "double", "verdicts.json"), "utf8")); } catch (e) { say("note: tools/double/verdicts.json not readable; every probe pending"); }
-  const planOpts = { m1Scope: o.m1Scope, settings: { textFit: o.textFit, layoutOrder: o.layoutOrder, textRead: o.textRead, fallbackFont: settings.fallbackFont,
+  const planOpts = { m1Scope: o.m1Scope, settings: { textFit: o.textFit, layoutOrder: o.layoutOrder, textRead: o.textRead, textTrim: o.textTrim, fallbackFont: settings.fallbackFont,
     maxTaskMb: o.maxTaskMb, ceilingMsPerNode: o.ceilingMsPerNode, scope: o.scope } };
   let plan;
   try { plan = planM1(ir, stats, Object.assign({}, planOpts, { images: tableFromIR(ir) })); }

@@ -44,7 +44,7 @@ const SNAP = schema.snapshotId({ source: { kind: "pix", sha256: SHA } });
 const IMG = sha1("pxf synthetic image for the task contract");
 const T6 = (x, y) => [1, 0, x, 0, 1, y];
 const painted = { fills: 0, strokes: 1, strokeWeight: 1, strokeAlign: "INSIDE", blendMode: "PASS_THROUGH" };
-const SETTINGS = { textFit: "widen", layoutOrder: "creation", textRead: "measure", fallbackFont: { family: "Inter", style: "Regular" } };
+const SETTINGS = { textFit: "widen", layoutOrder: "creation", textRead: "measure", textTrim: "source", fallbackFont: { family: "Inter", style: "Regular" } };
 const buildTask = () => ({
   format: "pix2fig.task", version: 1, op: "build", runId: "0123456789abcdef", taskNo: 1, of: 2, snapshot: SNAP, irVersion: schema.VERSION,
   settings: JSON.parse(JSON.stringify(SETTINGS)),
@@ -116,6 +116,8 @@ taskErr("another task version", tmut(buildTask, (t) => { t.version = 2; }), "ver
 taskErr("records of another IR version", tmut(buildTask, (t) => { t.irVersion = 1; }), "irVersion");
 taskErr("an unknown key", tmut(buildTask, (t) => { t.extra = 1; }), "extra");
 taskErr("a layout order outside its values", tmut(buildTask, (t) => { t.settings.layoutOrder = "random"; }), "settings.layoutOrder");
+taskErr("a text trim rule outside its values (docs/M1.md §15.14)", tmut(buildTask, (t) => { t.settings.textTrim = "always"; }), "settings.textTrim");
+taskErr("a task without its text trim rule", tmut(buildTask, (t) => { delete t.settings.textTrim; }), "settings.textTrim");
 taskErr("an oracle prop in a node", tmut(buildTask, (t) => { t.nodes[2].props.oracleFillGeometry = 3; }), "nodes[2].props.oracleFillGeometry");
 taskErr("oracleSides in a node", tmut(buildTask, (t) => { t.nodes[0].props.oracleSides = [true, true, true, true]; }), "nodes[0].props.oracleSides");
 taskErr("a geometry-built vector without its note", tmut(buildTask, (t) => { t.notes = []; }), "nodes[2].props.fillGeometry");
@@ -551,7 +553,8 @@ check(checkPostOpts(undefined) === null && checkPostOpts({ liveness: { warnMs: 6
   /below failMs/.test(checkPostOpts({ liveness: { warnMs: 5, failMs: 5 } })) && /unknown option/.test(checkPostOpts({ heartbeat: 1 })) &&
   /function/.test(checkPostOpts({ onProgress: 1 })), "post()'s liveness options are checked for shape: { liveness: { warnMs, failMs }, ceilingMs, onProgress }");
 check(schema.SETTING_DEFAULTS.booleans === "auto" && schema.SETTING_DEFAULTS.spaceEvenlySingle === "center" && schema.SETTING_DEFAULTS.textFit === "widen" &&
-  taskMod.TASK_SETTING_DEFAULTS.layoutOrder === "deepestFirst" && taskMod.TASK_SETTING_DEFAULTS.textRead === "measure" && taskMod.TASK_SETTING_DEFAULTS.fallbackFont.family === "Inter",
+  taskMod.TASK_SETTING_DEFAULTS.layoutOrder === "deepestFirst" && taskMod.TASK_SETTING_DEFAULTS.textRead === "measure" && taskMod.TASK_SETTING_DEFAULTS.textTrim === "source" &&
+  taskMod.TASK_SETTING_DEFAULTS.fallbackFont.family === "Inter",
   "every M1 setting has its stated default (docs/M1.md §3)");
 check(validate({ header: { format: "pix2fig.ir", version: schema.VERSION } }).ok === false, "validate() is the IR check every caller uses");
 

@@ -34,7 +34,7 @@ const rejects = async (p) => { try { await p; return null; } catch (e) { return 
 // ============================================================================================
 const SNAP = schema.snapshotId({ source: { kind: "pix", sha256: "0".repeat(62) + "a1" } });
 const RUN = "0123456789abcdef", RUN2 = "fedcba9876543210";
-const SETTINGS = () => clone({ textFit: "widen", layoutOrder: "creation", textRead: "measure", fallbackFont: { family: "Inter", style: "Regular" } });
+const SETTINGS = () => clone({ textFit: "widen", layoutOrder: "creation", textRead: "measure", textTrim: "source", fallbackFont: { family: "Inter", style: "Regular" } });
 const T6 = (x, y) => [1, 0, x, 0, 1, y];
 const ROT90 = (x, y) => [0, -1, x, 1, 0, y];
 const SOLID = (r, g, b) => ({ type: "SOLID", visible: true, opacity: 1, blendMode: "NORMAL", color: { r, g, b } });
@@ -400,9 +400,15 @@ const mixedNodes = () => [
   const w1 = writesOf(E, id1).filter((w) => w.phase === "create").map((w) => w.prop);
   const at = (p) => w1.indexOf(p);
   check(at("fills") >= 0 && at("fills") < at("fontName") && at("fontName") < at("characters") && at("characters") < at("fontSize") &&
-    at("fontSize") < at("setRangeFontName()") && at("setRangeFontName()") < at("setRangeFontSize()") && w1.lastIndexOf("textAutoResize") === w1.length - 1,
-    "IR.writeTextProps writes fontName, characters, the text props, the ranges (a range font first), and textAutoResize last, after the node's fills", w1.join(","));
-  check(at("maxLines") < 0 && writesOf(E, id2).some((w) => w.prop === "maxLines" && w.value === 1), "maxLines is written only under textTruncation ENDING");
+    at("fontSize") < at("setRangeFontName()") && at("setRangeFontName()") < at("setRangeFontSize()") && w1.lastIndexOf("textAutoResize") === w1.length - 2 &&
+    w1.lastIndexOf("textTruncation") === w1.length - 1,
+    "IR.writeTextProps writes fontName, characters, the text props, the ranges (a range font first), textAutoResize, then the truncation last, after the node's fills", w1.join(","));
+  // docs/M1.md §15.14 (C03): textTruncation and maxLines after the last textAutoResize, so the box its
+  // auto-resize mode makes is the one truncated.
+  const w2 = writesOf(E, id2).filter((w) => w.phase === "create").map((w) => w.prop);
+  check(at("maxLines") < 0 && writesOf(E, id2).some((w) => w.prop === "maxLines" && w.value === 1) && w2.lastIndexOf("textAutoResize") < w2.indexOf("textTruncation") &&
+    w2.indexOf("textTruncation") < w2.indexOf("maxLines") && w2.lastIndexOf("textAutoResize") < w2.lastIndexOf("maxLines"),
+    "maxLines is written only under textTruncation ENDING, both after textAutoResize", w2.slice(-4).join(","));
   check(writesOf(E, id1).some((w) => w.prop === "setRangeHyperlink()" && w.value[2].value === "https://example.com") &&
     writesOf(E, id1).some((w) => w.prop === "setRangeTextDecoration()" && same(w.value, [6, 11, "UNDERLINE"])) &&
     writesOf(E, id1).some((w) => w.prop === "setRangeFills()" && same(w.value, [0, 5, [SOLID(1, 0, 0)]])) &&
@@ -424,6 +430,24 @@ const mixedNodes = () => [
   let threw = "";
   try { E3.IR.writeTextProps(c3, tn, task.nodes[2]); } catch (e) { threw = e.message; }
   check(/unloaded font/.test(threw), "IR.writeTextProps throws when the font is not loaded", threw);
+}
+{
+  // docs/M1.md §15.14 (C03): the pin writes textAutoResize NONE again, then the truncation again; (C09)
+  // a range's list type is written before its indentation.
+  const nodes = [frame(0, -1, [T6(0, 0), 300, 100]),
+    text(1, 0, [T6(10, 10), 61, 30], "a label that wraps onto three lines in this box", { textTruncation: "ENDING", maxLines: 1, textAutoResize: "HEIGHT", lines: 1 }),
+    text(2, 0, [T6(10, 50), 200, 14], "Item", { lines: 1, textRanges: [{ start: 0, end: 4, fields: { indentation: 1, listOptions: { type: "ORDERED" } } }] })];
+  const task = mkTask({ nodes });
+  valid("truncation after the pin", task);
+  const E = env();
+  const { R, ctx } = await build(E, task);
+  const id1 = ctx.S.nodes["1"], n1 = E.D.node(id1);
+  const w = writesOf(E, id1).filter((x) => x.phase === "measure").map((x) => x.prop);
+  check(same(R.textPinned, [1]) && w.lastIndexOf("textAutoResize") >= 0 && w.lastIndexOf("textAutoResize") < w.lastIndexOf("textTruncation") &&
+    w.lastIndexOf("textTruncation") < w.lastIndexOf("maxLines") && n1.textTruncation === "ENDING" && n1.maxLines === 1 && n1.textAutoResize === "NONE",
+    "a pinned ENDING text has its truncation written again after the pin's textAutoResize NONE", JSON.stringify([R.textPinned, w]));
+  const calls = writesOf(E, ctx.S.nodes["2"]).filter((x) => /^setRange(ListOptions|Indentation)\(\)$/.test(x.prop)).map((x) => x.prop);
+  check(same(calls, ["setRangeListOptions()", "setRangeIndentation()"]), "a range's listOptions are written before its indentation", calls.join(","));
 }
 {
   // Decision 9 (docs/M1.md §6 B step 9). The host's measure is the text model here: a line breaks
@@ -649,15 +673,42 @@ const mixedNodes = () => [
   }
 }
 {
-  // textLine: a line height off the font's natural one is trimmed (leadingTrim CAP_HEIGHT), the
-  // scratch node is stamped pxScratch and removed.
-  const task = mkTask({ nodes: [frame(0, -1, [T6(0, 0), 300, 100]), text(1, 0, [T6(10, 10), 100, 40], "Tall", { lineHeight: { unit: "PIXELS", value: 40 } }),
+  // textLine under textTrim lineHeight (builder4's rule): a line height off the font's natural one is
+  // trimmed (leadingTrim CAP_HEIGHT), the scratch node is stamped pxScratch and removed. The box is
+  // fixed, so the guard never takes the trim back.
+  const task = mkTask({ settings: { textTrim: "lineHeight" }, nodes: [frame(0, -1, [T6(0, 0), 300, 100]), text(1, 0, [T6(10, 10), 100, 40], "Tall", { lineHeight: { unit: "PIXELS", value: 40 } }),
     text(2, 0, [T6(10, 60), 100, 14], "Natural", { lineHeight: { unit: "PIXELS", value: 14 } })] });
   const E = env();
   const { R, ctx } = await build(E, task);
   const scratch = E.D.writes.find((w) => w.prop === "setSharedPluginData()" && w.value[1] === "pxScratch");
   check(E.D.node(ctx.S.nodes["1"]).leadingTrim === "CAP_HEIGHT" && E.D.node(ctx.S.nodes["2"]).leadingTrim === "NONE" && R.counters.textTrimmed === 1 &&
-    scratch && E.D.node(scratch.id) === null, "textLine trims a line height off the natural one, leaves a natural one, and removes its stamped scratch node", JSON.stringify(R.counters));
+    scratch && E.D.node(scratch.id) === null, "textTrim lineHeight trims a line height off the natural one, leaves a natural one, and removes its stamped scratch node", JSON.stringify(R.counters));
+}
+{
+  // docs/M1.md §15.14 (C01, C02): under textTrim source (the default) only a TOP-aligned text whose
+  // stored first line sits 1 px or more above its half-leading place is trimmed (in a CENTER or BOTTOM
+  // box the trim would move it down, or not at all); under none, nothing is.
+  const nodes = [frame(0, -1, [T6(0, 0), 300, 200]),
+    text(1, 0, [T6(10, 10), 100, 40], "At half-leading", { lineHeight: { unit: "PIXELS", value: 40 } }),
+    text(2, 0, [T6(10, 60), 100, 9], "Cap height", { lineHeight: { unit: "PIXELS", value: 40 }, firstLineShift: -2 }),
+    text(3, 0, [T6(10, 80), 100, 40], "Lower", { lineHeight: { unit: "PIXELS", value: 40 }, firstLineShift: 1.5 }),
+    text(4, 0, [T6(10, 130), 100, 40], "Centred", { lineHeight: { unit: "PIXELS", value: 40 }, firstLineShift: -2, textAlignVertical: "CENTER" })];
+  const trims = (E, ctx) => [1, 2, 3, 4].map((i) => E.D.node(ctx.S.nodes[String(i)]).leadingTrim);
+  const src = mkTask({ nodes });
+  valid("textTrim source", src);
+  const E = env();
+  const { R, ctx } = await build(E, src);
+  check(src.settings.textTrim === "source" && same(trims(E, ctx), ["NONE", "CAP_HEIGHT", "NONE", "NONE"]) && R.counters.textTrimmed === 1 &&
+    R.detail.textTrimHalfLeading === 2 && R.detail.textTrimNotTop === 1,
+    "textTrim source trims only the TOP text whose stored first line sits above half-leading (firstLineShift -2), not one at it or below it, nor a CENTER one above it",
+    JSON.stringify([trims(E, ctx), R.counters.textTrimmed, R.detail.textTrimHalfLeading, R.detail.textTrimNotTop]));
+  const En = env();
+  const { R: Rn, ctx: cn } = await build(En, mkTask({ nodes, settings: { textTrim: "none" } }));
+  const probes = En.D.writes.filter((w) => w.prop === "setSharedPluginData()" && w.value[1] === "pxScratch" && w.phase === "textLine");
+  check(same(trims(En, cn), ["NONE", "NONE", "NONE", "NONE"]) && Rn.counters.textTrimmed === 0 && !probes.length, "textTrim none trims nothing and makes no probe", JSON.stringify(trims(En, cn)));
+  const El = env();
+  const { ctx: cl } = await build(El, mkTask({ nodes, settings: { textTrim: "lineHeight" } }));
+  check(same(trims(El, cl), ["CAP_HEIGHT", "CAP_HEIGHT", "CAP_HEIGHT", "CAP_HEIGHT"]), "textTrim lineHeight keeps builder4's rule: every fixed box with a line height off the natural one", JSON.stringify(trims(El, cl)));
 }
 
 // ============================================================================================

@@ -117,7 +117,10 @@ function newStats() {
     notCarried: { pages: 0, directories: 0, documents: 0, styleDefinitions: 0, variables: 0, unsupported: 0, foldedOperands: 0, degenerate: 0, outOfScope: 0 },
     populations: null, populationCounts: null, records: 0, nonInstance: 0, instances: 0,
     vectors: { networks: 0, fromNetwork: 0, fromGeometry: 0, loopsClosed: 0, loopsDropped: 0, regionFills: 0, vertexRadiusZero: 0, classes: { "region-no-fill": 0, "network-bounds": 0, winding: 0 } },
-    text: { fontFromStyle: 0, rawLineHeight: 0, percentOneAuto: 0, styleValueOverridden: 0, trailingBaseStyleIds: 0 },
+    // text: tools/pix/ir/text.mjs says what each counts.
+    text: { fontFromStyle: 0, rawLineHeight: 0, percentOne: 0, styleValueOverridden: 0, trailingBaseStyleIds: 0, fontSizeFromGlyphs: 0,
+      letterSpacingFromGlyphs: 0, listSpacingFromParagraph: 0, truncatedLines: 0,
+      firstLine: { halfLeading: 0, shifted: 0, unknown: 0, trimmedInSource: 0 }, glyphsInvalid: { "drops-text": 0, slab: 0, empty: 0 } },
     spaceEvenly: { between: 0, single: 0 }, strokeAlignDecided: {}, cornerRadiusOnly: {}, lostBorderSections: 0, counterFillKeptFixed: 0, thinStrokes: 0, staleBooleans: 0,
     styles: { fill: style0(), stroke: style0(), effect: style0() },
     m2a: newM2aStats(),
@@ -152,6 +155,9 @@ export function pixToIR(buffer, opts) {
     // The M2a seam (docs/M2A.md §5.3): set below, before emit; indexOf before the instance pass.
     m2a: stats.m2a, planned: null, families: null, props: null, resolver: null, setIndex: new Map(), indexOf: null,
     glyphChecked: new Set(), styles: [], styleIds: new Map(), styleGuids: new Map(),
+    // text.mjs's caches for one read, in one object so the quiet copies overrides.mjs makes share it:
+    // the class of each glyph blob, and the natural line height of each font the file lays text out in.
+    textCache: { glyphClass: new Map(), lineHeights: null },
     blob(i) {
       if (i === undefined || i === null) return null;
       if (!(Number.isInteger(i) && i >= 0 && i < pix.blobs.length)) throw corrupt("a path names blob " + i + "; there are " + pix.blobs.length);
