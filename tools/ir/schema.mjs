@@ -64,26 +64,47 @@ export const SETTINGS = {
   echo: ["drop", "keep"],                           // D9
   instanceOwn: ["overrides", "own"],                // D11
   derivedGeometry: ["changed", "all", "none"],      // D10
+  // docs/M1.md §15.15: the reader policies the first render audit added (AUDIT_READER_SETTINGS).
+  lineDirection: ["stored", "size", "flat"],        // a LINE whose size has a height
+  dashNoGap: ["solid", "keep"],                     // a dash pattern with no gap
+  // docs/M1.md §15.16: a layer's name as Pixso shows it (an instance named "Instance <n>" or with no name
+  // under its root entry's name, else its master's or its set's; an empty-named text left to Figma's
+  // autoRename), or as stored.
+  names: ["display", "stored"],
 };
 // The thirteen settings M2a adds (docs/M2A.md §3), in the order of that table.
 export const M2A_SETTINGS = ["variantSets", "variantGrammar", "axisOrder", "swapDangling", "swapReset", "swapFallback",
   "swapDefault", "rejectedProps", "defaultAssignments", "overrideMerge", "echo", "instanceOwn", "derivedGeometry"];
+// The reader settings added after the first render audit (docs/M1.md §15.15), read like M2a's; an IR
+// read before them is valid without them (LATER_SETTINGS below).
+export const AUDIT_READER_SETTINGS = ["lineDirection", "dashNoGap"];
 export const SETTING_KEYS = Object.keys(SETTINGS).concat(["kitmaps"]);
 export const SETTING_FLAGS = { mode: "--mode", overrides: "--overrides", drift: "--drift", deleted: "--deleted",
   resync: "--resync", textFit: "--text-fit", booleans: "--booleans", spaceEvenlySingle: "--space-evenly-single",
   variantSets: "--variant-sets", variantGrammar: "--variant-grammar", axisOrder: "--axis-order", swapDangling: "--swap-dangling",
   swapReset: "--swap-reset", swapFallback: "--swap-fallback", swapDefault: "--swap-default", rejectedProps: "--rejected-props",
   defaultAssignments: "--default-assignments", overrideMerge: "--override-merge", echo: "--echo", instanceOwn: "--instance-own",
-  derivedGeometry: "--derived-geometry", kitmaps: "--kitmaps" };
+  derivedGeometry: "--derived-geometry", lineDirection: "--line-direction", dashNoGap: "--dash-no-gap", names: "--names",
+  kitmaps: "--kitmaps" };
 // The owner's default for each (docs/M1.md §3, docs/M2A.md §3, REWRITE.md §11). mode has none: it is
 // chosen per run. overrideMerge is "outer" from part C's measurement (docs/M2A.md D17: on P's six
 // conflicting texts derived data agrees with outer and first, never with last; outer equals last where
-// no entry carries an overrideLevel, as in D and K).
+// no entry carries an overrideLevel, as in D and K). lineDirection and dashNoGap follow Pixso's own
+// stored stroke area (docs/M1.md §15.15).
 export const SETTING_DEFAULTS = { overrides: "fidelity", drift: "link", deleted: "publish",
   resync: "pixso-unless-edited", textFit: "widen", booleans: "auto", spaceEvenlySingle: "center",   // spaceEvenlySingle: P18, 2026-10-05
   variantSets: "parse", variantGrammar: "names", axisOrder: "vocabulary", swapDangling: "skip", swapReset: "on",
   swapFallback: "derived", swapDefault: "layer", rejectedProps: "copy", defaultAssignments: "keep", overrideMerge: "outer",
-  echo: "drop", instanceOwn: "overrides", derivedGeometry: "changed", kitmaps: "default" };
+  echo: "drop", instanceOwn: "overrides", derivedGeometry: "changed", lineDirection: "stored", dashNoGap: "solid", kitmaps: "default",
+  names: "display" };   // names: Pixso's names measured live on U, 2026-10-06 and -12 (docs/M1.md §15.16)
+// Settings added to IR version 3 after IRs of it were written (docs/M1.md §15.15, §15.16): an IR whose
+// header lacks one was read before it existed, with the value given here (LINEs flat, dash patterns as
+// stored, names as stored), and stays valid. Every IR the reader writes now records them.
+export const LATER_SETTINGS = { lineDirection: "flat", dashNoGap: "keep", names: "stored" };
+export function headerSetting(header, k) {
+  const S = (header && header.settings) || {};
+  return S[k] !== undefined ? S[k] : Object.prototype.hasOwnProperty.call(LATER_SETTINGS, k) ? LATER_SETTINGS[k] : undefined;
+}
 
 // Figma's node types, which the IR speaks. Pixso never produces SLOT, but the Figma Сова kit uses
 // it inside its components, and the matcher and verifier read Figma trees with this same list.
@@ -131,7 +152,7 @@ export const NATIVE_VECTOR_TYPES = ["LINE", "STAR", "POLYGON", "BOOLEAN_OPERATIO
 export const GEOMETRY_PROPS = ["vectorNetwork", "fillGeometry", "strokeGeometry", "oracleFillGeometry"];
 // The IR's own props (docs/IR.md §7): not Figma properties, or not written to Figma as they stand.
 export const IR_OWN_PROPS = ["relativeTransform", "width", "height", "strokeWeights", "cornerRadii", "textRanges",
-  "lines", "inkBounds", "fillStyle", "strokeStyle", "textStyle", "effectStyle", "gridStyle",
+  "lines", "firstLineShift", "inkBounds", "fillStyle", "strokeStyle", "textStyle", "effectStyle", "gridStyle",
   "componentPropertyReferences", "oracleFillGeometry", "oracleSides"];
 // What Pixso drew, kept for the judge and never sent to the plugin: the planner strips these from
 // every task (docs/M1.md §5.2), and tools/ir/task.mjs refuses a task that carries one.
@@ -163,6 +184,9 @@ export const NOTE_CLASSES = {
   PROPERTY_REF_DROPPED: ["fill-style", "outside-definition", "no-definition", "other-family", "no-root", "undeclared", "type-mismatch"],
   SWAP_VALUE_DANGLING: ["assignment", "default", "swap"],
   OVERRIDE_FIELD_DROPPED: ["no-equivalent", "not-on-type", "layer-not-carried", "root-box", "unknown"],
+  // docs/M1.md §15.14: a text whose stored glyph outlines are not glyphs, in the order the reader
+  // decides in (an outline reaching past 1e6 em, one wider or taller than 3 em, one with no extent).
+  TEXT_GLYPHS_INVALID: ["drops-text", "slab", "empty"],
 };
 // The class of a note's detail, or null when the detail does not start with one of its code's classes.
 export function noteClass(code, detail) {
@@ -209,7 +233,10 @@ export const REASON_CODES = {
   NODE_TYPE_UNSUPPORTED: { stage: "read", plan: null, from: "§7: coverage, with every loss given a reason code; §8: the fixture covers an unsupported node type", meaning: "a source node of a type the IR has no type for; it and its subtree are not carried" },
   // M1 (docs/M1.md §5.1).
   TEXT_LINES_UNKNOWN: { stage: "read", plan: null, from: "§3: Pixso's own line breaks are stored, which gives a direct check for the one-pixel heading wrap (decision 9)", meaning: "a buildable text with no stored baselines; it carries no lines, so its line count is not checked" },
-  SOURCE_FEATURE_UNSUPPORTED: { stage: "read", plan: null, from: "§7: Source vs IR. Coverage, with every loss given a reason code", meaning: "a Pixso feature Figma lacks; the detail starts with the feature, from an open list (CONNECTLINE, LINE with height, SECTION strokes, SECTION corner radius, RIGHT_ANGLE, vibrance, hue filter, dashCap, deformationTransform, fontVariations, GRID, counter alignment <X>, strokeCap <X>, effect <TYPE>, an exportSettings format, paint type <X>, image paint without an image, text without a font name, inverse winding, open region loop, operand strokes, an operand without fill geometry, boolean without stored geometry, built natively, COLOR property); dropped or converted, and counted" },
+  // docs/M1.md §15.14 (the first render audit of U, 2026-10-07).
+  TEXT_GLYPHS_INVALID: { stage: "read", plan: null, from: "§7: Source vs IR. Coverage, with every loss given a reason code", meaning: "a text whose stored glyph outlines, which Pixso draws, are not glyph outlines (a stale glyph table): Pixso draws no text, a slab or nothing at all where Figma draws the characters; the detail starts with the class (NOTE_CLASSES: drops-text, slab, empty), then the count of such glyphs; the text is built from its characters" },
+  TEXT_VALUE_FROM_GLYPHS: { stage: "read", plan: null, from: "§7: Source vs IR. Coverage, with every loss given a reason code", meaning: "a text field the node and its style leave out (fontSize, letterSpacing) taken from the stored glyphs, which Pixso draws, where they agree on a value other than the absent default; the detail names each field with both values" },
+  SOURCE_FEATURE_UNSUPPORTED: { stage: "read", plan: null, from: "§7: Source vs IR. Coverage, with every loss given a reason code", meaning: "a Pixso feature Figma lacks; the detail starts with the feature, from an open list (CONNECTLINE, LINE with height, SECTION strokes, SECTION corner radius, RIGHT_ANGLE, hue filter, dashCap, deformationTransform, fontVariations, GRID, counter alignment <X>, strokeCap <X>, effect <TYPE>, an exportSettings format, paint type <X>, image paint without an image, text without a font name, inverse winding, open region loop, operand strokes, an operand without fill geometry, boolean without stored geometry, built natively, COLOR property); dropped or converted, and counted" },
   GEOMETRY_INVALID: { stage: "read", plan: null, from: "§7: Source vs IR. Coverage, with every loss given a reason code", meaning: "a NaN size, transform or path, or a boolean with no operand and no geometry; the box comes from the geometry or the children, or the node is not carried" },
   IMAGE_HASH_MISMATCH: { stage: "read", plan: null, from: "§4: Pixso MCP bytes by hash (the SHA-1 is checked)", meaning: "an archive image entry whose SHA-1 is not its name; it is treated as missing (a file-level note: no node, the name in the detail)" },
   VECTOR_ORACLE_DIFFERS: { stage: "read", plan: null, from: "§3: Regions and fillGeometry disagree on 35 and 220 vectors", meaning: "the stored network and the stored fill geometry disagree in a pre-registered class (region-no-fill, network-bounds, winding), or a boolean's stored result is out of date against its operands (boolean-operands); the judge excuses only that class" },
@@ -447,6 +474,7 @@ export function validateIR(ir, options) {
   else {
     closed(S, SETTING_KEYS, "header.settings");
     for (const k of Object.keys(SETTINGS)) {
+      if (S[k] === undefined && Object.prototype.hasOwnProperty.call(LATER_SETTINGS, k)) continue;
       if (SETTINGS[k].indexOf(S[k]) < 0) err("header.settings." + k, (S[k] === undefined ? "missing" : "got " + show(S[k])) + "; must be one of " + SETTINGS[k].join(", ") + " (" + SETTING_FLAGS[k] + ")");
     }
     if (!(isStr(S.kitmaps) && S.kitmaps.length > 0)) err("header.settings.kitmaps", "must be \"default\" or the directory given with --kitmaps; got " + show(S.kitmaps));
@@ -693,6 +721,8 @@ export function validateIR(ir, options) {
       else if (!(Array.isArray(pr.inkBounds) && pr.inkBounds.length === 4 && pr.inkBounds.every(isNum))) err(P + ".inkBounds", "must be [x, y, width, height]");
     }
     if (pr.lines !== undefined && (n.type !== "TEXT" || !isInt(pr.lines) || pr.lines < 0)) err(P + ".lines", "the number of lines Pixso drew: a TEXT record's non-negative integer; got " + show(pr.lines));
+    // docs/M1.md §15.14: written only where Pixso's first line is off its half-leading place.
+    if (pr.firstLineShift !== undefined && (n.type !== "TEXT" || !isNum(pr.firstLineShift) || Math.abs(pr.firstLineShift) <= 0.5)) err(P + ".firstLineShift", "how far Pixso drew the first baseline from its half-leading place: a TEXT record's number past ±0.5 px; got " + show(pr.firstLineShift));
     if (pr.textRanges !== undefined && n.type === "TEXT") checkTextRanges(pr.textRanges, pr.characters, P + ".textRanges");
   });
 

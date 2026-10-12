@@ -20,7 +20,7 @@ import { decodeVectorNetwork } from "../network.mjs";
 import * as E from "./enums.mjs";
 import { r2, r4, r6, isFin, matrixOf, matrixFinite, mapBox, unionBox, guidStr } from "./util.mjs";
 import { effectsOf, exportSettingsOf, paintsOf } from "./paints.mjs";
-import { strokeProps, cornerProps, sideCensus, visiblePaint, weightOf, SIDE_FIELDS, CORNER_FIELDS } from "./strokes.mjs";
+import { strokeProps, cornerProps, sideCensus, visiblePaint, weightOf, lineSegment, SIDE_FIELDS, CORNER_FIELDS } from "./strokes.mjs";
 import { frameLayoutProps, childLayoutProps, isAutoLayout } from "./layout.mjs";
 import { textProps, checkTextData } from "./text.mjs";
 import { vectorProps, geometryOf, geometryBox, networkToIR, networkBox } from "./vector.mjs";
@@ -28,6 +28,8 @@ import { booleanClass, classBReason, flattens } from "./booleans.mjs";
 import { componentEntry, masterRef, setEntry } from "./components.mjs";
 import { bindingsOf } from "./properties.mjs";
 import { drawnStyles } from "./styles.mjs";
+import { AUTO_INSTANCE_NAME } from "../../ir/names.mjs";
+import { mergeEntries } from "./overrides.mjs";
 
 const NEVER = new Set(NEVER_OMIT);
 const RECT_LIKE = new Set(["FRAME", "COMPONENT", "RECTANGLE"]);
@@ -99,10 +101,9 @@ export function plan(cx, pageNodes, inScope) {
         else p.noGeometry = true;
       }
     }
-    if (t === "LINE" && n.size && isFin(n.size.y) && n.size.y !== 0) {
-      p.lineHeight = true;
-      if (geometryOf(cx, n.fillGeometry, { quiet: true })) type = "VECTOR";
-    }
+    // A LINE with a height and stored fill geometry is built from that geometry (D13); one with none
+    // stays a LINE, turned onto its segment where Pixso draws it there (propsOf, §15.15).
+    if (t === "LINE" && n.size && isFin(n.size.y) && n.size.y !== 0 && geometryOf(cx, n.fillGeometry, { quiet: true })) type = "VECTOR";
     if ((t === "VECTOR" || t === "CONNECTLINE") && !hasVectorSource(cx, n)) {
       cx.noteGuid(CODE.GEOMETRY_INVALID, guidStr(n.guid), "a vector with no network and no stored geometry; not carried");
       return skip("degenerate");
@@ -188,7 +189,7 @@ export function emit(cx, planned, out) {
     // props or populations uses the planned type p.type, so a COMPONENT_SET is its planned FRAME there.
     const type = cx.families ? cx.families.recordType(n, p.type) : p.type;
     rec.type = type;
-    rec.name = typeof n.name === "string" ? n.name : "";
+    rec.name = recordName(cx, p, n);
     rec.props = {};
     records.push(rec);
     meta.push({ stateGroup: !!n.isStateGroup && p.type === "FRAME", lostBorder: false });
@@ -214,6 +215,40 @@ export function emit(cx, planned, out) {
   for (let pi = 0; pi < planned.length; pi++) for (const t of planned[pi].tops) one(t, -1, pi, null, planned[pi].page.internal);
 }
 
+// The record's name (docs/M1.md §15.16, tools/ir/names.mjs). Pixso shows an INSTANCE whose stored name
+// is "Instance <n>", or that has none, under the name its root override entry carries (the entries whose
+// guidPath is [] or [symbolID], merged by --override-merge as instanceData merges them), and without one
+// under its master's name, or the state group's when the master is a variant of one. Measured live on U:
+// 66 instances named "Instance <n>" (2026-10-06) and 80 with no name (2026-10-12), 146 of 146 by this
+// rule; the master's or the group's name alone gave 138, the other 8 carrying a root name that is
+// neither. Under --names display (the default) the record carries that name, under stored the stored
+// one. The master is the stored node symbolData names, a library copy included, whether or not it is a
+// record; with no name to show instead, the stored one stays. A named INSTANCE keeps its stored name
+// even where its root entry names it otherwise (U 51): none was sampled live. A TEXT keeps its stored
+// name: an empty one is left to Figma's autoRename by the builder.
+function recordName(cx, p, n) {
+  const stored = typeof n.name === "string" ? n.name : "";
+  const N = cx.stats.names;
+  if (p.type === "TEXT" && stored === "") N.emptyTexts++;
+  if (p.type !== "INSTANCE") return stored;
+  const R = cx.resolver, S0 = R.declared(n);
+  const roots = ((n.symbolData && n.symbolData.symbolOverrides) || []).filter((e) => { const g = R.pathGuids(e); return g.length === 0 || (g.length === 1 && g[0] === S0); });
+  const root = roots.length ? mergeEntries(roots, cx.settings.overrideMerge || "outer").fields.name : undefined;
+  const named = (s) => typeof s === "string" && s !== "";
+  const K = typeof n.name !== "string" ? N.unnamed : AUTO_INSTANCE_NAME.test(stored) ? N.auto : null;
+  if (!K) { if (named(root) && root !== stored) N.namedRootDiffers++; return stored; }
+  K.n++;
+  const m = S0 ? cx.byGuid.get(S0) : null;
+  const up = m && m.parentIndex ? cx.byGuid.get(guidStr(m.parentIndex.guid)) : null;
+  const set = !!up && !!up.isStateGroup && cx.typeName(up) === "FRAME";
+  const master = set ? up.name : m ? m.name : undefined;
+  if (named(root) && named(master) && root !== master) K.rootDiffers++;
+  const shown = named(root) ? root : named(master) ? master : undefined;
+  if (shown === undefined) return stored;
+  K[named(root) ? "toRoot" : set ? "toSet" : "toMaster"]++;
+  return cx.settings.names === "display" ? shown : stored;
+}
+
 const isLostBorderShape = (cx, n) => n.styleType === undefined && visiblePaint(n.strokePaints) && weightOf(n) > 0 && !SIDE_FIELDS.some((k) => n[k] !== undefined);
 function isLostBorder(cx, n, pixType) {
   return (pixType === "FRAME" || pixType === "SYMBOL" || pixType === "RECTANGLE") && isLostBorderShape(cx, n);
@@ -227,15 +262,21 @@ function propsOf(cx, p, rec, parentNode, internal, drawn) {
     if (!NEVER.has(k) && Object.prototype.hasOwnProperty.call(DEFAULTS, k) && canonicalJSON(v) === canonicalJSON(DEFAULTS[k])) return;
     props[k] = known[k] === "value" ? cx.value(v) : v;
   };
-  // The box. A non-finite size takes the box planned for it.
-  put("relativeTransform", matrixOf(n.transform).map(r4));
-  const w = p.box ? p.box.w : r2(n.size.x), h = p.box ? p.box.h : r2(n.size.y);
+  // The box. A non-finite size takes the box planned for it; a LINE Pixso draws along its height is
+  // turned onto that segment, its width the segment's length (strokes.mjs lineSegment, §15.15).
+  const seg = type === "LINE" && !p.box ? lineSegment(cx, n) : null, turned = !!seg && !seg.flat;
+  put("relativeTransform", turned ? seg.transform : matrixOf(n.transform).map(r4));
+  const w = p.box ? p.box.w : turned ? seg.width : r2(n.size.x), h = p.box ? p.box.h : r2(n.size.y);
   put("width", Math.max(0, w));
   put("height", type === "LINE" ? 0 : Math.max(0, h));
   if (p.box) cx.note(CODE.GEOMETRY_INVALID, "a non-finite size; the box comes from " + p.box.from);
   if (n.visible === false) put("visible", false);
   if (n.locked) put("locked", true);
   childLayoutProps(cx, n, put, parentNode, type !== "INSTANCE" && isAutoLayout(cx, n));
+  // Figma drops the turn of a child in a flow, so the builder takes a turned LINE out of it (placePass,
+  // rotPinned), and with it the siblings the flow would move into its slot (flowAbsolute): counted
+  // (0 of the 28 turned LINEs of U and O, all ABSOLUTE or on a canvas, §15.15).
+  if (turned && parentNode && isAutoLayout(cx, parentNode) && props.layoutPositioning !== "ABSOLUTE") cx.stats.lines.inFlow++;
   if (type === "INSTANCE") return;   // a placeholder: its box and child layout only (docs/M1.md D6)
   // The styles it draws, bound (a type that takes none leaves them out).
   for (const k of ["fillStyle", "strokeStyle", "effectStyle"]) if (drawn && drawn[k] !== undefined) put(k, drawn[k]);
@@ -286,7 +327,7 @@ function propsOf(cx, p, rec, parentNode, internal, drawn) {
     // judge would count 0 paths against Figma's (review S3): a counted loss of the oracle instead.
     if (!fill) cx.feature("no stored geometry", "a " + type + " built natively, its paths unchecked");
   } else if (type === "LINE") {
-    if (p.lineHeight) cx.feature("LINE with height", "no stored geometry: built as a line, height dropped");
+    if (seg && seg.flat) cx.feature("LINE with height", seg.why + ": built flat, height dropped");
     put("oracleFillGeometry", geometryOf(cx, n.fillGeometry) || undefined);
   } else if (type === "BOOLEAN_OPERATION") {
     put("booleanOperation", E.BOOLEAN_OP[cx.en("PixsoNode", "booleanOperation")(n.booleanOperation)] || "UNION");

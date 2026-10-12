@@ -10,8 +10,15 @@
 //     round((H - paragraphSpacing * (paragraphs - 1)) / L), where L is the line height in pixels
 //     (PIXELS; PERCENT / 100 x fontSize; AUTO: the one-line height measured once per font and size on
 //     the same scratch node, kept for the session). paragraphs = the "\n"-separated parts of
-//     characters. With ENDING truncation the count is capped at maxLines, and in a fixed box
-//     (textAutoResize NONE) at the lines that fit its height, at least 1. approx is true when ranges
+//     characters. With ENDING truncation the count is capped only where the BUILT node says the
+//     truncation is in effect, which needs textTruncation ENDING read back: at maxLines where the
+//     record's maxLines reads back too, in a box that is not auto-height or is no taller than maxLines
+//     lines; and in a box the node reads as fixed (textAutoResize NONE: the record's, or B.pinText's) at
+//     the lines that fit its height, at least 1, whatever maxLines reads (docs/M1.md §15.14: on U's
+//     first render audit no ENDING text drew an ellipsis while this count, capped from the record
+//     alone, said they did; a fixed box cuts at its height with or without maxLines). The IR's lines
+//     are the lines Pixso draws, so a truncation Figma did not apply is a TEXT_LINES_DIFFER.
+//     approx is true when ranges
 //     mix line heights (a range sets lineHeight or paragraphSpacing, or sets fontSize or fontName
 //     while the line height is AUTO or PERCENT), or when L is not a positive number.
 //     The AUTO measurement writes the font writeTextProps writes: the record's, or
@@ -167,10 +174,24 @@ IR.countLines = function (ctx, node, rec) {
   if (!(L > 0) || !isFinite(L)) { lines = H > 0 ? 1 : 0; approx = true; }
   else lines = Math.max(0, Math.round((H - ps * (paragraphs - 1)) / L));
   var maxLines = ctx.prop(rec, "maxLines");
-  var ending = ctx.prop(rec, "textTruncation") === "ENDING";
-  if (ending && typeof maxLines === "number" && maxLines >= 1 && lines > maxLines) lines = maxLines;
+  var held = ctx.prop(rec, "textTruncation") === "ENDING" ? builtTruncation(node, maxLines, L) : null;
+  if (held && held.maxLines && lines > maxLines) lines = maxLines;
   // A truncated text in a fixed box draws the lines that fit the box, the last with an ellipsis
   // (part F, review figma F2): counted the same, a one-line label is never widened for overflowing.
-  if (ending && ctx.prop(rec, "textAutoResize") === "NONE" && L > 0 && isFinite(L)) lines = Math.min(lines, Math.max(1, Math.floor((node.height + 0.5) / L)));
+  if (held && held.fixed && L > 0 && isFinite(L)) lines = Math.min(lines, Math.max(1, Math.floor((node.height + 0.5) / L)));
   return { lines: lines, approx: approx };
 };
+
+// How the built node truncates, or null where it does not read back ENDING. maxLines: the record's
+// maxLines reads back, in a box that is not auto-height or is no taller than that many lines. fixed:
+// the node reads back a fixed box (NONE), which cuts at its height. Two of Figma's rules fit U's audit,
+// that a textAutoResize write clears the truncation and that maxLines written on a fixed box is
+// dropped (docs/M1.md §15.14, C03); under the second a fixed ENDING box reads maxLines null and still cuts.
+function builtTruncation(node, maxLines, L) {
+  var t, m, mode, h;
+  try { t = node.textTruncation; m = node.maxLines; mode = node.textAutoResize; h = node.height; } catch (e) { return null; }
+  if (t !== "ENDING") return null;
+  var capped = typeof maxLines === "number" && maxLines >= 1 && m === maxLines &&
+    !(mode === "HEIGHT" && L > 0 && isFinite(L) && h > maxLines * L + 0.5);
+  return { maxLines: capped, fixed: mode === "NONE" };
+}

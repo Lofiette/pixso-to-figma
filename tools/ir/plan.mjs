@@ -10,9 +10,10 @@
 //             are derived from the IR alone (derivePopulations) and the stored-node equation cannot
 //             be checked, so it does not add up (G4 fails, by design)
 //   m1Scope   "default" | "all-masters" | "all" (M1_SCOPES)
-//   settings  { textFit, layoutOrder, textRead, fallbackFont, maxTaskMb, ceilingMsPerNode, scope }, each
-//             defaulting to docs/M1.md §3 (PLAN_DEFAULTS); scope is "file" or "pages:<guid,…>" (page
-//             guids or top-level record guids)
+//   settings  { textFit, layoutOrder, textRead, textTrim, fallbackFont, names, maxTaskMb, ceilingMsPerNode, scope },
+//             each defaulting to docs/M1.md §3 (PLAN_DEFAULTS); textFit and names to the IR header's (an IR
+//             read before names existed carries stored names: schema.LATER_SETTINGS); scope is "file" or
+//             "pages:<guid,…>" (page guids or top-level record guids)
 //   images    the image table of resolveImages (tools/ir/images.mjs); without one, tableFromIR
 //   runId     16 lowercase hex; random when absent (pass one for byte-identical task text)
 //
@@ -46,7 +47,7 @@
 // the service page they attach to the page at a grid place. A root whose subtree is over the size
 // cap is split at child boundaries: the later pieces attach to their built parent ({ i, guid }).
 import { randomBytes } from "node:crypto";
-import { CODE, INTERNED_PROPS, ORACLE_PROPS, isComponentNote, snapshotId } from "./schema.mjs";
+import { CODE, INTERNED_PROPS, ORACLE_PROPS, headerSetting, isComponentNote, snapshotId } from "./schema.mjs";
 import { BUILT_TYPE, SERVICE_PAGE_GUID, TASK_FORMAT, TASK_IR_VERSION, TASK_SETTING_DEFAULTS,
   TASK_VERSION, maxTaskChars, taskChars, taskType } from "./task.mjs";
 import { tableFromIR } from "./images.mjs";
@@ -62,8 +63,8 @@ export const BUILT_BY_SCOPE = {
   all: ["user", "mastersNoInstance", "mastersWithInstanceInternal", "internalLoose", "stateGroupsInternal", "internalUnclassified"],
 };
 export const PLAN_DEFAULTS = Object.freeze({ textFit: TASK_SETTING_DEFAULTS.textFit, layoutOrder: TASK_SETTING_DEFAULTS.layoutOrder,
-  textRead: TASK_SETTING_DEFAULTS.textRead, fallbackFont: TASK_SETTING_DEFAULTS.fallbackFont, maxTaskMb: 4, ceilingMsPerNode: 20,
-  scope: "file" });
+  textRead: TASK_SETTING_DEFAULTS.textRead, textTrim: TASK_SETTING_DEFAULTS.textTrim, fallbackFont: TASK_SETTING_DEFAULTS.fallbackFont,
+  names: TASK_SETTING_DEFAULTS.names, maxTaskMb: 4, ceilingMsPerNode: 20, scope: "file" });
 export const CEILING_BASE_MS = 120000;
 export const SERVICE_PAGE_NAME = "pix2fig service: S2 masters";
 export const GRID = Object.freeze({ gap: 200, rowWidth: 20000 });
@@ -167,7 +168,8 @@ export function planM1(ir, stats, opts) {
   const o = opts || {};
   const m1Scope = o.m1Scope || "default";
   if (M1_SCOPES.indexOf(m1Scope) < 0) throw new RangeError("--m1-scope is one of " + M1_SCOPES.join(", ") + "; got " + JSON.stringify(m1Scope));
-  const st = Object.assign({}, PLAN_DEFAULTS, { textFit: (ir.header && ir.header.settings && ir.header.settings.textFit) || PLAN_DEFAULTS.textFit }, o.settings || {});
+  const st = Object.assign({}, PLAN_DEFAULTS, { textFit: (ir.header && ir.header.settings && ir.header.settings.textFit) || PLAN_DEFAULTS.textFit,
+    names: headerSetting(ir.header, "names") || PLAN_DEFAULTS.names }, o.settings || {});
   const cap = o.maxChars || maxTaskChars(Number(st.maxTaskMb));
   const runId = o.runId || randomBytes(8).toString("hex");
   if (!/^[0-9a-f]{16}$/.test(runId)) throw new RangeError("runId is 16 lowercase hex");
@@ -178,8 +180,8 @@ export function planM1(ir, stats, opts) {
   const { claim, source, lists } = claimRecords(ir, stats, parseScope(st.scope));
   const builtPops = BUILT_BY_SCOPE[m1Scope];
   const B = claim.map((c) => builtPops.indexOf(c) >= 0);
-  const settings = { textFit: st.textFit, layoutOrder: st.layoutOrder, textRead: st.textRead,
-    fallbackFont: { family: st.fallbackFont.family, style: st.fallbackFont.style } };
+  const settings = { textFit: st.textFit, layoutOrder: st.layoutOrder, textRead: st.textRead, textTrim: st.textTrim,
+    fallbackFont: { family: st.fallbackFont.family, style: st.fallbackFont.style }, names: st.names };
   const imgTable = new Map((o.images || tableFromIR(ir)).map((t) => [t.hash, t]));
 
   // A record's notes travel with it, except M2a's notes about components, properties and overrides,
@@ -436,12 +438,13 @@ export function balanceOf(ir, stats, ctx) {
   instances.sum = instances.placeholders + sumOf(instances.outOfScope);
   instances.ok = instances.sum === instances.ir;
   const notes = {};
-  // An image filter Figma has no value for (the reader's "hue filter", "vibrance"), dropped from the
-  // paint: counted as FILTER_UNRENDERED on the verdict line (docs/M1.md D10).
+  // An image filter Figma has no value for (the reader's "hue filter"), dropped from the paint: counted
+  // as FILTER_UNRENDERED on the verdict line (docs/M1.md D10). Vibrance is Figma's saturation since
+  // §15.15, so the reader no longer drops it.
   let filtersUnrendered = 0;
   for (const n of ir.notes || []) if (!Number.isInteger(n.node) || ctx.B[n.node]) {
     notes[n.code] = (notes[n.code] || 0) + 1;
-    if (n.code === CODE.SOURCE_FEATURE_UNSUPPORTED && typeof n.detail === "string" && /^(hue filter|vibrance)(:|$)/.test(n.detail)) filtersUnrendered++;
+    if (n.code === CODE.SOURCE_FEATURE_UNSUPPORTED && typeof n.detail === "string" && /^hue filter(:|$)/.test(n.detail)) filtersUnrendered++;
   }
   return { ok: stored.ok && nonInstance.ok && instances.ok, stored, nonInstance, instances, notes, filtersUnrendered, planCodes: ctx.planCodes,
     populations: Object.keys(P).reduce((o, k) => { o[k] = P[k].records; return o; }, {}) };

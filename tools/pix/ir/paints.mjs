@@ -48,9 +48,11 @@ export function paintOf(cx, p) {
     }
     if (p.paintFilter) {
       const f = {};
-      for (const k of E.IMAGE_FILTERS) if (isFin(p.paintFilter[k]) && p.paintFilter[k] !== 0) f[k] = r6(p.paintFilter[k]);
+      for (const k of E.IMAGE_FILTERS) {
+        const v = p.paintFilter[E.IMAGE_FILTER_SOURCE[k] || k];
+        if (isFin(v) && v !== 0) f[k] = r6(v);
+      }
       if (Object.keys(f).length) o.filters = f;
-      if (isFin(p.paintFilter.vibrance) && p.paintFilter.vibrance !== 0) cx.feature("vibrance");
       if (isFin(p.paintFilter.hue) && p.paintFilter.hue !== 0) cx.feature("hue filter");
     }
   }

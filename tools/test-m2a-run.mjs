@@ -32,7 +32,7 @@ import { makeFixture } from "./pix/fixture.mjs";
 import { pixToIR, newM2aStats } from "./pix/ir/index.mjs";
 import { adoptIrSettings, parseArgs as runArgs, refuseOtherVersion, runDirName, runSettings, SETTINGS as RUN_SETTINGS } from "./pix-run.mjs";
 import { parseArgs as irArgs, FLAGS as IR_FLAGS } from "./pix-to-ir.mjs";
-import { GATE_IDS, METRICS, M1_COMMIT, loadExpect, m2aGates, irCounts } from "./m2a-accept.mjs";
+import { GATE_IDS, METRICS, M1_COMMIT, loadExpect, m2aGates, irCounts, readerSettingsOf } from "./m2a-accept.mjs";
 import * as overrides from "./pix/ir/overrides.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -66,12 +66,16 @@ function flagGroup() {
   const bad = M2A_SETTINGS.filter((k) => d[k] !== SETTING_DEFAULTS[k]);
   check(!bad.length, "pix-run defaults every M2a setting to SETTING_DEFAULTS", bad.join(", "));
   const takes = M2A_SETTINGS.every((k) => SETTINGS[k].every((v) => runArgs(["x.pix", SETTING_FLAGS[k], v])[k] === v));
-  check(takes && Object.keys(RUN_SETTINGS).length === 19 + 13, "pix-run takes every value of every M2a flag (32 settings in all)");
+  check(takes && Object.keys(RUN_SETTINGS).length === 21 + 13 + 2, "pix-run takes every value of every M2a flag (36 settings in all: M1's 19, --text-trim of docs/M1.md §15.14, --names of §15.16, docs/M2A.md §3's thirteen and §15.15's two)");
   const refused = M2A_SETTINGS.filter((k) => !/one of/.test(threw(() => runArgs(["x.pix", SETTING_FLAGS[k], "maybe"]))));
   check(!refused.length, "pix-run refuses a value outside each M2a setting's list, naming the choices", refused.join(", "));
   const irTakes = M2A_SETTINGS.every((k) => IR_FLAGS[SETTING_FLAGS[k]] === k && SETTINGS[k].every((v) => irArgs(["x.pix", "--stats-only", SETTING_FLAGS[k], v]).settings[k] === v));
   const irRefused = M2A_SETTINGS.filter((k) => !/one of/.test(threw(() => irArgs(["x.pix", "--stats-only", SETTING_FLAGS[k], "maybe"]))));
   check(irTakes && !irRefused.length, "pix-to-ir takes every value of every M2a flag and refuses any other", irRefused.join(", "));
+  // --twice re-reads with the header's --names (docs/M1.md §15.16); a header from before the setting read stored.
+  const hs = (names) => ({ scope: { kind: "file" }, settings: Object.assign({ booleans: "auto", spaceEvenlySingle: "center", textFit: "widen", mode: "design" }, names ? { names } : {}) });
+  check(readerSettingsOf(hs("stored")).names === "stored" && readerSettingsOf(hs("display")).names === "display" && readerSettingsOf(hs(null)).names === "stored",
+    "m2a-accept --twice re-reads with the header's --names (stored for a header from before the setting)");
 
   // Round trip through the CLIs: every setting at a non-default value lands in the IR header.
   const out = join(TMP, "flags", "ir.json");

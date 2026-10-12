@@ -34,6 +34,7 @@ const { pixToIR, decodeVectorNetwork } = await import("./pix/ir/index.mjs");
 const { validate } = await import("./ir/validate.mjs");
 const { CODE, REASON_CODES, canonicalJSON } = await import("./ir/schema.mjs");
 const { closeLoop } = await import("./pix/ir/vector.mjs");
+const { dashNoGap } = await import("./pix/ir/strokes.mjs");
 
 let failed = 0;
 const ok = (m) => console.log("ok   " + m);
@@ -87,7 +88,7 @@ check("the header: format, version 3, pix source, file scope, the settings", () 
   return /^[0-9a-f]{64}$/.test(ir.header.source.sha256);
 });
 check("an unknown setting or value is refused, naming the choices", () => {
-  for (const s of [{ booleans: "frame" }, { spaceEvenlySingle: "left" }, { textFit: "x" }, { scope: "page:1" }, { colour: "red" }]) {
+  for (const s of [{ booleans: "frame" }, { spaceEvenlySingle: "left" }, { textFit: "x" }, { scope: "page:1" }, { colour: "red" }, { lineDirection: "diagonal" }, { dashNoGap: "dotted" }]) {
     let threw = false;
     try { read(s); } catch (e) { threw = /pixToIR:/.test(e.message); }
     if (!threw) throw new Error("accepted " + JSON.stringify(s));
@@ -182,6 +183,17 @@ check("a dashed border and a border with no stroke-area path have no oracle", ()
   eq([rec(IDS.dashed).props.oracleSides, rec(IDS.noPath).props.oracleSides], [undefined, undefined]);
   eq(val(rec(IDS.dashed).props.dashPattern), [4, 2]);
   return codesOf(IDS.dashed).includes(CODE.SOURCE_FEATURE_UNSUPPORTED);
+});
+check("a dash pattern with no gap is solid: not written under dashNoGap solid, counted; written under keep (§15.15)", () => {
+  const dashed = (pattern, settings) => pixToIR(mutated((v, at) => { at(IDS.dashed).dashPattern = pattern; }), { settings });
+  const solid = dashed([1, 0]), kept = dashed([1, 0], { dashNoGap: "keep" }), odd = dashed([1.5, 0, 2]), under = dashed([2, 0.001]);
+  const p = rec(IDS.dashed, solid.ir).props;
+  eq([p.dashPattern, val(p.strokes, solid.ir).length, p.strokeWeight, solid.stats.dashNoGap, stats.dashNoGap, solid.ir.header.settings.dashNoGap], [undefined, 1, 1, 1, 0, "solid"]);
+  eq([val(rec(IDS.dashed, kept.ir).props.dashPattern, kept.ir), kept.stats.dashNoGap, kept.ir.header.settings.dashNoGap], [[1, 0], 0, "keep"]);
+  // An odd pattern repeats, so [1.5, 0, 2] has the gaps 0, 1.5, 0 in turn: dashed. A gap under the IR's
+  // two decimals is no gap.
+  eq([val(rec(IDS.dashed, odd.ir).props.dashPattern, odd.ir), rec(IDS.dashed, under.ir).props.dashPattern, under.stats.dashNoGap], [[1.5, 0, 2], undefined, 1]);
+  eq([[1, 0], [0, 0], [2, 0, 3, 0], [4, 2], [1, 0, 1], [1.5, 0, 2]].map(dashNoGap), [true, true, true, false, false, false]);
 });
 check("the side census: population, checked, agree, unproven, and why there is no oracle", () => {
   // The M2a cases add one: Row's background, a stroked rectangle with no stroke-area path.
@@ -294,10 +306,10 @@ check("a missing font comes from the text style by guid; a RAW line height is dr
   eq([val(p.fontName), p.fontSize, p.lineHeight, p.lines], [{ family: "Inter", style: "Medium" }, 16, undefined, 1]);
   eq([stats.text.fontFromStyle, stats.text.rawLineHeight], [1, 1]);
 });
-check("PERCENT 1 is AUTO (the font's natural line height, review R3); PERCENT 1.5 stays 150 %", () => {
+check("PERCENT 1 is 100 %, counted (docs/M1.md §15.14, C08; review R3 read it as AUTO); PERCENT 1.5 stays 150 %", () => {
   const one = pixToIR(mutated((v, at) => { at(IDS.text).lineHeight = { value: 1, units: 3 }; }));
   const half = pixToIR(mutated((v, at) => { at(IDS.text).lineHeight = { value: 1.5, units: 3 }; }));
-  eq([rec(IDS.text, one.ir).props.lineHeight, one.stats.text.percentOneAuto], [undefined, 1]);
+  eq([val(rec(IDS.text, one.ir).props.lineHeight, one.ir), one.stats.text.percentOne], [{ unit: "PERCENT", value: 100 }, 1]);
   eq(val(rec(IDS.text, half.ir).props.lineHeight, half.ir), { unit: "PERCENT", value: 150 });
 });
 check("a text bound to a style takes the style's size (absent: 14), line height and letter spacing; its font by fontMetaData (review R2)", () => {
@@ -319,6 +331,113 @@ check("number forms and OpenType features are counted SOURCE_FEATURE_UNSUPPORTED
   const s = pixToIR(mutated((v, at) => { at(IDS.textNoLines).fontVariantNumericSpacing = 1; }));
   eq(notesOf(IDS.text, r.ir).map((n) => n.detail).filter((d) => d === "fontVariantNumeric" || d === "OpenType features"), ["fontVariantNumeric", "OpenType features"]);
   eq([r.stats.unsupported.fontVariantNumeric, notesOf(IDS.textNoLines, s.ir).some((n) => n.detail === "fontVariantNumeric")], [1, false]);
+});
+
+// ---------- 5b. text after the first render audit (docs/M1.md §15.14) ----------
+// The fixture's enums: TextCase UPPER 2, TextDecoration UNDERLINE 2, NumberUnits PIXELS 2, TextAlignVertical
+// CENTER 2, TextTruncation ENDING 1, LeadingTrim CAP_HEIGHT 1, FontVariantNumericSpacing TABULAR 3.
+const PX = (value) => ({ value, units: 2 });
+check("a text bound to a style takes the style's case, decoration and paragraph fields; a node's own differing one is counted (C05)", () => {
+  const r = pixToIR(mutated((v, at) => {
+    const s = at(IDS.textStyle), t = at(IDS.textFromStyle);
+    s.textCase = 2; s.textDecoration = 2; s.paragraphSpacing = 8; s.paragraphIndent = 4;
+    delete t.textCase; delete t.textDecoration;
+  }));
+  const p = rec(IDS.textFromStyle, r.ir).props;
+  eq([p.textCase, p.textDecoration, p.paragraphSpacing, p.paragraphIndent, r.stats.text.styleValueOverridden], ["UPPER", "UNDERLINE", 8, 4, 0]);
+  const o = pixToIR(mutated((v, at) => { at(IDS.textStyle).textCase = 2; at(IDS.textFromStyle).textCase = 3; }));
+  eq([rec(IDS.textFromStyle, o.ir).props.textCase, o.stats.text.styleValueOverridden], ["UPPER", 1]);
+});
+check("number forms and OpenType features on the text style alone are counted SOURCE_FEATURE_UNSUPPORTED too (C04)", () => {
+  const r = pixToIR(mutated((v, at) => { at(IDS.textStyle).fontVariantNumericSpacing = 3; at(IDS.textStyle).toggledOnOTFeatures = [6]; }));
+  eq(notesOf(IDS.textFromStyle, r.ir).map((n) => n.detail).filter((d) => d === "fontVariantNumeric" || d === "OpenType features"), ["fontVariantNumeric", "OpenType features"]);
+});
+// "Hi 😀 there\nsecond": code points 0-2 and 7-10 are the base style's, 3-6 style 1 (fontSize 20), 11-16 style 2 (Bold).
+const glyphRow = (size, gap, cps) => {
+  let x = 0;
+  return cps.map((c) => { const g = { blobIndex: 9, position: { x, y: 14 }, styleID: 0, fontSize: size, firstCharacter: c, advance: 6 }; x += 6 + gap; return g; });
+};
+check("an absent size and letter spacing come from the stored glyphs where they agree, noted TEXT_VALUE_FROM_GLYPHS (C07)", () => {
+  const r = pixToIR(mutated((v, at) => {
+    const t = at(IDS.text);
+    delete t.fontSize; delete t.letterSpacing;
+    t.textData.glyphs = glyphRow(10, 0.4, [0, 1, 2]).concat([{ blobIndex: 9, position: { x: 30, y: 14 }, styleID: 1, fontSize: 20, firstCharacter: 3, advance: 12 }],
+      glyphRow(10, 0.4, [7, 8, 9]).map((g) => Object.assign(g, { position: { x: g.position.x + 60, y: 14 } })));
+  }));
+  const p = rec(IDS.text, r.ir).props;
+  eq([p.fontSize, val(p.letterSpacing, r.ir), r.stats.text.fontSizeFromGlyphs, r.stats.text.letterSpacingFromGlyphs], [10, { unit: "PIXELS", value: 0.4 }, 1, 1]);
+  eq(notesOf(IDS.text, r.ir).filter((n) => n.code === CODE.TEXT_VALUE_FROM_GLYPHS).map((n) => n.detail.split("; ").slice(0, 2)), [["fontSize 10 (absent: 14)", "letterSpacing 0.4 px (absent: 0)"]]);
+  // At 14 with no gap, or a gap from two pairs only, or a spacing the node stores: nothing changes.
+  const plain = pixToIR(mutated((v, at) => { const t = at(IDS.text); delete t.fontSize; delete t.letterSpacing; t.textData.glyphs = glyphRow(14, 0, [0, 1, 2, 7]); }));
+  const two = pixToIR(mutated((v, at) => { const t = at(IDS.text); delete t.letterSpacing; t.textData.glyphs = glyphRow(14, 0.4, [0, 1, 2]); }));
+  const stored = pixToIR(mutated((v, at) => { at(IDS.text).textData.glyphs = glyphRow(14, 0.4, [0, 1, 2]).concat(glyphRow(14, 0.4, [7, 8, 9])); }));
+  eq([rec(IDS.text, plain.ir).props.fontSize, rec(IDS.text, plain.ir).props.letterSpacing, codesOf(IDS.text, plain.ir).includes(CODE.TEXT_VALUE_FROM_GLYPHS)], [14, undefined, false]);
+  eq([rec(IDS.text, two.ir).props.letterSpacing, val(rec(IDS.text, stored.ir).props.letterSpacing, stored.ir)], [undefined, { unit: "PERCENT", value: 6.25 }]);
+});
+check("list items: listSpacing is the paragraph spacing; a list starting past 1 is SOURCE_FEATURE_UNSUPPORTED (C09)", () => {
+  const r = pixToIR(mutated((v, at) => { const t = at(IDS.text); t.paragraphSpacing = 16; t.textData.paragraphStyle[1].listStartOffset = 4; }));
+  const p = rec(IDS.text, r.ir).props;
+  eq([p.paragraphSpacing, p.listSpacing, r.stats.text.listSpacingFromParagraph], [16, 16, 1]);
+  eq(notesOf(IDS.text, r.ir).filter((n) => /^list start number/.test(n.detail || "")).map((n) => n.detail), ["list start number: a list starts at 5; Figma numbers it from 1"]);
+  const none = pixToIR(mutated((v, at) => { const t = at(IDS.textNoLines); t.paragraphSpacing = 16; }));
+  eq(rec(IDS.textNoLines, none.ir).props.listSpacing, undefined);
+});
+check("a text Pixso cut with an ellipsis has the lines before the cut; an uncut one every stored line (C03)", () => {
+  const cut = pixToIR(mutated((v, at) => { const t = at(IDS.text); t.textTruncation = 1; t.maxLines = 1; t.textData.truncationStartIndex = 8; }));
+  const uncut = pixToIR(mutated((v, at) => { const t = at(IDS.text); t.textTruncation = 1; t.maxLines = 1; t.textData.truncationStartIndex = -1; }));
+  eq([rec(IDS.text, cut.ir).props.lines, cut.stats.text.truncatedLines, rec(IDS.text, uncut.ir).props.lines], [1, 1, 2]);
+});
+check("firstLineShift: written where the stored first baseline is more than 0.5 px off its half-leading place (C01, C02)", () => {
+  // Inter Medium 16 (the style's), natural 1.21 x 16 = 19.36, ascent 15.5, line height 20: half-leading
+  // puts the baseline at (20 - 19.36) / 2 + 15.5 = 15.82 below the line's top.
+  const at16 = (y, more) => pixToIR(mutated((v, at) => {
+    const t = at(IDS.textFromStyle);
+    t.lineHeight = PX(20); t.size = { x: 60, y: more && more.h ? more.h : 20 };
+    t.textData.baselines = [{ position: { x: 0, y }, width: 40, lineY: 0, lineHeight: 20, lineAscent: 15.5, firstCharacter: 0, endCharacter: 6 }];
+    t.textData.fontMetaData = more && more.noMetrics ? [] : [{ key: { family: "Inter", style: "Medium", postscript: "" }, fontLineHeight: 1.21 }];
+    if (more && more.center) t.textAlignVertical = 2;
+    if (more && more.trim) t.leadingTrim = 1;
+  }));
+  const half = at16(16), high = at16(14), low = at16(17.5), center = at16(18, { h: 24, center: true }), trimmed = at16(14, { trim: true }), unknown = at16(14, { noMetrics: true });
+  const shift = (r) => rec(IDS.textFromStyle, r.ir).props.firstLineShift;
+  eq([shift(half), shift(high), shift(low), shift(center), shift(trimmed), shift(unknown)], [undefined, -1.82, 1.68, undefined, undefined, undefined]);
+  // The fixture's other texts have no metrics: counted unknown in every read.
+  eq([half.stats.text.firstLine.halfLeading, high.stats.text.firstLine.shifted, trimmed.stats.text.firstLine.trimmedInSource,
+    unknown.stats.text.firstLine.unknown - half.stats.text.firstLine.unknown], [1, 1, 1, 1]);
+  const v = validate(high.ir);
+  if (!v.ok) throw new Error(JSON.stringify(v.errors.slice(0, 2)));
+  const bad = JSON.parse(JSON.stringify(high.ir));
+  bad.nodes[idx(bad, IDS.textFromStyle)].props.firstLineShift = 0.3;
+  return validate(bad).errors.some((e) => /firstLineShift/.test(e.path)) ? "a shift within 0.5 px is refused by the validator" : false;
+});
+check("a cap-height trim the text style sets is the text's: leadingTrim CAP_HEIGHT, trimmed in the source, no firstLineShift (U: 7 texts)", () => {
+  // The stored baseline 2 px above half-leading, as in U's 9 px labels, where the style's trim puts it.
+  const r = pixToIR(mutated((v, at) => {
+    const t = at(IDS.textFromStyle);
+    at(IDS.textStyle).leadingTrim = 1; delete t.leadingTrim;
+    t.lineHeight = PX(20); t.size = { x: 60, y: 20 };
+    t.textData.baselines = [{ position: { x: 0, y: 14 }, width: 40, lineY: 0, lineHeight: 20, lineAscent: 15.5, firstCharacter: 0, endCharacter: 6 }];
+    t.textData.fontMetaData = [{ key: { family: "Inter", style: "Medium", postscript: "" }, fontLineHeight: 1.21 }];
+  }));
+  const p = rec(IDS.textFromStyle, r.ir).props;
+  eq([p.leadingTrim, p.firstLineShift, r.stats.text.firstLine.trimmedInSource, r.stats.text.firstLine.shifted, r.stats.text.styleValueOverridden], ["CAP_HEIGHT", undefined, 1, 0, 0]);
+});
+check("TEXT_GLYPHS_INVALID: a text whose stored glyphs are not glyph outlines, by class; a real glyph and an empty space are not (C06)", () => {
+  const read = (blobs, chars) => pixToIR(mutated((v, at) => {
+    const t = at(IDS.text), first = v.blobs.length;
+    for (const b of blobs) v.blobs.push({ bytes: b });
+    t.textData.glyphs = blobs.map((b, k) => ({ blobIndex: first + k, position: { x: 8 * k, y: 14 }, styleID: 0, fontSize: 14, firstCharacter: chars[k], advance: 8 }))
+      .concat([{ blobIndex: 9, position: { x: 80, y: 14 }, styleID: 0, fontSize: 14, firstCharacter: 7, advance: 8 }]);
+  }));
+  const slab = encodePath([[1, 0, 0], [2, 199, 0], [2, 199, -72], [2, 0, -72], [0]]);
+  const far = encodePath([[1, -1.04e34, 0], [2, 0.5, -0.7], [0]]);
+  const none = encodePath([[1, 0, 0], [2, 1e-38, 2e-38], [0]]);
+  const detail = (r) => notesOf(IDS.text, r.ir).filter((n) => n.code === CODE.TEXT_GLYPHS_INVALID).map((n) => n.detail.split(";")[0]);
+  const a = read([none, slab, far], [0, 1, 5]), b = read([slab], [0]), c = read([none], [0]), d = read([none], [2]);
+  eq([detail(a), detail(b), detail(c), detail(d), detail(R.auto)], [["drops-text: 3 of 4 stored glyphs are not glyph outlines (drops-text 1, slab 1, empty 1)"],
+    ["slab: 1 of 2 stored glyphs are not glyph outlines (slab 1)"], ["empty: 1 of 2 stored glyphs are not glyph outlines (empty 1)"], [], []]);
+  eq([a.stats.text.glyphsInvalid["drops-text"], b.stats.text.glyphsInvalid.slab, c.stats.text.glyphsInvalid.empty], [1, 1, 1]);
+  for (const r of [a, b, c]) { const v = validate(r.ir); if (!v.ok) throw new Error(JSON.stringify(v.errors.slice(0, 2))); }
 });
 check("every font used is listed once", () => {
   eq(ir.fonts.map((f) => f.style).sort(), ["Bold", "Medium", "Regular"]);
@@ -498,10 +617,41 @@ check("a CONNECTLINE is a VECTOR from its network, SOURCE_FEATURE_UNSUPPORTED", 
   eq([r.type, val(r.props.vectorNetwork).segments.length], ["VECTOR", 1]);
   eq(notesOf(IDS.connect).map((n) => n.detail), ["CONNECTLINE"]);
 });
-check("a LINE with height and no stored geometry stays a line, its height dropped and noted", () => {
+check("a LINE with a height and no stored stroke area runs along its size: turned onto (0,0)-(w,h), its width the length (§15.15)", () => {
+  // The fixture's 20 x 6 LINE at (220, 240): 20.88 long, turned by atan2(6, 20). Its end, 220 + 0.9578 *
+  // 20.88 and 240 + 0.2873 * 20.88, is (240, 246): the node's (w, h).
   const r = rec(IDS.lineHeight);
-  eq([r.type, r.props.width, r.props.height], ["LINE", 20, 0]);
-  return notesOf(IDS.lineHeight)[0].detail.indexOf("LINE with height") === 0;
+  eq([r.type, r.props.width, r.props.height, r.props.relativeTransform], ["LINE", 20.88, 0, [0.9578, -0.2873, 220, 0.2873, 0.9578, 240]]);
+  eq([notesOf(IDS.lineHeight), stats.lines, ir.header.settings.lineDirection], [[], { alongSize: 1, flat: 0, noStoredArea: 1, subPrecision: 0, inFlow: 0 }, "stored"]);
+});
+check("a LINE follows its own stored stroke area; --line-direction size and flat override it; a height under 0.005 is none; a turned one in a flow is counted", () => {
+  const line = (edit, settings) => pixToIR(mutated((v, at) => {
+    const n = at(IDS.lineHeight);
+    if (edit.area) { v.blobs.push({ bytes: encodePath(edit.area) }); n.strokePaddingPath = [Object.assign({}, at(IDS.ring).strokePaddingPath[0], { blobIndex: v.blobs.length - 1 })]; }
+    if (edit.size) n.size = edit.size;
+    if (edit.transform) n.transform = edit.transform;
+    if (edit.flow) { n.parentIndex = { guid: at(IDS.sides).guid, position: "z" }; if (edit.flow === "absolute") n.autoLayoutAbsolutePos = true; }
+  }), { settings });
+  const lineOf = (r) => { const p = rec(IDS.lineHeight, r.ir).props; return [p.width, p.height, p.relativeTransform, notesOf(IDS.lineHeight, r.ir).map((n) => n.detail), r.stats.lines]; };
+  const L = (alongSize, flat, noStoredArea, subPrecision, inFlow) => ({ alongSize, flat, noStoredArea, subPrecision, inFlow: inFlow || 0 });
+  // Pixso's stroke area of the 1 px line along x (flat), and along (20, 6): its middle in y says which.
+  const flatArea = [[1, 0, -0.5], [2, 20, -0.5], [2, 20, 0.5], [2, 0, 0.5], [0]];
+  const segArea = [[1, 0.14, -0.48], [2, 20.14, 5.52], [2, 19.86, 6.48], [2, -0.14, 0.48], [0]];
+  const turned = [20.88, 0, [0.9578, -0.2873, 220, 0.2873, 0.9578, 240]], flat = [20, 0, [1, 0, 220, 0, 1, 240]];
+  eq(lineOf(line({ area: segArea })), [...turned, [], L(1, 0, 0, 0)]);
+  eq(lineOf(line({ area: flatArea })), [...flat, ["LINE with height: its stored stroke area runs along x: built flat, height dropped"], L(0, 1, 0, 0)]);
+  eq(lineOf(line({ area: flatArea }, { lineDirection: "size" })), [...turned, [], L(1, 0, 0, 0)]);
+  eq(lineOf(line({ area: segArea }, { lineDirection: "flat" })), [...flat, ["LINE with height: --line-direction flat: built flat, height dropped"], L(0, 1, 0, 0)]);
+  // A vertical LINE as U's audited one (made up here): 0.001 x 30, its area x -0.5..0.5, y 0..30. Turned
+  // a quarter, 30 long, where the IR had built it 0 long.
+  eq(lineOf(line({ size: { x: 0.001, y: 30 }, area: [[1, 0.5, 0], [2, 0.5, 30], [2, -0.5, 30], [2, -0.5, 0], [0]] })), [30, 0, [0, -1, 220, 1, 0, 240], [], L(1, 0, 0, 0)]);
+  // The turn composes with the node's own matrix: mirrored in x, the end is (220 - 20, 240 + 6).
+  eq(lineOf(line({ transform: { m00: -1, m01: 0, m02: 220, m10: 0, m11: 1, m12: 240 } })).slice(0, 3), [20.88, 0, [-0.9578, 0.2873, 220, 0.2873, 0.9578, 240]]);
+  // 0.001 px of height (U 157, P 88 such LINEs) is under the IR's precision: no turn, no note.
+  eq(lineOf(line({ size: { x: 20, y: 0.001 } })), [...flat, [], L(0, 0, 0, 1)]);
+  // A turned LINE that is an AUTO child of a flow (here Sides, a row) is counted: the builder takes it out
+  // of the flow (rotPinned). One ABSOLUTE in a flow, as U's and O's 27 are, and one kept flat are not.
+  eq([line({ flow: "auto" }), line({ flow: "absolute" }), line({ flow: "auto" }, { lineDirection: "flat" })].map((r) => r.stats.lines), [L(1, 0, 1, 0, 1), L(1, 0, 1, 0, 0), L(0, 1, 0, 0, 0)]);
 });
 check("a LINE with height and stored fill geometry is a VECTOR from it", () => {
   const r = pixToIR(mutated((v, at) => { at(IDS.lineHeight).fillGeometry = [{ blobIndex: 14, windingRule: at(IDS.heart).fillGeometry[0].windingRule }]; }));
@@ -651,8 +801,13 @@ check("an archive entry whose SHA-1 is not its name: IMAGE_HASH_MISMATCH, treate
 });
 check("image paints: STRETCH is CROP with its transform; TILE scales; rotation under 360; Figma's filters only", () => {
   eq(val(rec(IDS.jpegRect).props.fills)[0], { type: "IMAGE", scaleMode: "CROP", imageHash: fx.jpeg.hash.toString("hex"), imageTransform: [[0.5, 0, 0.25], [0, 0.5, 0.25]] });
-  eq(val(rec(IDS.mismatchRect).props.fills)[0], { type: "IMAGE", scaleMode: "TILE", imageHash: fx.mismatch.name.toString("hex"), scalingFactor: 0.5, rotation: 90, filters: { exposure: 0.25 } });
-  eq(notesOf(IDS.mismatchRect).map((n) => n.detail), ["vibrance"]);
+  // Pixso's vibrance is Figma's saturation (Pixso's plugin API reports it so; §15.15); hue has no Figma
+  // field and is dropped and noted.
+  eq(val(rec(IDS.mismatchRect).props.fills)[0], { type: "IMAGE", scaleMode: "TILE", imageHash: fx.mismatch.name.toString("hex"), scalingFactor: 0.5, rotation: 90, filters: { exposure: 0.25, saturation: 0.5 } });
+  eq([notesOf(IDS.mismatchRect), stats.unsupported.vibrance], [[], undefined]);
+  const hue = pixToIR(mutated((v, at) => { at(IDS.mismatchRect).fillPaints[0].paintFilter.hue = 0.25; }));
+  eq(val(rec(IDS.mismatchRect, hue.ir).props.fills, hue.ir)[0].filters, { exposure: 0.25, saturation: 0.5 });
+  eq(notesOf(IDS.mismatchRect, hue.ir).map((n) => n.detail), ["hue filter"]);
 });
 check("a STAR and a POLYGON with no stored geometry: no oracle, and a SOURCE_FEATURE_UNSUPPORTED note that says so (review S3)", () => {
   for (const [g, t, pc] of [[IDS.starShape, "STAR", 5], [IDS.polygonShape, "POLYGON", 6]]) {
@@ -714,7 +869,72 @@ try {
   const r5 = run(file, "--out", join(tmp, "y.json"), "--booleans", "frame");
   if (r5.status === 2 && /booleans/.test(r5.stderr)) ok("pix-to-ir refuses a setting outside its values");
   else fail("pix-to-ir with --booleans frame: exit " + r5.status);
+  const r6 = run(file, "--out", join(tmp, "z.json"), "--names", "stored"), r7 = run(file, "--out", join(tmp, "w.json"), "--names", "shown");
+  if (r6.status === 0 && JSON.parse(readFileSync(join(tmp, "z.json"), "utf8")).header.settings.names === "stored" && r7.status === 2 && /names/.test(r7.stderr) && !existsSync(join(tmp, "w.json")))
+    ok("pix-to-ir takes --names stored into the header and refuses a value outside display, stored");
+  else fail("pix-to-ir --names: exit " + r6.status + " and " + r7.status + ", " + JSON.stringify((r7.stderr || "").slice(0, 200)));
 } finally { rmSync(tmp, { recursive: true, force: true }); }
+
+// ---------- 14. layer names (docs/M1.md §15.16) ----------
+// Pixso shows an instance named "Instance <n>", or with no name, under the name its root override entry
+// carries, else under its master's name, or its state group's when the master is a variant of one; an
+// empty-named text under its characters (measured live on U, 2026-10-06 and 2026-10-12). Planted on the
+// fixture: the Button instance (a variant of the state group "Button"), the Badge instance (the library
+// copy "Badge", two root entries naming it, which --override-merge decides between), the trailing icon
+// inside Card's master ("Icon/Star"), a name that only looks like the pattern with a root entry naming
+// it otherwise, two instances with no stored name (one named by a root entry), two empty-named texts.
+{
+  const G = (s, l) => ({ sessionID: s, localID: l });
+  const plant = (v, at) => {
+    at("1:61").name = "Instance 7"; at("1:62").name = "Instance 12"; at("1:33").name = "Instance 3";
+    at("1:62").symbolData.symbolOverrides = [{ guidPath: { guids: [] }, name: "Badge (old)", overrideLevel: 1 }, { guidPath: { guids: [G(1, 40)] }, name: "Badge (shown)" }];
+    at("1:32").name = "Instance 7a"; at("1:32").symbolData.symbolOverrides = [{ guidPath: { guids: [G(1, 20)] }, name: "Lead" }];
+    delete at("1:60").name; at("1:60").symbolData.symbolOverrides.push({ guidPath: { guids: [G(1, 30)] }, name: "Card (shown)" });
+    delete at(M2A.iNoDerived).name;
+    at(IDS.text).name = ""; at(IDS.textNoLines).name = "";
+  };
+  const file = mutated(plant);
+  const D = pixToIR(file), S = pixToIR(file, { settings: { names: "stored" } }), F = pixToIR(file, { settings: { variantSets: "frames" } });
+  const first = pixToIR(file, { settings: { overrideMerge: "first" } });
+  const GUIDS = ["1:61", "1:62", "1:33", "1:32", "1:60", M2A.iNoDerived, IDS.text, IDS.textNoLines];
+  const names = (r) => GUIDS.map((g) => rec(g, r.ir).name);
+  check("the IR validates under --names display and stored", () => [D, S, F, first].every((r) => validate(r.ir).ok) && D.ir.header.settings.names === "display" && S.ir.header.settings.names === "stored");
+  check("--names display (the default): \"Instance <n>\" or no name takes the root entry's name, else the set's or the master's; any other name and an empty text's stay", () =>
+    eq(names(D), ["Button", "Badge (shown)", "Icon/Star", "Instance 7a", "Card (shown)", "Spacer", "", ""]));
+  check("--names stored keeps every stored name (\"\" where none is stored)", () => eq(names(S), ["Instance 7", "Instance 12", "Instance 3", "Instance 7a", "", "", "", ""]));
+  check("an instance auto-named by Pixso's Russian interface (\"Экземпляр <n>\") takes the same display name; \"Экземпляр\" alone is a name", () => {
+    const R = pixToIR(mutated((v, at) => { plant(v, at); at("1:33").name = "Экземпляр 3"; at("1:61").name = "Экземпляр"; }));
+    return eq([rec("1:33", R.ir).name, rec("1:61", R.ir).name], ["Icon/Star", "Экземпляр"]);
+  });
+  check("the set's name comes from the stored state group, whatever --variant-sets makes of it", () => eq(rec("1:61", F.ir).name, "Button"));
+  check("two root entries naming the instance merge by --override-merge, as its root override does", () => eq([rec("1:62", D.ir).name, rec("1:62", first.ir).name], ["Badge (shown)", "Badge (old)"]));
+  check("stats.names counts the population under either setting", () => {
+    eq(D.stats.names, { auto: { n: 3, toRoot: 1, toSet: 1, toMaster: 1, rootDiffers: 1 }, unnamed: { n: 2, toRoot: 1, toSet: 0, toMaster: 1, rootDiffers: 1 }, namedRootDiffers: 1, emptyTexts: 2 });
+    eq(S.stats.names, D.stats.names);
+    const zero = { n: 0, toRoot: 0, toSet: 0, toMaster: 0, rootDiffers: 0 };
+    eq(stats.names, { auto: zero, unnamed: zero, namedRootDiffers: 0, emptyTexts: 0 });
+  });
+  // D8: a root entry's name equal to the record's is an echo; a different one is dropped root-box.
+  const nameNoted = (r, code, re) => GUIDS.filter((g) => notesOf(g, r.ir).some((x) => x.code === code && re.test(x.detail)));
+  const rootBoxName = (r) => nameNoted(r, CODE.OVERRIDE_FIELD_DROPPED, /^root-box: (.*, )?name 1\b/);
+  const echoName = (r) => nameNoted(r, CODE.OVERRIDE_ECHO, /: (.*, )?name 1\b/);
+  check("a root entry's name compares with the record's: an echo under display where the record took it, dropped root-box under stored (and for a named instance)", () => {
+    eq([rootBoxName(D), rootBoxName(first), rootBoxName(S)], [["1:32"], ["1:32"], ["1:62", "1:32", "1:60"]]);
+    eq([echoName(D), echoName(first), echoName(S)], [["1:62", "1:60"], ["1:62", "1:60"], []]);
+    const dD = D.stats.m2a.overrides.rootBox, dS = S.stats.m2a.overrides.rootBox;
+    eq([dD.echo - dS.echo, dS.differs - dD.differs], [2, 2]);
+  });
+  check("the setting changes names, the header and those notes on the root names, nothing else: overrides, components and sets are the same", () => {
+    const strip = (r) => {
+      const c = JSON.parse(JSON.stringify(r.ir));
+      delete c.header.settings.names;
+      c.nodes.forEach((n) => { delete n.name; });
+      c.notes = c.notes.filter((x) => !((x.code === CODE.OVERRIDE_FIELD_DROPPED && x.detail === "root-box: name 1") || (x.code === CODE.OVERRIDE_ECHO && x.detail === "1 field: name 1")));
+      return JSON.stringify(c);
+    };
+    return strip(D) === strip(S);
+  });
+}
 
 console.log("");
 console.log(failed ? failed + " reader check" + (failed === 1 ? "" : "s") + " FAILED" : "all reader checks pass");

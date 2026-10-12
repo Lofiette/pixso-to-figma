@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CODE, ORACLE_PROPS, VERSION as IR_VERSION, M2A_SETTINGS, SETTING_DEFAULTS } from "./ir/schema.mjs";
+import { CODE, ORACLE_PROPS, VERSION as IR_VERSION, M2A_SETTINGS, AUDIT_READER_SETTINGS, SETTING_DEFAULTS, headerSetting } from "./ir/schema.mjs";
 import { SERVICE_PAGE_GUID, taskChars } from "./ir/task.mjs";
 import { validate, validateTask } from "./ir/validate.mjs";
 import { cleanTaskFor, derivePopulations, planM1, PLAN_DEFAULTS, CEILING_BASE_MS } from "./ir/plan.mjs";
@@ -26,8 +26,9 @@ import { GATES, m1Gates, m1Verdict, sumJs, BUILT_NOT_AUDITED } from "./ir/verdic
 import { emptyJ, checkJShape, TOTALS_SHAPE } from "./ir/judge.mjs";
 import { REPO_ROOT } from "./ir/outside-repo.mjs";
 import { fakePixso } from "./test/fake-pixso.mjs";
-import { adoptIrSettings, parseArgs, SETTINGS as RUN_SETTINGS } from "./pix-run.mjs";
+import { adoptIrSettings, parseArgs, runDirName, runSettings, SETTINGS as RUN_SETTINGS } from "./pix-run.mjs";
 import { accept, legacyLostBorders } from "./m1-accept.mjs";
+import { readerSettingsOf as irReaderSettings } from "./m2a-accept.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 let failed = 0, passed = 0;
@@ -138,7 +139,7 @@ function syntheticIR(opts) {
       scope: { kind: "file" },
       capabilities: { authoredOverrides: true, resolvedOverrides: false, overrideKeys: true, publishIds: true, symbolVersions: true, derivedBoxes: true, inkBounds: false, renders: false },
       settings: Object.assign({ mode: "design", overrides: "fidelity", drift: "link", deleted: "publish", resync: "pixso-unless-edited", textFit: "widen", booleans: "auto",
-        spaceEvenlySingle: "between" }, Object.fromEntries(M2A_SETTINGS.map((k) => [k, SETTING_DEFAULTS[k]])), { kitmaps: "default" }) },
+        spaceEvenlySingle: "between" }, Object.fromEntries(M2A_SETTINGS.concat(AUDIT_READER_SETTINGS).map((k) => [k, SETTING_DEFAULTS[k]])), { kitmaps: "default" }) },
     pages: [{ guid: "0:1", name: "Page 1", internal: false, background: 0 }, { guid: "0:2", name: "Internal canvas", internal: true }],
     values, nodes, sets: [], components: comps, styles: [],
     images: [{ hash: hashes.png, present: true, format: "png" }, { hash: hashes.missing, present: false, format: "png" }, { hash: hashes.jpeg, present: true, format: "jpeg" }],
@@ -571,7 +572,12 @@ async function runGroup() {
   const odd = JSON.parse(JSON.stringify(r.stats)); odd.notCarried.newKind = 0;
   const Bo = planM1(r.ir, odd, { runId: RUN }).balance;
   check(!Bo.ok && !Bo.stored.ok && /newKind unknown to the planner/.test(Bo.stored.why), "a not-carried term the planner does not know fails the stored equation, by name", JSON.stringify(Bo.stored));
-  check(planM1(r.ir, r.stats, { runId: RUN }).balance.filtersUnrendered === 1, "the fixture's dropped vibrance filter is counted for FILTER_UNRENDERED");
+  // docs/M1.md §15.15: vibrance is Figma's saturation, so the fixture's is carried; a hue filter is still
+  // dropped and counted.
+  const { IDS } = await import("./pix/fixture.mjs");
+  const hue = pixToIR(makeFixture("valid", { mutate: (v) => { v.pixsoNodes.find((n) => n.guid.sessionID + ":" + n.guid.localID === IDS.mismatchRect).fillPaints[0].paintFilter.hue = 0.25; } }).pix, { settings: {} });
+  check(planM1(r.ir, r.stats, { runId: RUN }).balance.filtersUnrendered === 0 && planM1(hue.ir, hue.stats, { runId: RUN }).balance.filtersUnrendered === 1,
+    "the fixture's vibrance is carried as saturation (no FILTER_UNRENDERED); a dropped hue filter is counted for FILTER_UNRENDERED");
 }
 
 // ============================================================================================
@@ -728,6 +734,10 @@ function pixRunGroup() {
     /unknown option/.test(threw(() => parseArgs(["x.pix", "--frobnicate"]))) && /below/.test(threw(() => parseArgs(["x.pix", "--liveness-warn-s", "400"]))) &&
     /mcp is M4/.test(threw(() => parseArgs(["x.pix", "--source", "mcp"]))),
     "pix-run refuses values outside each setting's range; --no-pixso is --images archive");
+  // docs/M1.md §15.14: the text trim rule is a setting, source by default, builder4's rule reachable.
+  check(o.textTrim === "source" && parseArgs(["x.pix", "--text-trim", "lineHeight"]).textTrim === "lineHeight" && parseArgs(["x.pix", "--text-trim", "none"]).textTrim === "none" &&
+    /one of/.test(threw(() => parseArgs(["x.pix", "--text-trim", "always"]))) && runSettings(o).textTrim === "source",
+    "--text-trim is source by default, takes lineHeight and none, refuses anything else, and is recorded in the run's settings");
   const S = syntheticIR({});
   const src = join(TMP, "src");
   mkdirSync(src, { recursive: true });
@@ -752,7 +762,9 @@ function pixRunGroup() {
     const c = run(join(flipped, "tmp-data"));
     check(c.code === 1 && /inside the repository/.test(c.out), "pix-run refuses the repository named with its drive letter in the other case");
   } else console.log("skip the drive-letter case: not Windows");
-  check(Object.keys(RUN_SETTINGS).length === 19 + M2A_SETTINGS.length, "every setting of §3 is a pix-run flag (with --data, --only, --from-ir and --stats, and docs/M2A.md §3's thirteen)");
+  check(Object.keys(RUN_SETTINGS).length === 21 + M2A_SETTINGS.length + AUDIT_READER_SETTINGS.length && AUDIT_READER_SETTINGS.every((k) => RUN_SETTINGS["--" + k.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase())]) &&
+    RUN_SETTINGS["--text-trim"] && RUN_SETTINGS["--names"],
+    "every setting of §3 is a pix-run flag (21 + 13 + 2: with --data, --only, --from-ir and --stats, --text-trim of docs/M1.md §15.14 and --names of §15.16; docs/M2A.md §3's thirteen; docs/M1.md §15.15's two)");
   {
     // Review S7: --from-ir keeps the reader's settings the IR header records.
     const header = { settings: { textFit: "source-box", booleans: "flatten", spaceEvenlySingle: "center" }, scope: { kind: "pages", ids: ["0:4"] } };
@@ -763,6 +775,14 @@ function pixRunGroup() {
     check(why === null && a.textFit === "source-box" && a.booleans === "flatten" && a.spaceEvenlySingle === "center" && a.scope === "pages:0:4" &&
       /--text-fit widen contradicts the IR, which was read with source-box/.test(adoptIrSettings(b, header)) && adoptIrSettings(c, header) === null,
       "--from-ir takes booleans, spaceEvenlySingle, textFit and scope from the IR header, and refuses a flag that contradicts it");
+    // docs/M1.md §15.15: an IR read before lineDirection and dashNoGap existed (this header has neither) was
+    // read with LINEs flat and dash patterns as stored (schema.LATER_SETTINGS); --from-ir and m2a-accept's
+    // second read (G8) take it so.
+    const d = parseArgs(["--from-ir", "x.json", "--line-direction", "stored"]);
+    const g8 = irReaderSettings(header);
+    check(a.lineDirection === "flat" && a.dashNoGap === "keep" && /--line-direction stored contradicts the IR, which was read with flat/.test(adoptIrSettings(d, header) || "") &&
+      g8.lineDirection === "flat" && g8.dashNoGap === "keep",
+      "--from-ir and m2a-accept take an IR header without lineDirection and dashNoGap as flat and keep, and refuse a flag that contradicts it");
     const flat = JSON.parse(JSON.stringify(S.ir)); flat.header.settings.textFit = "source-box"; flat.header.settings.booleans = "flatten";
     writeFileSync(join(src, "ir-flat.json"), JSON.stringify(flat));
     let out = "", code = 0;
@@ -773,11 +793,88 @@ function pixRunGroup() {
 }
 
 // ============================================================================================
+// layer names (docs/M1.md §15.16): the identity check, the planner and pix-run
+// ============================================================================================
+async function namesGroup() {
+  const { makeFixture, IDS } = await import("./pix/fixture.mjs");
+  const { pixToIR } = await import("./pix/ir/index.mjs");
+  const { readPix } = await import("./pix/read.mjs");
+  const { rootNamesFromPix } = await import("./ir/names.mjs");
+  // Planted as U holds them: instances named "Instance <n>" (a variant of the state group "Button", the
+  // library copy "Badge" with a root entry naming it, "Icon/Star" inside Card's master), an instance
+  // with no stored name (Card's) and two empty-named texts, one with a line break in its characters.
+  const at = (v, g) => v.pixsoNodes.find((n) => n.guid.sessionID + ":" + n.guid.localID === g);
+  const pix = makeFixture("valid", { mutate: (v) => {
+    at(v, "1:61").name = "Instance 7"; at(v, "1:62").name = "Instance 12"; at(v, "1:33").name = "Instance 3";
+    at(v, "1:62").symbolData.symbolOverrides = [{ guidPath: { guids: [{ sessionID: 1, localID: 40 }] }, name: "Badge (shown)" }];
+    delete at(v, "1:60").name;
+    at(v, IDS.text).name = ""; at(v, IDS.textNoLines).name = "";
+  } }).pix;
+  const D = pixToIR(pix), S = pixToIR(pix, { settings: { names: "stored" } }), F = pixToIR(pix, { settings: { names: "stored", variantSets: "frames" } });
+  const roots = rootNamesFromPix(readPix(pix));
+  // What Pixso's API answers for them (measured live on U, 2026-10-06 and 2026-10-12): the root entry's
+  // name, else the set's or the master's, and the characters with the line break shown as a space.
+  const shown = { "1:61": "Button", "1:62": "Badge (shown)", "1:33": "Icon/Star", "1:60": "Card", [IDS.text]: "Hi \u{1F600} there second", [IDS.textNoLines]: "plain" };
+  const ask = (r, wrong, rootsOf, ir) => {
+    const I = ir || r.ir;
+    const said = Object.assign({}, shown, wrong || {});
+    const ix = (g) => I.nodes.findIndex((n) => n.guid === g);
+    const sampled = Object.keys(shown).concat([IDS.textFromStyle]).map(ix);
+    const answers = I.nodes.map((n) => ({ id: n.guid, type: n.type, name: Object.prototype.hasOwnProperty.call(said, n.guid) ? said[n.guid] : n.name }));
+    return compareIdentity(I, "Fixture", { file: "Fixture", pageIds: I.pages.filter((p) => !p.internal).map((p) => p.guid) }, sampled, answers, rootsOf);
+  };
+  const qs = [ask(D), ask(D, null, roots), ask(S, null, roots), ask(F, null, roots)];
+  check(qs.every((q) => q.same && q.q5 && q.sample.nameDiffers === 0 && q.sample.agree === 7),
+    "identity: Pixso's names agree with an IR read under --names display, and, given the .pix's root entries, with one read under stored (frames too): an auto-named or unnamed instance as its root entry, set or master, an empty text as its characters",
+    JSON.stringify(qs.map((q) => q.detail)));
+  const noPix = ask(S);
+  check(!noPix.q5 && noPix.sample.nameDiffers === 1 && roots("1:62").length === 1 && rootNamesFromPix(null) === null && rootNamesFromPix({ images: new Map() }) === null,
+    "identity: without the .pix, an IR read under stored cannot give the root entry's name (D8 drops it), and that instance differs", JSON.stringify(noPix.detail));
+  const wrong = [ask(S, { "1:61": "Renamed", "1:33": "Badge", [IDS.text]: "plain" }, roots), ask(D, { "1:61": "Renamed", "1:33": "Badge", [IDS.text]: "plain", "1:62": "Badge" }, roots)];
+  check(same(wrong.map((q) => [q.q5, q.sample.nameDiffers]), [[false, 3], [false, 4]]),
+    "identity: a rename, another master's name, another text's characters, or (read under display) the master's name where a root entry names the instance still differ", JSON.stringify(wrong.map((q) => q.detail)));
+  // A FRAME parent's name stands for a state group's only where the IR cannot tell the two apart: under
+  // --variant-sets frames, before version 3, or a group VARIANT_SET_REJECTED names. Badge's master is
+  // moved into a plain frame of the IR read under stored (parse).
+  const plain = S.ir.nodes.findIndex((n) => n.type === "FRAME" && !S.ir.notes.some((x) => x.node !== undefined && S.ir.nodes[x.node] === n && x.code === CODE.VARIANT_SET_REJECTED));
+  const moved = (edit) => {
+    const c = JSON.parse(JSON.stringify(S.ir));
+    const mi = c.nodes.findIndex((n) => n.guid === "1:40");
+    c.nodes[mi].parent = plain; delete c.nodes[mi].page;
+    if (edit) edit(c);
+    return ask(S, { "1:62": c.nodes[plain].name }, null, c);
+  };
+  const frameQs = [moved(), moved((c) => { c.notes.push({ code: CODE.VARIANT_SET_REJECTED, node: plain, detail: "no-equals" }); }),
+    moved((c) => { c.header.settings.variantSets = "frames"; }), moved((c) => { c.header.version = 2; })];
+  check(plain >= 0 && same(frameQs.map((q) => q.sample.nameDiffers), [1, 0, 0, 0]),
+    "identity: a master's plain FRAME parent gives no name under --variant-sets parse; a rejected group's does, and any FRAME's under frames or before version 3",
+    JSON.stringify(frameQs.map((q) => q.detail)));
+  // The planner hands the builder the header's names; an IR read before the setting had stored names.
+  const old = JSON.parse(JSON.stringify(S.ir)); delete old.header.settings.names;
+  const namesOf = (ir, o) => [...new Set(planM1(ir, null, Object.assign({ runId: RUN }, o || {})).tasks.map((t) => t.settings.names))];
+  const t0 = planM1(D.ir, D.stats, { runId: RUN }).tasks.find((t) => t.op === "build");
+  const bare = JSON.parse(JSON.stringify(t0)); delete bare.settings.names;
+  check(same(namesOf(D.ir), ["display"]) && same(namesOf(S.ir), ["stored"]) && validate(old).ok && headerSetting(old.header, "names") === "stored" && same(namesOf(old), ["stored"]) &&
+    same(namesOf(D.ir, { settings: { names: "stored" } }), ["stored"]) && validateTask(t0).ok && !validateTask(bare).ok &&
+    validateTask(bare).errors.some((e) => e.path === "settings.names"),
+    "the planner writes the IR header's names into every task (stored for an IR read before the setting), and a task without it is refused",
+    JSON.stringify([namesOf(D.ir), namesOf(S.ir), validate(old).errors.slice(0, 2), validateTask(bare).errors.slice(0, 2)]));
+  // pix-run: a flag, a reader setting --from-ir keeps, and part of the run folder's name.
+  const a = parseArgs(["--from-ir", "x.json"]), b = parseArgs(["--from-ir", "x.json", "--names", "display"]);
+  const whyA = adoptIrSettings(a, old.header), whyB = adoptIrSettings(b, old.header);
+  const sha = "ab".repeat(32), dirOf = (v) => runDirName(sha, runSettings(parseArgs(["x.pix", "--names", v])));
+  check(parseArgs(["x.pix"]).names === "display" && parseArgs(["x.pix", "--names", "stored"]).names === "stored" && /one of display, stored/.test(threw(() => parseArgs(["x.pix", "--names", "shown"]))) &&
+    whyA === null && a.names === "stored" && /--names display contradicts the IR, which was read with stored/.test(whyB) && dirOf("display") !== dirOf("stored"),
+    "pix-run: --names defaults to display, --from-ir keeps the IR's (stored before the setting), and the two settings never share a run folder", JSON.stringify([a.names, whyB]));
+}
+
+// ============================================================================================
 try {
   await imageGroup();
   await runGroup();
   acceptGroup();
   pixRunGroup();
+  await namesGroup();
 } catch (e) { check(false, "a test group threw", (e && e.stack) || e); }
 if (failed) console.log("test-pixrun: scratch kept in " + TMP);
 else { try { rmSync(TMP, { recursive: true, force: true }); } catch (e) { /* a scratch folder left behind is harmless */ } }

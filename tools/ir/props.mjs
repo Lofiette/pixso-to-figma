@@ -83,7 +83,7 @@ const TEXT_PROPS = { characters: "str", fontName: "value", fontSize: "num", lett
   textAutoResize: E(["NONE", "WIDTH_AND_HEIGHT", "HEIGHT", "TRUNCATE"]), textCase: TEXT_CASE,
   textDecoration: TEXT_DECORATION, textTruncation: E(["DISABLED", "ENDING"]), maxLines: "int",
   leadingTrim: E(["NONE", "CAP_HEIGHT"]), hangingPunctuation: "bool", hangingList: "bool", textStyle: "style",
-  textRanges: "own", lines: "int" };
+  textRanges: "own", lines: "int", firstLineShift: "num" };
 const ORACLE = { oracleFillGeometry: "value" };
 
 const FRAME = merge(BASE, CHILD, BLEND_MIX, PAINT, CORNER, SIDES, FRAME_LIKE);

@@ -10,11 +10,16 @@
 //   scope               "file" | "pages:<guid>,<guid>…" (the chosen pages or top-level objects; every master
 //                       an instance in scope names is carried with its top-level object)
 //   mode                design | kit                  (recorded only; M1 reads both alike)
+//   names               display | stored              (docs/M1.md §15.16: an INSTANCE named "Instance <n>"
+//                       or with no name takes its root entry's name, else its set's or master's, as Pixso
+//                       shows it; stored keeps the name)
 //   the thirteen M2a settings (docs/M2A.md §3; schema.M2A_SETTINGS, each defaulting to SETTING_DEFAULTS):
 //   variantSets parse | frames, variantGrammar names | vocabulary, axisOrder vocabulary | names,
 //   swapDangling skip | strict, swapReset on | off, swapFallback derived | off, swapDefault layer | definition,
 //   rejectedProps copy | none, defaultAssignments keep | drop, overrideMerge last | first | outer,
 //   echo drop | keep, instanceOwn overrides | own, derivedGeometry changed | all | none
+//   the settings added after the first render audit (docs/M1.md §15.15; schema.AUDIT_READER_SETTINGS):
+//   lineDirection stored | size | flat, dashNoGap solid | keep
 //
 // THE M2a SEAM (docs/M2A.md §4, §5.3), each hook a module of its own with its contract in its header:
 //   plan (M1) -> familyIndex (families.mjs, part A) -> propIndex (propindex.mjs, P0, then part B)
@@ -42,14 +47,21 @@
 //                    stateGroupsInternal, lostBorder }   (IR indices; tools/pix/ir/populations.mjs)
 //     populationCounts, records, nonInstance, instances, vectors, text, spaceEvenly, strokeAlignDecided,
 //     cornerRadiusOnly, lostBorderSections, counterFillKeptFixed, thinStrokes, staleBooleans,
+//     lines: { alongSize, flat, noStoredArea, subPrecision, inFlow } and dashNoGap (tools/pix/ir/strokes.mjs),
 //     styles: { fill | stroke | effect: { same, styleWins, missing, noValue } } (tools/pix/ir/styles.mjs),
+//     names: { auto, unnamed: { n, toRoot, toSet, toMaster, rootDiffers }, namedRootDiffers, emptyTexts }
+//       (nodes.mjs recordName, counted under either --names): the INSTANCE records stored as "Instance <n>"
+//       and those with no stored name, by the name Pixso shows them under (their root entry's, else their
+//       state group's or master's; the rest keep the stored one), rootDiffers those whose root entry names
+//       them otherwise than the group or master; the named INSTANCE records whose root entry names them
+//       otherwise (they keep the stored name); the TEXT records named "",
 //     m2a: newM2aStats() below, filled by parts A-C (docs/M2A.md §6) }
 //   ms also holds m2a: { families, props, resolve, instances }, the M2a phases inside ms.ir.
 // The balance of docs/M1.md §8.2: stored = records + notCarried (every term), checked here.
 import { createHash } from "node:crypto";
 import { readPix, childrenByParent } from "../read.mjs";
 import { corrupt } from "../../kiwi.mjs";
-import { CODE, FORMAT, VERSION, SETTINGS, SETTING_DEFAULTS, SETTING_KEYS, M2A_SETTINGS, NOTE_CLASSES, REASON_CODES, INTERNED_PROPS, canonicalJSON } from "../../ir/schema.mjs";
+import { CODE, FORMAT, VERSION, SETTINGS, SETTING_DEFAULTS, SETTING_KEYS, M2A_SETTINGS, AUDIT_READER_SETTINGS, NOTE_CLASSES, REASON_CODES, INTERNED_PROPS, canonicalJSON } from "../../ir/schema.mjs";
 import { validate } from "../../ir/validate.mjs";
 import { enumReader, STRUCTURE_TYPES } from "./enums.mjs";
 import { backgroundOf } from "./paints.mjs";
@@ -63,13 +75,13 @@ import { makeResolver } from "./resolve.mjs";
 import { instanceData } from "./overrides.mjs";
 import { staleBooleans } from "../../ir/operands.mjs";
 
-export const READER_SETTINGS = ["booleans", "spaceEvenlySingle", "textFit", "scope", "mode"].concat(M2A_SETTINGS);
+export const READER_SETTINGS = ["booleans", "spaceEvenlySingle", "textFit", "scope", "mode", "names"].concat(M2A_SETTINGS, AUDIT_READER_SETTINGS);
 
 export function readerSettings(given) {
   const m2a = {};
-  for (const k of M2A_SETTINGS) m2a[k] = SETTING_DEFAULTS[k];
+  for (const k of M2A_SETTINGS.concat(AUDIT_READER_SETTINGS)) m2a[k] = SETTING_DEFAULTS[k];
   const s = Object.assign({ booleans: SETTING_DEFAULTS.booleans, spaceEvenlySingle: SETTING_DEFAULTS.spaceEvenlySingle,
-    textFit: SETTING_DEFAULTS.textFit, scope: "file", mode: "design" }, m2a, given || {});
+    textFit: SETTING_DEFAULTS.textFit, scope: "file", mode: "design", names: SETTING_DEFAULTS.names }, m2a, given || {});
   for (const k of Object.keys(s)) {
     if (READER_SETTINGS.indexOf(k) < 0) throw new Error("pixToIR: unknown setting " + JSON.stringify(k) + "; one of " + READER_SETTINGS.join(", "));
     if (k === "scope") {
@@ -80,6 +92,7 @@ export function readerSettings(given) {
 }
 
 const style0 = () => ({ same: 0, styleWins: 0, missing: 0, noValue: 0 });
+const names0 = () => ({ n: 0, toRoot: 0, toSet: 0, toMaster: 0, rootDiffers: 0 });
 const zeros = (list) => list.reduce((o, k) => { o[k] = 0; return o; }, {});
 
 // stats.m2a: the counters parts A, B and C fill on cx.m2a (docs/M2A.md §6 A-C), frozen in shape here by
@@ -117,9 +130,14 @@ function newStats() {
     notCarried: { pages: 0, directories: 0, documents: 0, styleDefinitions: 0, variables: 0, unsupported: 0, foldedOperands: 0, degenerate: 0, outOfScope: 0 },
     populations: null, populationCounts: null, records: 0, nonInstance: 0, instances: 0,
     vectors: { networks: 0, fromNetwork: 0, fromGeometry: 0, loopsClosed: 0, loopsDropped: 0, regionFills: 0, vertexRadiusZero: 0, classes: { "region-no-fill": 0, "network-bounds": 0, winding: 0 } },
-    text: { fontFromStyle: 0, rawLineHeight: 0, percentOneAuto: 0, styleValueOverridden: 0, trailingBaseStyleIds: 0 },
+    // text: tools/pix/ir/text.mjs says what each counts.
+    text: { fontFromStyle: 0, rawLineHeight: 0, percentOne: 0, styleValueOverridden: 0, trailingBaseStyleIds: 0, fontSizeFromGlyphs: 0,
+      letterSpacingFromGlyphs: 0, listSpacingFromParagraph: 0, truncatedLines: 0,
+      firstLine: { halfLeading: 0, shifted: 0, unknown: 0, trimmedInSource: 0 }, glyphsInvalid: { "drops-text": 0, slab: 0, empty: 0 } },
     spaceEvenly: { between: 0, single: 0 }, strokeAlignDecided: {}, cornerRadiusOnly: {}, lostBorderSections: 0, counterFillKeptFixed: 0, thinStrokes: 0, staleBooleans: 0,
+    lines: { alongSize: 0, flat: 0, noStoredArea: 0, subPrecision: 0, inFlow: 0 }, dashNoGap: 0,
     styles: { fill: style0(), stroke: style0(), effect: style0() },
+    names: { auto: names0(), unnamed: names0(), namedRootDiffers: 0, emptyTexts: 0 },
     m2a: newM2aStats(),
   };
 }
@@ -152,6 +170,9 @@ export function pixToIR(buffer, opts) {
     // The M2a seam (docs/M2A.md §5.3): set below, before emit; indexOf before the instance pass.
     m2a: stats.m2a, planned: null, families: null, props: null, resolver: null, setIndex: new Map(), indexOf: null,
     glyphChecked: new Set(), styles: [], styleIds: new Map(), styleGuids: new Map(),
+    // text.mjs's caches for one read, in one object so the quiet copies overrides.mjs makes share it:
+    // the class of each glyph blob, and the natural line height of each font the file lays text out in.
+    textCache: { glyphClass: new Map(), lineHeights: null },
     blob(i) {
       if (i === undefined || i === null) return null;
       if (!(Number.isInteger(i) && i >= 0 && i < pix.blobs.length)) throw corrupt("a path names blob " + i + "; there are " + pix.blobs.length);
@@ -286,6 +307,8 @@ export function pixToIR(buffer, opts) {
   // on the internal canvas and are emitted after the user pages. Notes carry an explicit node and path.
   const indexOfGuid = new Map(out.records.map((r, i) => [r.guid, i]));
   cx.indexOf = (g) => indexOfGuid.get(g);
+  // A root entry's name compares with the record's (D8), which --names may have changed (nodes.mjs recordName).
+  cx.nameAt = (i) => out.records[i].name;
   phase("instances", () => {
     out.records.forEach((r, i) => {
       if (r.type !== "INSTANCE") return;

@@ -9,26 +9,41 @@
 //       2. characters;
 //       3. every other text prop KNOWN_PROPS.TEXT lists, through ctx.prop, so DEFAULTS are written
 //          too: fontSize, textCase, textDecoration, letterSpacing, lineHeight, paragraphIndent,
-//          paragraphSpacing, listSpacing, textAlignHorizontal, textAlignVertical, textTruncation,
-//          maxLines (only under textTruncation ENDING, the one place Figma takes it), leadingTrim,
+//          paragraphSpacing, listSpacing, textAlignHorizontal, textAlignVertical, leadingTrim,
 //          hangingPunctuation, hangingList;
 //       4. each textRanges entry, field by field, with the matching setRange* call: interned fields
 //          resolved through ctx.value, a range font substituted like the node's and written first,
-//          IMAGE paints in range fills mapped by IR.mapPaints (build-images.js). fillStyle and
-//          textStyle are style references, which land in M2b, and are not written;
-//       5. textAutoResize, last.
+//          then listOptions before indentation (docs/M1.md §15.14), IMAGE paints in range fills
+//          mapped by IR.mapPaints (build-images.js). fillStyle and textStyle are style references,
+//          which land in M2b, and are not written;
+//       5. textAutoResize;
+//       6. IR.writeTruncation: textTruncation, then maxLines (only under ENDING, the one place Figma
+//          takes it), after textAutoResize (docs/M1.md §15.14).
 //     The node's own fills are NOT written here: a node fill written after the ranges would erase
 //     them, so the builder writes paints before it calls this. It reads no layout.
 //     A font that is not loaded makes Figma throw on fontName, characters or a range font, and that
 //     throw is not caught: every font must be loaded first (the build's fonts phase, C's verify).
 //     Any other refused write is a ctx.failure(rec.i, prop, message), and the rest is still written.
 //
+//   IR.writeTruncation(ctx, node, rec) -> undefined
+//     Step 6 alone. The builder calls it again after every later write of textAutoResize (B.pinText).
+//
 //   IR.textFont(ctx, font) -> { family, style } | null
 //     The font a text is written with: the font itself, or the fallback when ctx.S.fonts marks it
 //     "sub". The builder counts FONT_SUBSTITUTED with it, per node and per font.
 var TEXT_ORDER = ["fontSize", "textCase", "textDecoration", "letterSpacing", "lineHeight", "paragraphIndent",
-  "paragraphSpacing", "listSpacing", "textAlignHorizontal", "textAlignVertical", "textTruncation", "maxLines",
-  "leadingTrim", "hangingPunctuation", "hangingList"];
+  "paragraphSpacing", "listSpacing", "textAlignHorizontal", "textAlignVertical", "leadingTrim", "hangingPunctuation",
+  "hangingList"];
+// After textAutoResize. On U's first render audit (2026-10-07) no ENDING text of the 6 failing roots
+// drew an ellipsis: every auto-height one with more stored lines than maxLines (7 of 7 in two runs)
+// was pinned, so its auto height had not stopped at maxLines, and two fixed boxes drew every line.
+// Written before textAutoResize, as they were, the truncation is not in effect; which of Figma's
+// rules undoes it (the textAutoResize write, or maxLines on a fixed box) needs a live probe.
+var TRUNCATION = ["textTruncation", "maxLines"];
+// Range fields written first, in this order: the font, so the range's later writes are laid out in it;
+// the list type before the indentation, since a paragraph indented first and made a list item after
+// was drawn one level deeper (U's numbered list, the same audit; inferred from the picture, unprobed).
+var RANGE_FIRST = ["fontName", "listOptions", "indentation"];
 var RANGE_SETTERS = { fontName: "setRangeFontName", fontSize: "setRangeFontSize", fills: "setRangeFills",
   textCase: "setRangeTextCase", textDecoration: "setRangeTextDecoration", letterSpacing: "setRangeLetterSpacing",
   lineHeight: "setRangeLineHeight", hyperlink: "setRangeHyperlink", listOptions: "setRangeListOptions",
@@ -52,8 +67,22 @@ IR.textFont = function (ctx, font) {
 };
 
 // What the builder's coverage test reads: the text props and range fields this file writes.
-IR.textWrites = { props: ["fontName", "characters"].concat(TEXT_ORDER, ["textAutoResize", "textRanges"]),
+IR.textWrites = { props: ["fontName", "characters"].concat(TEXT_ORDER, ["textAutoResize"], TRUNCATION, ["textRanges"]),
   rangeFields: Object.keys(RANGE_SETTERS), rangeNotWritten: RANGE_NOT_WRITTEN.slice() };
+
+IR.writeTruncation = function (ctx, node, rec) {
+  var kinds = PXF_PROPS.KNOWN_PROPS.TEXT;
+  var i = rec && rec.i !== undefined ? rec.i : null;
+  var truncation = ctx.prop(rec, "textTruncation");
+  for (var t = 0; t < TRUNCATION.length; t++) {
+    var p = TRUNCATION[t];
+    if (!has(kinds, p)) continue;
+    var v = ctx.prop(rec, p);
+    if (v === undefined) continue;
+    if (p === "maxLines" && truncation !== "ENDING") continue;
+    try { node[p] = v; } catch (e) { ctx.failure(i, p, msgOf(e)); }
+  }
+};
 
 IR.writeTextProps = function (ctx, node, rec) {
   var kinds = PXF_PROPS.KNOWN_PROPS.TEXT;
@@ -66,13 +95,11 @@ IR.writeTextProps = function (ctx, node, rec) {
   node.characters = chars === undefined || chars === null ? "" : String(chars);
 
   // 3: the other text props, DEFAULTS included.
-  var truncation = ctx.prop(rec, "textTruncation");
   for (var t = 0; t < TEXT_ORDER.length; t++) {
     var p = TEXT_ORDER[t];
     if (!has(kinds, p)) continue;
     var v = ctx.prop(rec, p);
     if (v === undefined) continue;
-    if (p === "maxLines" && truncation !== "ENDING") continue;
     try { node[p] = v; } catch (e) { ctx.failure(i, p, msgOf(e)); }
   }
 
@@ -80,9 +107,10 @@ IR.writeTextProps = function (ctx, node, rec) {
   var ranges = rec && rec.props && Array.isArray(rec.props.textRanges) ? rec.props.textRanges : [];
   for (var r = 0; r < ranges.length; r++) {
     var rg = ranges[r], fields = rg && rg.fields ? rg.fields : {};
-    var keys = Object.keys(fields);
-    // fontName first, so the range's later writes are laid out with the range's own font.
-    keys.sort(function (a, b) { return (a === "fontName" ? 0 : 1) - (b === "fontName" ? 0 : 1); });
+    var keys = [];
+    for (var f = 0; f < RANGE_FIRST.length; f++) if (has(fields, RANGE_FIRST[f])) keys.push(RANGE_FIRST[f]);
+    var rest = Object.keys(fields);
+    for (var g = 0; g < rest.length; g++) if (RANGE_FIRST.indexOf(rest[g]) < 0) keys.push(rest[g]);
     for (var q = 0; q < keys.length; q++) {
       var k = keys[q];
       if (RANGE_NOT_WRITTEN.indexOf(k) >= 0) continue;
@@ -96,7 +124,9 @@ IR.writeTextProps = function (ctx, node, rec) {
     }
   }
 
-  // 5: last, so nothing written after it resizes the box again.
+  // 5: after every write that lays the text out, so nothing written after it resizes the box again.
   var auto = ctx.prop(rec, "textAutoResize");
   if (auto !== undefined) { try { node.textAutoResize = auto; } catch (e3) { ctx.failure(i, "textAutoResize", msgOf(e3)); } }
+  // 6: the truncation, on the box its auto-resize mode has made.
+  IR.writeTruncation(ctx, node, rec);
 };

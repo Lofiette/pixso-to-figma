@@ -19,7 +19,9 @@
 //     the task's records (an INSTANCE counts 1). ms has an entry for every phase of IR.BUILD_PHASES,
 //     in order, every one of them run (an empty phase books 0). detail holds what builder4 reported
 //     beside its counters (flowSiblingGuard, flowSiblingWorst, flowGroupNodes, flowGroupsRejected,
-//     textTrimSkipped), quarterTurnsBaked (flow leaves turned a quarter, built unturned with their size
+//     textTrimSkipped), textTrimHalfLeading and textTrimNotTop (texts textTrim "source" leaves
+//     untrimmed: at their half-leading place, or not TOP-aligned; docs/M1.md §15.14, set only when
+//     counted), quarterTurnsBaked (flow leaves turned a quarter, built unturned with their size
 //     swapped) and imagesRemapped (render images whose Figma hash differs), typeFallbacks
 //     (records Figma would not take as their type where they sit, built as frames, each a failure
 //     entry) and vectorOriginShifted.

@@ -47,10 +47,10 @@ B.WRITES = {
   childFlow: ["layoutPositioning", "layoutAlign", "layoutGrow", "constraints"],
   geometry: ["vectorNetwork", "fillGeometry", "strokeGeometry"], boolean: ["booleanOperation"],
   // Not written in M1, each for its reason: styles land in M2b (raw values are written), the
-  // property references with variants in M2a, inkBounds and lines are measurements, and the oracle
-  // never reaches the plugin.
+  // property references with variants in M2a, inkBounds, lines and firstLineShift are measurements
+  // (the textLine pass reads the last), and the oracle never reaches the plugin.
   notWritten: ["fillStyle", "strokeStyle", "textStyle", "effectStyle", "gridStyle", "componentPropertyReferences",
-    "inkBounds", "lines", "oracleFillGeometry", "oracleSides"],
+    "inkBounds", "lines", "firstLineShift", "oracleFillGeometry", "oracleSides"],
 };
 
 B.COUNTER_KEYS = ["sizeRepaired", "sizeRejected", "layoutDroppedForSize", "rotPinned", "flowAligned", "flowAbsolute",
@@ -285,13 +285,18 @@ B.writeChildSizes = function (st, k) {
 // The text box pin (builder4.js:225-230): Figma's metrics are not Pixso's, so where the built box
 // differs from the source's by more than half a pixel, the box is fixed at the source's. Reads layout,
 // unless the size read before is given ([width, height]: MEASURE reads every text first, then pins).
+// The truncation is written again after the new auto-resize mode and size, as IR.writeTextProps
+// writes it after its own (docs/M1.md §15.14).
 B.pinText = function (st, k, size) {
   var node = st.node[k], rec = st.recs[k], w = st.want[k].w, h = st.want[k].h;
   var nw = size ? size[0] : node.width, nh = size ? size[1] : node.height;
   if (Math.abs(nw - w) <= 0.5 && Math.abs(nh - h) <= 0.5) return false;
   B.set(st, node, rec.i, "textAutoResize", "NONE");
-  try { B.resize(node, "TEXT", w, h); st.textPinned.push(rec.i); return true; }
-  catch (e) { st.ctx.failure(rec.i, "resize", msgOf(e)); return false; }
+  var pinned = false;
+  try { B.resize(node, "TEXT", w, h); st.textPinned.push(rec.i); pinned = true; }
+  catch (e) { st.ctx.failure(rec.i, "resize", msgOf(e)); }
+  IR.writeTruncation(st.ctx, node, rec);
+  return pinned;
 };
 
 function countFontSubs(st, k) {
@@ -336,7 +341,12 @@ function createOne(st, k) {
   st.builtType[k] = bt;
   ctx.S.nodes[String(i)] = node.id;
   GUIDS.map[String(i)] = rec.guid;
-  node.name = String(rec.name);
+  // Pixso shows a TEXT whose name is empty under its characters (measured live on U, 2026-10-06: 47 of
+  // 50, the rest with line breaks as spaces; docs/M1.md §15.16). A Figma text follows its characters
+  // while autoRename is on, and writing the name turns that off, so under names display such a text is
+  // left unnamed and takes its name from the characters written below; one with no characters keeps
+  // the empty name. names stored writes the name as stored.
+  if (!(rec.type === "TEXT" && rec.name === "" && st.settings.names !== "stored" && String(ctx.prop(rec, "characters") || "") !== "")) node.name = String(rec.name);
   B.set(st, node, i, "relativeTransform", U.matrix(st.want[k].rt));
   // A vector's size is its paths' (Figma sizes it from them), and resizing would scale them.
   if (rec.type !== "VECTOR") {

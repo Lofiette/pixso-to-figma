@@ -34,7 +34,7 @@ const rejects = async (p) => { try { await p; return null; } catch (e) { return 
 // ============================================================================================
 const SNAP = schema.snapshotId({ source: { kind: "pix", sha256: "0".repeat(62) + "a1" } });
 const RUN = "0123456789abcdef", RUN2 = "fedcba9876543210";
-const SETTINGS = () => clone({ textFit: "widen", layoutOrder: "creation", textRead: "measure", fallbackFont: { family: "Inter", style: "Regular" } });
+const SETTINGS = () => clone({ textFit: "widen", layoutOrder: "creation", textRead: "measure", textTrim: "source", fallbackFont: { family: "Inter", style: "Regular" }, names: "display" });
 const T6 = (x, y) => [1, 0, x, 0, 1, y];
 const ROT90 = (x, y) => [0, -1, x, 1, 0, y];
 const SOLID = (r, g, b) => ({ type: "SOLID", visible: true, opacity: 1, blendMode: "NORMAL", color: { r, g, b } });
@@ -400,9 +400,15 @@ const mixedNodes = () => [
   const w1 = writesOf(E, id1).filter((w) => w.phase === "create").map((w) => w.prop);
   const at = (p) => w1.indexOf(p);
   check(at("fills") >= 0 && at("fills") < at("fontName") && at("fontName") < at("characters") && at("characters") < at("fontSize") &&
-    at("fontSize") < at("setRangeFontName()") && at("setRangeFontName()") < at("setRangeFontSize()") && w1.lastIndexOf("textAutoResize") === w1.length - 1,
-    "IR.writeTextProps writes fontName, characters, the text props, the ranges (a range font first), and textAutoResize last, after the node's fills", w1.join(","));
-  check(at("maxLines") < 0 && writesOf(E, id2).some((w) => w.prop === "maxLines" && w.value === 1), "maxLines is written only under textTruncation ENDING");
+    at("fontSize") < at("setRangeFontName()") && at("setRangeFontName()") < at("setRangeFontSize()") && w1.lastIndexOf("textAutoResize") === w1.length - 2 &&
+    w1.lastIndexOf("textTruncation") === w1.length - 1,
+    "IR.writeTextProps writes fontName, characters, the text props, the ranges (a range font first), textAutoResize, then the truncation last, after the node's fills", w1.join(","));
+  // docs/M1.md §15.14 (C03): textTruncation and maxLines after the last textAutoResize, so the box its
+  // auto-resize mode makes is the one truncated.
+  const w2 = writesOf(E, id2).filter((w) => w.phase === "create").map((w) => w.prop);
+  check(at("maxLines") < 0 && writesOf(E, id2).some((w) => w.prop === "maxLines" && w.value === 1) && w2.lastIndexOf("textAutoResize") < w2.indexOf("textTruncation") &&
+    w2.indexOf("textTruncation") < w2.indexOf("maxLines") && w2.lastIndexOf("textAutoResize") < w2.lastIndexOf("maxLines"),
+    "maxLines is written only under textTruncation ENDING, both after textAutoResize", w2.slice(-4).join(","));
   check(writesOf(E, id1).some((w) => w.prop === "setRangeHyperlink()" && w.value[2].value === "https://example.com") &&
     writesOf(E, id1).some((w) => w.prop === "setRangeTextDecoration()" && same(w.value, [6, 11, "UNDERLINE"])) &&
     writesOf(E, id1).some((w) => w.prop === "setRangeFills()" && same(w.value, [0, 5, [SOLID(1, 0, 0)]])) &&
@@ -424,6 +430,24 @@ const mixedNodes = () => [
   let threw = "";
   try { E3.IR.writeTextProps(c3, tn, task.nodes[2]); } catch (e) { threw = e.message; }
   check(/unloaded font/.test(threw), "IR.writeTextProps throws when the font is not loaded", threw);
+}
+{
+  // docs/M1.md §15.14 (C03): the pin writes textAutoResize NONE again, then the truncation again; (C09)
+  // a range's list type is written before its indentation.
+  const nodes = [frame(0, -1, [T6(0, 0), 300, 100]),
+    text(1, 0, [T6(10, 10), 61, 30], "a label that wraps onto three lines in this box", { textTruncation: "ENDING", maxLines: 1, textAutoResize: "HEIGHT", lines: 1 }),
+    text(2, 0, [T6(10, 50), 200, 14], "Item", { lines: 1, textRanges: [{ start: 0, end: 4, fields: { indentation: 1, listOptions: { type: "ORDERED" } } }] })];
+  const task = mkTask({ nodes });
+  valid("truncation after the pin", task);
+  const E = env();
+  const { R, ctx } = await build(E, task);
+  const id1 = ctx.S.nodes["1"], n1 = E.D.node(id1);
+  const w = writesOf(E, id1).filter((x) => x.phase === "measure").map((x) => x.prop);
+  check(same(R.textPinned, [1]) && w.lastIndexOf("textAutoResize") >= 0 && w.lastIndexOf("textAutoResize") < w.lastIndexOf("textTruncation") &&
+    w.lastIndexOf("textTruncation") < w.lastIndexOf("maxLines") && n1.textTruncation === "ENDING" && n1.maxLines === 1 && n1.textAutoResize === "NONE",
+    "a pinned ENDING text has its truncation written again after the pin's textAutoResize NONE", JSON.stringify([R.textPinned, w]));
+  const calls = writesOf(E, ctx.S.nodes["2"]).filter((x) => /^setRange(ListOptions|Indentation)\(\)$/.test(x.prop)).map((x) => x.prop);
+  check(same(calls, ["setRangeListOptions()", "setRangeIndentation()"]), "a range's listOptions are written before its indentation", calls.join(","));
 }
 {
   // Decision 9 (docs/M1.md §6 B step 9). The host's measure is the text model here: a line breaks
@@ -649,15 +673,42 @@ const mixedNodes = () => [
   }
 }
 {
-  // textLine: a line height off the font's natural one is trimmed (leadingTrim CAP_HEIGHT), the
-  // scratch node is stamped pxScratch and removed.
-  const task = mkTask({ nodes: [frame(0, -1, [T6(0, 0), 300, 100]), text(1, 0, [T6(10, 10), 100, 40], "Tall", { lineHeight: { unit: "PIXELS", value: 40 } }),
+  // textLine under textTrim lineHeight (builder4's rule): a line height off the font's natural one is
+  // trimmed (leadingTrim CAP_HEIGHT), the scratch node is stamped pxScratch and removed. The box is
+  // fixed, so the guard never takes the trim back.
+  const task = mkTask({ settings: { textTrim: "lineHeight" }, nodes: [frame(0, -1, [T6(0, 0), 300, 100]), text(1, 0, [T6(10, 10), 100, 40], "Tall", { lineHeight: { unit: "PIXELS", value: 40 } }),
     text(2, 0, [T6(10, 60), 100, 14], "Natural", { lineHeight: { unit: "PIXELS", value: 14 } })] });
   const E = env();
   const { R, ctx } = await build(E, task);
   const scratch = E.D.writes.find((w) => w.prop === "setSharedPluginData()" && w.value[1] === "pxScratch");
   check(E.D.node(ctx.S.nodes["1"]).leadingTrim === "CAP_HEIGHT" && E.D.node(ctx.S.nodes["2"]).leadingTrim === "NONE" && R.counters.textTrimmed === 1 &&
-    scratch && E.D.node(scratch.id) === null, "textLine trims a line height off the natural one, leaves a natural one, and removes its stamped scratch node", JSON.stringify(R.counters));
+    scratch && E.D.node(scratch.id) === null, "textTrim lineHeight trims a line height off the natural one, leaves a natural one, and removes its stamped scratch node", JSON.stringify(R.counters));
+}
+{
+  // docs/M1.md §15.14 (C01, C02): under textTrim source (the default) only a TOP-aligned text whose
+  // stored first line sits 1 px or more above its half-leading place is trimmed (in a CENTER or BOTTOM
+  // box the trim would move it down, or not at all); under none, nothing is.
+  const nodes = [frame(0, -1, [T6(0, 0), 300, 200]),
+    text(1, 0, [T6(10, 10), 100, 40], "At half-leading", { lineHeight: { unit: "PIXELS", value: 40 } }),
+    text(2, 0, [T6(10, 60), 100, 9], "Cap height", { lineHeight: { unit: "PIXELS", value: 40 }, firstLineShift: -2 }),
+    text(3, 0, [T6(10, 80), 100, 40], "Lower", { lineHeight: { unit: "PIXELS", value: 40 }, firstLineShift: 1.5 }),
+    text(4, 0, [T6(10, 130), 100, 40], "Centred", { lineHeight: { unit: "PIXELS", value: 40 }, firstLineShift: -2, textAlignVertical: "CENTER" })];
+  const trims = (E, ctx) => [1, 2, 3, 4].map((i) => E.D.node(ctx.S.nodes[String(i)]).leadingTrim);
+  const src = mkTask({ nodes });
+  valid("textTrim source", src);
+  const E = env();
+  const { R, ctx } = await build(E, src);
+  check(src.settings.textTrim === "source" && same(trims(E, ctx), ["NONE", "CAP_HEIGHT", "NONE", "NONE"]) && R.counters.textTrimmed === 1 &&
+    R.detail.textTrimHalfLeading === 2 && R.detail.textTrimNotTop === 1,
+    "textTrim source trims only the TOP text whose stored first line sits above half-leading (firstLineShift -2), not one at it or below it, nor a CENTER one above it",
+    JSON.stringify([trims(E, ctx), R.counters.textTrimmed, R.detail.textTrimHalfLeading, R.detail.textTrimNotTop]));
+  const En = env();
+  const { R: Rn, ctx: cn } = await build(En, mkTask({ nodes, settings: { textTrim: "none" } }));
+  const probes = En.D.writes.filter((w) => w.prop === "setSharedPluginData()" && w.value[1] === "pxScratch" && w.phase === "textLine");
+  check(same(trims(En, cn), ["NONE", "NONE", "NONE", "NONE"]) && Rn.counters.textTrimmed === 0 && !probes.length, "textTrim none trims nothing and makes no probe", JSON.stringify(trims(En, cn)));
+  const El = env();
+  const { ctx: cl } = await build(El, mkTask({ nodes, settings: { textTrim: "lineHeight" } }));
+  check(same(trims(El, cl), ["CAP_HEIGHT", "CAP_HEIGHT", "CAP_HEIGHT", "CAP_HEIGHT"]), "textTrim lineHeight keeps builder4's rule: every fixed box with a line height off the natural one", JSON.stringify(trims(El, cl)));
 }
 
 // ============================================================================================
@@ -1078,6 +1129,91 @@ check(DOUBLE_FEATURES.layout === true && DOUBLE_FEATURES.text === true, "the dou
     const radii = (sent || { vertices: [] }).vertices.map((v) => v.cornerRadius);
     check(same(radii, [0, 0, 3, 3]) && R.detail.vertexRadiusFromNode === 1, "vectors: a vertex's own radius of 0 stays 0 under the node's radius; the others take the node's",
       JSON.stringify([radii, R.detail.vertexRadiusFromNode]));
+  }
+}
+
+// ============================================================================================
+// 15. the first render audit (2026-10-07, docs/M1.md §15.15): the reader's turned LINEs
+// ============================================================================================
+{
+  // The reader now writes a LINE Pixso draws along its height as a LINE turned onto that segment, its
+  // width the length: a vertical one (0.001 x 80 -> 80 long, a quarter turn) and a diagonal one ABSOLUTE
+  // in a horizontal flow, as U's are (600 x 32 here -> 600.85 long, the matrix at the IR's four
+  // decimals). The builder writes both as any turned node: the same matrix and length back, no pin out
+  // of a flow (the diagonal one is ABSOLUTE already), and the judge finds nothing off.
+  const line = (i, parent, box, p) => rec(i, parent, "LINE", box, painted(Object.assign({ strokes: [SOLID(0.27, 0.33, 0.44)], strokeAlign: "CENTER" }, p || {})));
+  const DIAG = [0.9986, -0.0533, 0, 0.0533, 0.9986, 35.5];
+  const nodes = [frame(0, -1, [T6(0, 0), 1200, 200], { clipsContent: false }),
+    line(1, 0, [ROT90(40, 20), 80, 0]),
+    component(2, 0, [T6(60, 0), 600, 36], { layoutMode: "HORIZONTAL", clipsContent: false }),
+    rect(3, 2, [T6(0, 0), 40, 36], { fills: [SOLID(1, 1, 1)] }),
+    line(4, 2, [DIAG, 600.85, 0], { layoutPositioning: "ABSOLUTE", strokeAlign: "OUTSIDE" })];
+  const task = mkTask({ nodes });
+  valid("turned LINEs", task);
+  const E = env();
+  const { R, ctx } = await build(E, task);
+  const vt = Object.assign({}, task, { op: "verify" });
+  const V = await E.IR.ops.verify(E.IR.makeCtx(E.figma, vt, { id: "v" }), vt);
+  const values = []; for (const k of Object.keys(task.values)) values[Number(k)] = task.values[k];
+  const ir = { nodes: task.nodes.map((t) => ({ parent: t.parent, guid: t.guid, type: t.type, name: t.name, props: t.props })), values, notes: [] };
+  const J = judgeTask({ ir, task, build: R, verify: JSON.parse(JSON.stringify(V)) });
+  const v = nodeOf(E, ctx, 1), d = nodeOf(E, ctx, 4);
+  check(R.failures.length === 0 && v.type === "LINE" && near(v.width, 80, 1e-6) && v.height === 0 && sameM(flat(v.relativeTransform), ROT90(40, 20)) &&
+    d.type === "LINE" && near(d.width, 600.85, 1e-6) && d.height === 0 && sameM(flat(d.relativeTransform), DIAG) && d.layoutPositioning === "ABSOLUTE" &&
+    R.counters.rotPinned === 0 && J.count.ok && J.geometry.visibleOver05 === 0 && J.geometry.sizeVisibleOver05 === 0,
+    "lines: a LINE turned onto its segment (a quarter turn; a diagonal ABSOLUTE in a flow) is built with the IR's matrix and length, and judged in place",
+    JSON.stringify([R.failures, v.width, v.relativeTransform, d.width, d.relativeTransform, d.layoutPositioning, R.counters.rotPinned, J.geometry.worst]));
+}
+{
+  // A turned LINE that is an AUTO child of a flow (none in the data: stats.lines.inFlow, 0 in U and O):
+  // a vertical divider stored Pixso's way, 0.001 x 24, between two cards in a row with 8 px gaps. Figma
+  // drops a flow child's turn, and a LINE has no quarter-turn bake (bakesQuarterTurn: RECTANGLE,
+  // ELLIPSE and FRAME only), so the builder takes it out of the flow with its turn (rotPinned 1), and
+  // the card after it, which the flow would move into the LINE's slot, leaves the flow too to keep its
+  // place (flowAbsolute 1); the card before it stays in the flow.
+  const line = (i, parent, box, p) => rec(i, parent, "LINE", box, painted(Object.assign({ strokes: [SOLID(0.27, 0.33, 0.44)], strokeAlign: "CENTER" }, p || {})));
+  const nodes = [frame(0, -1, [T6(0, 0), 200, 24], { layoutMode: "HORIZONTAL", primaryAxisSizingMode: "FIXED", counterAxisSizingMode: "FIXED", itemSpacing: 8 }),
+    rect(1, 0, [T6(0, 0), 40, 24], { fills: [SOLID(1, 1, 1)] }), line(2, 0, [ROT90(48, 0), 24, 0]), rect(3, 0, [T6(56, 0), 40, 24], { fills: [SOLID(1, 1, 1)] })];
+  const task = mkTask({ nodes });
+  valid("a turned LINE in a flow", task);
+  const E = env();
+  const { R, ctx } = await build(E, task);
+  const vt = Object.assign({}, task, { op: "verify" });
+  const V = await E.IR.ops.verify(E.IR.makeCtx(E.figma, vt, { id: "v" }), vt);
+  const values = []; for (const k of Object.keys(task.values)) values[Number(k)] = task.values[k];
+  const ir = { nodes: task.nodes.map((t) => ({ parent: t.parent, guid: t.guid, type: t.type, name: t.name, props: t.props })), values, notes: [] };
+  const J = judgeTask({ ir, task, build: R, verify: JSON.parse(JSON.stringify(V)) });
+  const l = nodeOf(E, ctx, 2), c = nodeOf(E, ctx, 3);
+  check(R.failures.length === 0 && R.counters.rotPinned === 1 && R.counters.flowAbsolute === 1 && !R.detail.quarterTurnsBaked && l.layoutPositioning === "ABSOLUTE" &&
+    near(l.width, 24, 1e-6) && sameM(flat(l.relativeTransform), ROT90(48, 0)) && sameM(flat(c.relativeTransform), T6(56, 0)) &&
+    c.layoutPositioning === "ABSOLUTE" && nodeOf(E, ctx, 1).layoutPositioning !== "ABSOLUTE" && J.count.ok && J.geometry.visibleOver05 === 0,
+    "lines: a turned LINE in a flow leaves it with its turn (rotPinned 1, no bake), and the card after it leaves too to keep its place (flowAbsolute 1)",
+    JSON.stringify([R.failures, R.counters.rotPinned, R.counters.flowAbsolute, R.detail.quarterTurnsBaked, l.layoutPositioning, l.width, l.relativeTransform, c.relativeTransform, c.layoutPositioning, J.count.ok, J.geometry.visibleOver05, J.geometry.worst]));
+}
+
+// ============================================================================================
+// 16. layer names (docs/M1.md §15.16): an empty-named text is left to Figma's autoRename
+// ============================================================================================
+{
+  // Pixso shows a TEXT whose name is empty under its characters (measured live on U, 2026-10-06). The
+  // double follows the Plugin API: a text's name follows its characters until the name is written.
+  const unnamed = (n) => Object.assign(n, { name: "" });
+  const nodes = () => [frame(0, -1, [T6(0, 0), 200, 100]),
+    unnamed(text(1, 0, [T6(0, 0), 80, 14], "Hello world", { fills: [SOLID(0, 0, 0)] })),
+    text(2, 0, [T6(0, 20), 80, 14], "Hello", { fills: [SOLID(0, 0, 0)] }),
+    unnamed(text(3, 0, [T6(0, 40), 80, 14], "", { fills: [SOLID(0, 0, 0)] })),
+    Object.assign(instance(4, 0, [T6(0, 60), 30, 30]), { name: "Button" })];
+  for (const names of ["display", "stored"]) {
+    const task = mkTask({ nodes: nodes(), settings: { names } });
+    if (!valid("names " + names, task)) continue;
+    const E = env();
+    const { R, ctx } = await build(E, task);
+    const got = [1, 2, 3, 4].map((k) => nodeOf(E, ctx, k).name);
+    const wrote = [1, 2, 3, 4].map((k) => writesOf(E, ctx.S.nodes[String(k)]).some((w) => w.prop === "name"));
+    const want = names === "display" ? ["Hello world", "T2", "", "Button"] : ["", "T2", "", "Button"];
+    check(R.failures.length === 0 && same(got, want) && same(wrote, [names !== "display", true, true, true]),
+      "names " + names + ": " + (names === "display" ? "an empty-named text is left unnamed and takes its characters (Figma's autoRename); one with no characters, a named text and an instance are named"
+        : "every record is named as stored, an empty-named text included"), JSON.stringify([got, wrote, R.failures]));
   }
 }
 
