@@ -366,7 +366,7 @@ export function loadExpect(file) {
 // The reader settings an IR's header records, as pixToIR takes them.
 export function readerSettingsOf(header) {
   const hs = header.settings || {};
-  const s = { booleans: hs.booleans, spaceEvenlySingle: hs.spaceEvenlySingle, textFit: hs.textFit, mode: hs.mode,
+  const s = { booleans: hs.booleans, spaceEvenlySingle: hs.spaceEvenlySingle, textFit: hs.textFit, mode: hs.mode, names: headerSetting(header, "names"),
     scope: header.scope && header.scope.kind === "pages" ? "pages:" + header.scope.ids.join(",") : "file" };
   for (const k of M2A_SETTINGS.concat(AUDIT_READER_SETTINGS)) s[k] = headerSetting(header, k);
   return s;

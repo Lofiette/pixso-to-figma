@@ -13,12 +13,14 @@
 //     [--rejected-props copy|none] [--default-assignments keep|drop] [--override-merge last|first|outer]
 //     [--echo drop|keep] [--instance-own overrides|own] [--derived-geometry changed|all|none]
 //     [--line-direction stored|size|flat] [--dash-no-gap solid|keep]
+//     [--names display|stored]
 //
 // The thirteen M2a flags (docs/M2A.md §3) are the component reader's settings: each goes to the reader,
 // into the IR header, and into the run folder's settings hash, so a run under IR version 3 never
 // resumes a folder of version 2. A folder whose states.json records another IR version is refused,
 // naming the commit that can resume it (M1_COMMIT in tools/m2a-accept.mjs). The two flags after them are
 // reader settings the first render audit added (docs/M1.md §15.15), carried the same way.
+// --names (docs/M1.md §15.16) is a reader setting as well, and the builder's for an empty-named text.
 //
 // Every policy is a setting with the default of docs/M1.md §3 (SETTINGS below). --dry reads, plans,
 // runs the image chain's offline link and prints the preflight and the balance, without Figma.
@@ -64,6 +66,7 @@ export const SETTINGS = {
   "--layout-order": ["layoutOrder", TASK_SETTINGS.layoutOrder, "deepestFirst"],   // P5, 2026-10-05
   "--text-read": ["textRead", TASK_SETTINGS.textRead, "measure"],
   "--text-trim": ["textTrim", TASK_SETTINGS.textTrim, "source"],   // docs/M1.md §15.14, 2026-10-07
+  "--names": ["names", IR_SETTINGS.names, SETTING_DEFAULTS.names],   // Pixso's names, measured live on U, 2026-10-06
   "--images": ["images", (v) => parseLinks(v).join(","), LINKS.join(",")],
   "--missing-fonts": ["missingFonts", ["ask", "substitute"], "ask"],
   "--fallback-font": ["fallbackFont", (v) => { const m = /^([^/]+)\/(.+)$/.exec(v); if (!m) throw new RangeError("--fallback-font is Family/Style"); return m[1] + "/" + m[2]; }, "Inter/Regular"],
@@ -113,12 +116,13 @@ export function parseArgs(argv) {
 // The reader's settings an IR was read with (its header), which --from-ir must keep: the planner
 // and the run folder describe the IR, not the command line's defaults. A flag given that
 // contradicts one is refused; one not given takes the header's value. Returns the refusal, or null.
-export const READER_FLAGS = { booleans: "--booleans", spaceEvenlySingle: "--space-evenly-single", textFit: "--text-fit", scope: "--scope" };
+export const READER_FLAGS = { booleans: "--booleans", spaceEvenlySingle: "--space-evenly-single", textFit: "--text-fit", scope: "--scope", names: "--names" };
 for (const k of READ_SETTINGS) READER_FLAGS[k] = SETTING_FLAGS[k];
 export function adoptIrSettings(o, header) {
   const hs = (header && header.settings) || {};
   const sc = header && header.scope;
-  const fromHeader = { booleans: hs.booleans, spaceEvenlySingle: hs.spaceEvenlySingle, textFit: hs.textFit,
+  // An IR read before --names existed carries stored names (schema.LATER_SETTINGS).
+  const fromHeader = { booleans: hs.booleans, spaceEvenlySingle: hs.spaceEvenlySingle, textFit: hs.textFit, names: header ? headerSetting(header, "names") : undefined,
     scope: sc && sc.kind === "pages" && Array.isArray(sc.ids) ? "pages:" + sc.ids.join(",") : sc && sc.kind === "file" ? "file" : undefined };
   // An IR read before the render audit's two settings existed was read with their LATER_SETTINGS values.
   for (const k of READ_SETTINGS) fromHeader[k] = header ? headerSetting(header, k) : undefined;
@@ -134,7 +138,7 @@ export function adoptIrSettings(o, header) {
 // The reader's settings of a parsed command line, as pixToIR takes them (mode is recorded only, and
 // pix-run reads every file in the reader's default mode).
 export function readerSettingsOf(o) {
-  const s = { booleans: o.booleans, spaceEvenlySingle: o.spaceEvenlySingle, textFit: o.textFit, scope: o.scope };
+  const s = { booleans: o.booleans, spaceEvenlySingle: o.spaceEvenlySingle, textFit: o.textFit, scope: o.scope, names: o.names };
   for (const k of READ_SETTINGS) s[k] = o[k];
   return s;
 }
@@ -146,7 +150,7 @@ export function runSettings(o) {
   const s = { source: o.source, scope: o.scope, m1Scope: o.m1Scope, booleans: o.booleans, spaceEvenlySingle: o.spaceEvenlySingle, textFit: o.textFit,
     layoutOrder: o.layoutOrder, textRead: o.textRead, textTrim: o.textTrim, images: o.images, noPixso: o.noPixso, missingFonts: o.missingFonts,
     fallbackFont: { family, style }, maxTaskMb: o.maxTaskMb, livenessWarnS: o.livenessWarnS, livenessFailS: o.livenessFailS,
-    ceilingMsPerNode: o.ceilingMsPerNode };
+    ceilingMsPerNode: o.ceilingMsPerNode, names: o.names };
   for (const k of READ_SETTINGS) s[k] = o[k];
   return s;
 }
@@ -262,7 +266,7 @@ export async function main(argv) {
   let verdicts = null;
   try { verdicts = JSON.parse(readFileSync(join(HERE, "double", "verdicts.json"), "utf8")); } catch (e) { say("note: tools/double/verdicts.json not readable; every probe pending"); }
   const planOpts = { m1Scope: o.m1Scope, settings: { textFit: o.textFit, layoutOrder: o.layoutOrder, textRead: o.textRead, textTrim: o.textTrim, fallbackFont: settings.fallbackFont,
-    maxTaskMb: o.maxTaskMb, ceilingMsPerNode: o.ceilingMsPerNode, scope: o.scope } };
+    names: o.names, maxTaskMb: o.maxTaskMb, ceilingMsPerNode: o.ceilingMsPerNode, scope: o.scope } };
   let plan;
   try { plan = planM1(ir, stats, Object.assign({}, planOpts, { images: tableFromIR(ir) })); }
   catch (e) { say("pix-run: planning failed: " + e.message); return 1; }

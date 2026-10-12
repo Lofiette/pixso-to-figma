@@ -142,7 +142,7 @@ it, and records the outcome in its own state (`docs/M1.md` D9, SOURCE_IDENTITY_M
 
 **`settings`.** Every policy in REWRITE.md §11, plus the mode; all keys are required, except the later ones
 (`LATER_SETTINGS`): `lineDirection` and `dashNoGap`, which an IR read before them (2026-10-07) lacks and was read as
-`flat` and `keep`.
+`flat` and `keep`, and `names`, which an IR read before it existed (2026-10-07) lacks and was read as `stored`.
 
 | key | values | flag | owner's default |
 |---|---|---|---|
@@ -170,6 +170,7 @@ it, and records the outcome in its own state (`docs/M1.md` D9, SOURCE_IDENTITY_M
 | `derivedGeometry` | `changed`, `all`, `none` | `--derived-geometry` | `changed` (D10) |
 | `lineDirection` | `stored`, `size`, `flat` | `--line-direction` | `stored`: a LINE whose size has a height runs as its own stored stroke area does, along (0,0)-(w,h) or along x (`docs/M1.md` §15.15) |
 | `dashNoGap` | `solid`, `keep` | `--dash-no-gap` | `solid`: a dash pattern with no gap is not written, as Pixso draws it solid (`docs/M1.md` §15.15) |
+| `names` | `display`, `stored` | `--names` | `display`, Pixso's names measured live on U (`docs/M1.md` §15.16); the builder reads it too |
 
 `SETTING_DEFAULTS` in the schema holds the defaults of this table, `M2A_SETTINGS` lists the thirteen keys version
 3 added (the D-numbers in those rows are `docs/M2A.md`'s), and `AUDIT_READER_SETTINGS` the two the first render
@@ -217,7 +218,7 @@ as plain strings).
 | `page` | top-level records only: index into `pages` |
 | `guid` | the source guid, unique in the IR |
 | `type` | one of `FRAME GROUP SECTION COMPONENT COMPONENT_SET INSTANCE RECTANGLE ELLIPSE POLYGON STAR LINE VECTOR BOOLEAN_OPERATION TEXT SLICE SLOT` |
-| `name` | the layer name |
+| `name` | the layer name: as Pixso shows it under `names` `display` (an `INSTANCE` stored as "Instance <n>" or with no name takes the name its root override entry carries, else its master's or its state group's), as stored under `stored`; an empty `TEXT` name stays empty either way (`docs/M1.md` §15.16). A root entry's own `name` compares with this one (§9, `docs/M2A.md` D8) |
 | `props` | Figma properties, plus the IR's own below |
 | `overrideKey` | the layer's guid in its library's own file (library copies only; capability `overrideKeys`) |
 | `instance` | `INSTANCE` records only, §9 |
@@ -666,7 +667,8 @@ one starting with its class. `tools/test-ir.mjs` validates this block.
       "variantSets": "parse", "variantGrammar": "names", "axisOrder": "vocabulary", "swapDangling": "skip",
       "swapReset": "on", "swapFallback": "derived", "swapDefault": "layer", "rejectedProps": "copy",
       "defaultAssignments": "keep", "overrideMerge": "last", "echo": "drop", "instanceOwn": "overrides",
-      "derivedGeometry": "changed", "lineDirection": "stored", "dashNoGap": "solid", "kitmaps": "default" }
+      "derivedGeometry": "changed", "lineDirection": "stored", "dashNoGap": "solid", "names": "display",
+      "kitmaps": "default" }
   },
   "pages": [
     { "guid": "0:1", "name": "Page 1", "internal": false, "background": 0 },

@@ -619,7 +619,7 @@ const widenScene = (by) => {
 // ============================================================================================
 const SNAP = schema.snapshotId({ source: { kind: "pix", sha256: "0".repeat(62) + "a1" } });
 const RUN = "00000000000000c3";
-const SETTINGS = { textFit: "widen", layoutOrder: "creation", textRead: "measure", textTrim: "source", fallbackFont: { family: "Inter", style: "Regular" } };
+const SETTINGS = { textFit: "widen", layoutOrder: "creation", textRead: "measure", textTrim: "source", fallbackFont: { family: "Inter", style: "Regular" }, names: "display" };
 const NS = "pix2fig";
 const stampRoot = (n, i, guid) => { n.setSharedPluginData(NS, "pxIdx", String(i)); n.setSharedPluginData(NS, "pxSnap", SNAP); n.setSharedPluginData(NS, "pxIr", String(schema.VERSION));
   n.setSharedPluginData(NS, "pxSrc", guid); n.setSharedPluginData(NS, "pxRun", RUN); };

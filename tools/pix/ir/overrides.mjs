@@ -486,8 +486,9 @@ function keptSwapGives(cx, X, guids, k, res, node, cur, dropped) {
   return null;
 }
 
-// D17: entries of one path, merged by --override-merge.
-function mergeEntries(list, rule) {
+// D17: entries of one path, merged by --override-merge (nodes.mjs recordName merges an instance's root
+// entries with it too, for the name Pixso shows).
+export function mergeEntries(list, rule) {
   const lvl = (e) => (isFin(e.overrideLevel) ? e.overrideLevel : 0);
   let order = list.map((e, k) => ({ e, k }));
   if (rule === "first") order = order.reverse();
@@ -745,14 +746,16 @@ export function instanceData(cx, n, i, master, indexOf) {
     return { written, composed: Cn };
   };
 
-  // Root box fields (D8): equal to the INSTANCE record's, an echo; different, the record wins.
+  // Root box fields (D8): equal to the INSTANCE record's, an echo; different, the record wins. The name
+  // compares with the record's (cx.nameAt), not the stored one: under --names display an instance stored
+  // as "Instance <n>" or with no name carries its root entry's name (docs/M1.md §15.16), an echo here.
   const parentI = parentOf(cx, n);
   let FI = null;
   const rootBox = (k, v) => {
     const tos = OVERRIDE_SOURCE_FIELDS[k].to;
     if (!FI) FI = lookOf(q, n, "INSTANCE", parentI);
     const Fk = k === "name" ? null : lookOf(q, Object.assign({}, n, { [k]: v }), "INSTANCE", parentI);
-    const equal = k === "name" ? v === n.name : tos.every((f) => canon(pv(Fk, f) === undefined ? null : pv(Fk, f)) === canon(pv(FI, f) === undefined ? null : pv(FI, f)));
+    const equal = k === "name" ? v === cx.nameAt(i) : tos.every((f) => canon(pv(Fk, f) === undefined ? null : pv(Fk, f)) === canon(pv(FI, f) === undefined ? null : pv(FI, f)));
     if (!equal) { SO.rootBox.differs++; drop("root-box", k); return; }
     SO.rootBox.echo++;
     L.translated++;

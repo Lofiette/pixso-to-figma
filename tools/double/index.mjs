@@ -55,7 +55,9 @@
 //     reads give figma.mixed where ranges differ; auto
 //     width and height from the width model; resize resetting textAutoResize as the UI does (an
 //     auto-width text resized in width becomes auto-height, any text resized in height becomes fixed;
-//     A until a live check);
+//     A until a live check); a text's name follows its characters until the name is written (the
+//     Plugin API's autoRename, docs/M1.md §15.16; the name is the characters as they are, A: how Figma
+//     names a text with line breaks is not measured);
 //   - vectors: a network's regions give fillGeometry (lines and cubics); per verdicts, the region-less
 //     cases, vertex radii and region fills, an open subpath in vectorPaths, and where the node's origin
 //     goes when the network's bounds do not start at (0, 0) (P19B offsetNetwork: recorded ok, Figma moves
@@ -266,7 +268,8 @@ export function makeDouble(opts = {}) {
     const td = TYPE_DEFAULTS[type] || {};
     const st = { id: id || "1:" + (++seq), type, name: type === "PAGE" ? "Page" : type, parent: null, removed: false,
       children: CONTAINERS.indexOf(type) >= 0 ? [] : null, rt: I(), w: td.size ? td.size[0] : 0, h: td.size ? td.size[1] : 0,
-      props: {}, pd: {}, spd: {}, network: null, paths: null, ranges: [], boolPaths: null, boolKey: null, fromPaths: false, proxy: null };
+      props: {}, pd: {}, spd: {}, network: null, paths: null, ranges: [], boolPaths: null, boolKey: null, fromPaths: false, proxy: null,
+      autoRename: type === "TEXT" };
     if (type !== "DOCUMENT" && type !== "PAGE") {
       Object.assign(st.props, clone(COMMON_DEFAULTS));
       for (const k of Object.keys(td)) if (k !== "size") st.props[k] = clone(td[k]);
@@ -600,7 +603,7 @@ export function makeDouble(opts = {}) {
     // A node-level write of a field sets it for every character: its ranges go.
     if (st.type === "TEXT" && Object.prototype.hasOwnProperty.call(RANGE_FIELD, prop)) st.ranges = st.ranges.filter((r) => r.name !== RANGE_FIELD[prop]);
     switch (prop) {
-      case "name": st.name = String(value); break;
+      case "name": st.name = String(value); st.autoRename = false; break;
       case "relativeTransform": {
         if (!Array.isArray(value) || value.length !== 2 || !value.every((r) => Array.isArray(r) && r.length === 3 && r.every((x) => typeof x === "number" && isFinite(x)))) throw new Error("double: relativeTransform is [[a, b, tx], [c, d, ty]]");
         // A child in an auto-layout flow keeps no rotation or mirror: Figma drops the linear part
@@ -646,6 +649,7 @@ export function makeDouble(opts = {}) {
         // assumed: A): a range that covered index 0 covers the whole new text, the rest go. A field
         // written at node level afterwards clears its ranges as usual (part F, review figma F5).
         P.characters = String(value);
+        if (st.autoRename) st.name = P.characters;
         const n = P.characters.length;
         st.ranges = n ? st.ranges.filter((r) => r.start === 0).map((r) => Object.assign({}, r, { end: n })) : [];
         break;

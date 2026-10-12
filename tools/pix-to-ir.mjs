@@ -2,7 +2,7 @@
 //
 //   node tools/pix-to-ir.mjs <file.pix> --out <ir.json> [--booleans auto|native|flatten]
 //        [--space-evenly-single between|center] [--text-fit widen|source-box] [--scope file|pages:<guid>,…]
-//        [--mode design|kit] [--stats-only]
+//        [--mode design|kit] [--names display|stored] [--stats-only]
 //        [--variant-sets parse|frames] [--variant-grammar names|vocabulary] [--axis-order vocabulary|names]
 //        [--swap-dangling skip|strict] [--swap-reset on|off] [--swap-fallback derived|off] [--swap-default layer|definition]
 //        [--rejected-props copy|none] [--default-assignments keep|drop] [--override-merge last|first|outer]
@@ -30,7 +30,7 @@ import { AUDIT_READER_SETTINGS, M2A_SETTINGS, SETTINGS, SETTING_FLAGS } from "./
 
 const LISTED = M2A_SETTINGS.concat(AUDIT_READER_SETTINGS);
 
-export const FLAGS = { "--booleans": "booleans", "--space-evenly-single": "spaceEvenlySingle", "--text-fit": "textFit", "--scope": "scope", "--mode": "mode" };
+export const FLAGS = { "--booleans": "booleans", "--space-evenly-single": "spaceEvenlySingle", "--text-fit": "textFit", "--scope": "scope", "--mode": "mode", "--names": "names" };
 for (const k of LISTED) FLAGS[SETTING_FLAGS[k]] = k;
 
 export function parseArgs(argv) {
@@ -55,7 +55,7 @@ export function parseArgs(argv) {
 }
 function usage(msg) {
   const e = new Error(msg + "\nusage: node tools/pix-to-ir.mjs <file.pix> --out <ir.json> [--booleans auto|native|flatten] " +
-    "[--space-evenly-single between|center] [--text-fit widen|source-box] [--scope file|pages:<guid>,…] [--mode design|kit] [--stats-only] " +
+    "[--space-evenly-single between|center] [--text-fit widen|source-box] [--scope file|pages:<guid>,…] [--mode design|kit] [--names display|stored] [--stats-only] " +
     LISTED.map((k) => "[" + SETTING_FLAGS[k] + " " + SETTINGS[k].join("|") + "]").join(" "));
   e.usage = true;
   return e;

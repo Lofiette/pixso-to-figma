@@ -34,7 +34,7 @@ const rejects = async (p) => { try { await p; return null; } catch (e) { return 
 // ============================================================================================
 const SNAP = schema.snapshotId({ source: { kind: "pix", sha256: "0".repeat(62) + "a1" } });
 const RUN = "0123456789abcdef", RUN2 = "fedcba9876543210";
-const SETTINGS = () => clone({ textFit: "widen", layoutOrder: "creation", textRead: "measure", textTrim: "source", fallbackFont: { family: "Inter", style: "Regular" } });
+const SETTINGS = () => clone({ textFit: "widen", layoutOrder: "creation", textRead: "measure", textTrim: "source", fallbackFont: { family: "Inter", style: "Regular" }, names: "display" });
 const T6 = (x, y) => [1, 0, x, 0, 1, y];
 const ROT90 = (x, y) => [0, -1, x, 1, 0, y];
 const SOLID = (r, g, b) => ({ type: "SOLID", visible: true, opacity: 1, blendMode: "NORMAL", color: { r, g, b } });
@@ -1189,6 +1189,32 @@ check(DOUBLE_FEATURES.layout === true && DOUBLE_FEATURES.text === true, "the dou
     c.layoutPositioning === "ABSOLUTE" && nodeOf(E, ctx, 1).layoutPositioning !== "ABSOLUTE" && J.count.ok && J.geometry.visibleOver05 === 0,
     "lines: a turned LINE in a flow leaves it with its turn (rotPinned 1, no bake), and the card after it leaves too to keep its place (flowAbsolute 1)",
     JSON.stringify([R.failures, R.counters.rotPinned, R.counters.flowAbsolute, R.detail.quarterTurnsBaked, l.layoutPositioning, l.width, l.relativeTransform, c.relativeTransform, c.layoutPositioning, J.count.ok, J.geometry.visibleOver05, J.geometry.worst]));
+}
+
+// ============================================================================================
+// 16. layer names (docs/M1.md §15.16): an empty-named text is left to Figma's autoRename
+// ============================================================================================
+{
+  // Pixso shows a TEXT whose name is empty under its characters (measured live on U, 2026-10-06). The
+  // double follows the Plugin API: a text's name follows its characters until the name is written.
+  const unnamed = (n) => Object.assign(n, { name: "" });
+  const nodes = () => [frame(0, -1, [T6(0, 0), 200, 100]),
+    unnamed(text(1, 0, [T6(0, 0), 80, 14], "Hello world", { fills: [SOLID(0, 0, 0)] })),
+    text(2, 0, [T6(0, 20), 80, 14], "Hello", { fills: [SOLID(0, 0, 0)] }),
+    unnamed(text(3, 0, [T6(0, 40), 80, 14], "", { fills: [SOLID(0, 0, 0)] })),
+    Object.assign(instance(4, 0, [T6(0, 60), 30, 30]), { name: "Button" })];
+  for (const names of ["display", "stored"]) {
+    const task = mkTask({ nodes: nodes(), settings: { names } });
+    if (!valid("names " + names, task)) continue;
+    const E = env();
+    const { R, ctx } = await build(E, task);
+    const got = [1, 2, 3, 4].map((k) => nodeOf(E, ctx, k).name);
+    const wrote = [1, 2, 3, 4].map((k) => writesOf(E, ctx.S.nodes[String(k)]).some((w) => w.prop === "name"));
+    const want = names === "display" ? ["Hello world", "T2", "", "Button"] : ["", "T2", "", "Button"];
+    check(R.failures.length === 0 && same(got, want) && same(wrote, [names !== "display", true, true, true]),
+      "names " + names + ": " + (names === "display" ? "an empty-named text is left unnamed and takes its characters (Figma's autoRename); one with no characters, a named text and an instance are named"
+        : "every record is named as stored, an empty-named text included"), JSON.stringify([got, wrote, R.failures]));
+  }
 }
 
 console.log("");

@@ -67,6 +67,10 @@ export const SETTINGS = {
   // docs/M1.md §15.15: the reader policies the first render audit added (AUDIT_READER_SETTINGS).
   lineDirection: ["stored", "size", "flat"],        // a LINE whose size has a height
   dashNoGap: ["solid", "keep"],                     // a dash pattern with no gap
+  // docs/M1.md §15.16: a layer's name as Pixso shows it (an instance named "Instance <n>" or with no name
+  // under its root entry's name, else its master's or its set's; an empty-named text left to Figma's
+  // autoRename), or as stored.
+  names: ["display", "stored"],
 };
 // The thirteen settings M2a adds (docs/M2A.md §3), in the order of that table.
 export const M2A_SETTINGS = ["variantSets", "variantGrammar", "axisOrder", "swapDangling", "swapReset", "swapFallback",
@@ -80,7 +84,8 @@ export const SETTING_FLAGS = { mode: "--mode", overrides: "--overrides", drift: 
   variantSets: "--variant-sets", variantGrammar: "--variant-grammar", axisOrder: "--axis-order", swapDangling: "--swap-dangling",
   swapReset: "--swap-reset", swapFallback: "--swap-fallback", swapDefault: "--swap-default", rejectedProps: "--rejected-props",
   defaultAssignments: "--default-assignments", overrideMerge: "--override-merge", echo: "--echo", instanceOwn: "--instance-own",
-  derivedGeometry: "--derived-geometry", lineDirection: "--line-direction", dashNoGap: "--dash-no-gap", kitmaps: "--kitmaps" };
+  derivedGeometry: "--derived-geometry", lineDirection: "--line-direction", dashNoGap: "--dash-no-gap", names: "--names",
+  kitmaps: "--kitmaps" };
 // The owner's default for each (docs/M1.md §3, docs/M2A.md §3, REWRITE.md §11). mode has none: it is
 // chosen per run. overrideMerge is "outer" from part C's measurement (docs/M2A.md D17: on P's six
 // conflicting texts derived data agrees with outer and first, never with last; outer equals last where
@@ -90,11 +95,12 @@ export const SETTING_DEFAULTS = { overrides: "fidelity", drift: "link", deleted:
   resync: "pixso-unless-edited", textFit: "widen", booleans: "auto", spaceEvenlySingle: "center",   // spaceEvenlySingle: P18, 2026-10-05
   variantSets: "parse", variantGrammar: "names", axisOrder: "vocabulary", swapDangling: "skip", swapReset: "on",
   swapFallback: "derived", swapDefault: "layer", rejectedProps: "copy", defaultAssignments: "keep", overrideMerge: "outer",
-  echo: "drop", instanceOwn: "overrides", derivedGeometry: "changed", lineDirection: "stored", dashNoGap: "solid", kitmaps: "default" };
-// Settings added to IR version 3 after IRs of it were written (docs/M1.md §15.15): an IR whose header
-// lacks one was read before it existed, with the value given here (LINEs flat, dash patterns as
-// stored), and stays valid. Every IR the reader writes now records them.
-export const LATER_SETTINGS = { lineDirection: "flat", dashNoGap: "keep" };
+  echo: "drop", instanceOwn: "overrides", derivedGeometry: "changed", lineDirection: "stored", dashNoGap: "solid", kitmaps: "default",
+  names: "display" };   // names: Pixso's names measured live on U, 2026-10-06 and -12 (docs/M1.md §15.16)
+// Settings added to IR version 3 after IRs of it were written (docs/M1.md §15.15, §15.16): an IR whose
+// header lacks one was read before it existed, with the value given here (LINEs flat, dash patterns as
+// stored, names as stored), and stays valid. Every IR the reader writes now records them.
+export const LATER_SETTINGS = { lineDirection: "flat", dashNoGap: "keep", names: "stored" };
 export function headerSetting(header, k) {
   const S = (header && header.settings) || {};
   return S[k] !== undefined ? S[k] : Object.prototype.hasOwnProperty.call(LATER_SETTINGS, k) ? LATER_SETTINGS[k] : undefined;

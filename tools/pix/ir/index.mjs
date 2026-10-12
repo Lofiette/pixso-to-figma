@@ -10,6 +10,9 @@
 //   scope               "file" | "pages:<guid>,<guid>…" (the chosen pages or top-level objects; every master
 //                       an instance in scope names is carried with its top-level object)
 //   mode                design | kit                  (recorded only; M1 reads both alike)
+//   names               display | stored              (docs/M1.md §15.16: an INSTANCE named "Instance <n>"
+//                       or with no name takes its root entry's name, else its set's or master's, as Pixso
+//                       shows it; stored keeps the name)
 //   the thirteen M2a settings (docs/M2A.md §3; schema.M2A_SETTINGS, each defaulting to SETTING_DEFAULTS):
 //   variantSets parse | frames, variantGrammar names | vocabulary, axisOrder vocabulary | names,
 //   swapDangling skip | strict, swapReset on | off, swapFallback derived | off, swapDefault layer | definition,
@@ -46,6 +49,12 @@
 //     cornerRadiusOnly, lostBorderSections, counterFillKeptFixed, thinStrokes, staleBooleans,
 //     lines: { alongSize, flat, noStoredArea, subPrecision, inFlow } and dashNoGap (tools/pix/ir/strokes.mjs),
 //     styles: { fill | stroke | effect: { same, styleWins, missing, noValue } } (tools/pix/ir/styles.mjs),
+//     names: { auto, unnamed: { n, toRoot, toSet, toMaster, rootDiffers }, namedRootDiffers, emptyTexts }
+//       (nodes.mjs recordName, counted under either --names): the INSTANCE records stored as "Instance <n>"
+//       and those with no stored name, by the name Pixso shows them under (their root entry's, else their
+//       state group's or master's; the rest keep the stored one), rootDiffers those whose root entry names
+//       them otherwise than the group or master; the named INSTANCE records whose root entry names them
+//       otherwise (they keep the stored name); the TEXT records named "",
 //     m2a: newM2aStats() below, filled by parts A-C (docs/M2A.md §6) }
 //   ms also holds m2a: { families, props, resolve, instances }, the M2a phases inside ms.ir.
 // The balance of docs/M1.md §8.2: stored = records + notCarried (every term), checked here.
@@ -66,13 +75,13 @@ import { makeResolver } from "./resolve.mjs";
 import { instanceData } from "./overrides.mjs";
 import { staleBooleans } from "../../ir/operands.mjs";
 
-export const READER_SETTINGS = ["booleans", "spaceEvenlySingle", "textFit", "scope", "mode"].concat(M2A_SETTINGS, AUDIT_READER_SETTINGS);
+export const READER_SETTINGS = ["booleans", "spaceEvenlySingle", "textFit", "scope", "mode", "names"].concat(M2A_SETTINGS, AUDIT_READER_SETTINGS);
 
 export function readerSettings(given) {
   const m2a = {};
   for (const k of M2A_SETTINGS.concat(AUDIT_READER_SETTINGS)) m2a[k] = SETTING_DEFAULTS[k];
   const s = Object.assign({ booleans: SETTING_DEFAULTS.booleans, spaceEvenlySingle: SETTING_DEFAULTS.spaceEvenlySingle,
-    textFit: SETTING_DEFAULTS.textFit, scope: "file", mode: "design" }, m2a, given || {});
+    textFit: SETTING_DEFAULTS.textFit, scope: "file", mode: "design", names: SETTING_DEFAULTS.names }, m2a, given || {});
   for (const k of Object.keys(s)) {
     if (READER_SETTINGS.indexOf(k) < 0) throw new Error("pixToIR: unknown setting " + JSON.stringify(k) + "; one of " + READER_SETTINGS.join(", "));
     if (k === "scope") {
@@ -83,6 +92,7 @@ export function readerSettings(given) {
 }
 
 const style0 = () => ({ same: 0, styleWins: 0, missing: 0, noValue: 0 });
+const names0 = () => ({ n: 0, toRoot: 0, toSet: 0, toMaster: 0, rootDiffers: 0 });
 const zeros = (list) => list.reduce((o, k) => { o[k] = 0; return o; }, {});
 
 // stats.m2a: the counters parts A, B and C fill on cx.m2a (docs/M2A.md §6 A-C), frozen in shape here by
@@ -127,6 +137,7 @@ function newStats() {
     spaceEvenly: { between: 0, single: 0 }, strokeAlignDecided: {}, cornerRadiusOnly: {}, lostBorderSections: 0, counterFillKeptFixed: 0, thinStrokes: 0, staleBooleans: 0,
     lines: { alongSize: 0, flat: 0, noStoredArea: 0, subPrecision: 0, inFlow: 0 }, dashNoGap: 0,
     styles: { fill: style0(), stroke: style0(), effect: style0() },
+    names: { auto: names0(), unnamed: names0(), namedRootDiffers: 0, emptyTexts: 0 },
     m2a: newM2aStats(),
   };
 }
@@ -296,6 +307,8 @@ export function pixToIR(buffer, opts) {
   // on the internal canvas and are emitted after the user pages. Notes carry an explicit node and path.
   const indexOfGuid = new Map(out.records.map((r, i) => [r.guid, i]));
   cx.indexOf = (g) => indexOfGuid.get(g);
+  // A root entry's name compares with the record's (D8), which --names may have changed (nodes.mjs recordName).
+  cx.nameAt = (i) => out.records[i].name;
   phase("instances", () => {
     out.records.forEach((r, i) => {
       if (r.type !== "INSTANCE") return;

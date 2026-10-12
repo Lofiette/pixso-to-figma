@@ -23,7 +23,8 @@
 //   { format: "pix2fig.task", version: 1, op: "fonts"|"build"|"verify"|"clean",
 //     runId: 16 lowercase hex, taskNo: 1.., of: taskNo.., snapshot: snapshotId(IR header), irVersion: 3,
 //     settings: { textFit: "widen"|"source-box", layoutOrder: "creation"|"deepestFirst",
-//                 textRead: "measure"|"inLoop", textTrim: "source"|"lineHeight"|"none", fallbackFont: { family, style } },
+//                 textRead: "measure"|"inLoop", textTrim: "source"|"lineHeight"|"none", fallbackFont: { family, style },
+//                 names: "display"|"stored" },
 //     page: { index: IR page index | null, guid: page guid | "m1-service", name, service: bool,
 //             background: values key | null } | null,
 //     roots: [{ i, attachTo: "page" | { i, guid }, place: [x, y] | null }],
@@ -90,14 +91,16 @@ export const BUILT_TYPE = Object.freeze({ FRAME: "FRAME", GROUP: "FRAME", SECTIO
 export function taskType(irType) {
   return irType === "COMPONENT_SET" ? "FRAME" : irType;
 }
-// The builder's settings (docs/M1.md §3, D11); textFit's values are the IR's (schema.SETTINGS.textFit).
+// The builder's settings (docs/M1.md §3, D11); textFit's and names' values are the IR's (schema.SETTINGS),
+// and the planner takes both from the IR header. Under names display the builder leaves a TEXT whose
+// name is empty to Figma's autoRename (docs/M1.md §15.16).
 // textTrim (docs/M1.md §15.14): which texts the textLine pass trims to the cap height: "source", a
 // TOP-aligned one where the IR's firstLineShift says Pixso drew the first line above its half-leading
 // place (none in the six measured files; the source's own trims are written at creation); "lineHeight",
 // every text whose line height is 1 px or more off the font's natural one (builder4's rule); "none".
 export const TASK_SETTINGS = { layoutOrder: ["creation", "deepestFirst"], textRead: ["measure", "inLoop"], textTrim: ["source", "lineHeight", "none"] };
 export const TASK_SETTING_DEFAULTS = { textFit: "widen", layoutOrder: "deepestFirst", textRead: "measure", textTrim: "source",
-  fallbackFont: { family: "Inter", style: "Regular" } };
+  fallbackFont: { family: "Inter", style: "Regular" }, names: "display" };
 export const IMAGE_SOURCES = ["archive", "mcp", "render", "none"];
 // The build op's phase table (docs/M1.md §6 B), in order. ctx.phase is called with these names, the
 // build report's ms has one entry per phase that ran, and gate G12 reads them. The write-only phases
@@ -169,8 +172,8 @@ export function validateTask(task, deps) {
   const st = task.settings;
   if (!isObj(st)) err("settings", "missing; the builder's settings travel with every task");
   else {
-    closed(st, ["textFit", "layoutOrder", "textRead", "textTrim", "fallbackFont"], "settings");
-    if (S.SETTINGS.textFit.indexOf(st.textFit) < 0) err("settings.textFit", "must be one of " + S.SETTINGS.textFit.join(", ") + "; got " + show(st.textFit));
+    closed(st, ["textFit", "layoutOrder", "textRead", "textTrim", "fallbackFont", "names"], "settings");
+    for (const k of ["textFit", "names"]) if (S.SETTINGS[k].indexOf(st[k]) < 0) err("settings." + k, "must be one of " + S.SETTINGS[k].join(", ") + "; got " + show(st[k]));
     for (const k of Object.keys(TASK_SETTINGS)) if (TASK_SETTINGS[k].indexOf(st[k]) < 0) err("settings." + k, "must be one of " + TASK_SETTINGS[k].join(", ") + "; got " + show(st[k]));
     const f = st.fallbackFont;
     if (!isObj(f) || !isStr(f.family) || !f.family || !isStr(f.style) || !f.style || Object.keys(f).length !== 2) err("settings.fallbackFont", "a font {family, style}; got " + show(f));

@@ -344,6 +344,10 @@ function rect(f, parent, w, h, opts) {
   await D1.figma.loadFontAsync({ family: "Inter", style: "Regular" });
   const t1 = D1.figma.createText(); t1.fontSize = 16; t1.characters = "Hello world"; t1.resize(pix.width, t1.height);
   check(near(t1.height, 19.2), "with textRatio 1 the same text stays on one line", t1.height);
+  // autoRename (docs/M1.md §15.16): a text's name follows its characters until the name is written.
+  const n1 = D1.figma.createText(); n1.characters = "First"; const follows = n1.name; n1.characters = "Second"; const again = n1.name;
+  n1.name = "Mine"; n1.characters = "Third";
+  check(follows === "First" && again === "Second" && n1.name === "Mine", "a text's name follows its characters until the name is written (autoRename)", JSON.stringify([follows, again, n1.name]));
   // Reset semantics (A until a live check): an auto-width text given another width becomes auto-height,
   // any auto text given another height becomes fixed; a fixed one stays fixed.
   const r = f.createText(); r.characters = "abc";

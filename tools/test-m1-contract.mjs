@@ -44,7 +44,7 @@ const SNAP = schema.snapshotId({ source: { kind: "pix", sha256: SHA } });
 const IMG = sha1("pxf synthetic image for the task contract");
 const T6 = (x, y) => [1, 0, x, 0, 1, y];
 const painted = { fills: 0, strokes: 1, strokeWeight: 1, strokeAlign: "INSIDE", blendMode: "PASS_THROUGH" };
-const SETTINGS = { textFit: "widen", layoutOrder: "creation", textRead: "measure", textTrim: "source", fallbackFont: { family: "Inter", style: "Regular" } };
+const SETTINGS = { textFit: "widen", layoutOrder: "creation", textRead: "measure", textTrim: "source", fallbackFont: { family: "Inter", style: "Regular" }, names: "display" };
 const buildTask = () => ({
   format: "pix2fig.task", version: 1, op: "build", runId: "0123456789abcdef", taskNo: 1, of: 2, snapshot: SNAP, irVersion: schema.VERSION,
   settings: JSON.parse(JSON.stringify(SETTINGS)),
