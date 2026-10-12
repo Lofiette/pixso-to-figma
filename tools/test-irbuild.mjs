@@ -685,27 +685,30 @@ const mixedNodes = () => [
     scratch && E.D.node(scratch.id) === null, "textTrim lineHeight trims a line height off the natural one, leaves a natural one, and removes its stamped scratch node", JSON.stringify(R.counters));
 }
 {
-  // docs/M1.md §15.14 (C01, C02): under textTrim source (the default) only a text whose stored first
-  // line sits 1 px or more above its half-leading place is trimmed; under none, nothing is.
+  // docs/M1.md §15.14 (C01, C02): under textTrim source (the default) only a TOP-aligned text whose
+  // stored first line sits 1 px or more above its half-leading place is trimmed (in a CENTER or BOTTOM
+  // box the trim would move it down, or not at all); under none, nothing is.
   const nodes = [frame(0, -1, [T6(0, 0), 300, 200]),
     text(1, 0, [T6(10, 10), 100, 40], "At half-leading", { lineHeight: { unit: "PIXELS", value: 40 } }),
     text(2, 0, [T6(10, 60), 100, 9], "Cap height", { lineHeight: { unit: "PIXELS", value: 40 }, firstLineShift: -2 }),
-    text(3, 0, [T6(10, 80), 100, 40], "Lower", { lineHeight: { unit: "PIXELS", value: 40 }, firstLineShift: 1.5 })];
-  const trims = (E, ctx) => [1, 2, 3].map((i) => E.D.node(ctx.S.nodes[String(i)]).leadingTrim);
+    text(3, 0, [T6(10, 80), 100, 40], "Lower", { lineHeight: { unit: "PIXELS", value: 40 }, firstLineShift: 1.5 }),
+    text(4, 0, [T6(10, 130), 100, 40], "Centred", { lineHeight: { unit: "PIXELS", value: 40 }, firstLineShift: -2, textAlignVertical: "CENTER" })];
+  const trims = (E, ctx) => [1, 2, 3, 4].map((i) => E.D.node(ctx.S.nodes[String(i)]).leadingTrim);
   const src = mkTask({ nodes });
   valid("textTrim source", src);
   const E = env();
   const { R, ctx } = await build(E, src);
-  check(src.settings.textTrim === "source" && same(trims(E, ctx), ["NONE", "CAP_HEIGHT", "NONE"]) && R.counters.textTrimmed === 1 && R.detail.textTrimHalfLeading === 2,
-    "textTrim source trims only the text whose stored first line sits above half-leading (firstLineShift -2), not one at it or below it",
-    JSON.stringify([trims(E, ctx), R.counters.textTrimmed, R.detail.textTrimHalfLeading]));
+  check(src.settings.textTrim === "source" && same(trims(E, ctx), ["NONE", "CAP_HEIGHT", "NONE", "NONE"]) && R.counters.textTrimmed === 1 &&
+    R.detail.textTrimHalfLeading === 2 && R.detail.textTrimNotTop === 1,
+    "textTrim source trims only the TOP text whose stored first line sits above half-leading (firstLineShift -2), not one at it or below it, nor a CENTER one above it",
+    JSON.stringify([trims(E, ctx), R.counters.textTrimmed, R.detail.textTrimHalfLeading, R.detail.textTrimNotTop]));
   const En = env();
   const { R: Rn, ctx: cn } = await build(En, mkTask({ nodes, settings: { textTrim: "none" } }));
   const probes = En.D.writes.filter((w) => w.prop === "setSharedPluginData()" && w.value[1] === "pxScratch" && w.phase === "textLine");
-  check(same(trims(En, cn), ["NONE", "NONE", "NONE"]) && Rn.counters.textTrimmed === 0 && !probes.length, "textTrim none trims nothing and makes no probe", JSON.stringify(trims(En, cn)));
+  check(same(trims(En, cn), ["NONE", "NONE", "NONE", "NONE"]) && Rn.counters.textTrimmed === 0 && !probes.length, "textTrim none trims nothing and makes no probe", JSON.stringify(trims(En, cn)));
   const El = env();
   const { ctx: cl } = await build(El, mkTask({ nodes, settings: { textTrim: "lineHeight" } }));
-  check(same(trims(El, cl), ["CAP_HEIGHT", "CAP_HEIGHT", "CAP_HEIGHT"]), "textTrim lineHeight keeps builder4's rule: every fixed box with a line height off the natural one", JSON.stringify(trims(El, cl)));
+  check(same(trims(El, cl), ["CAP_HEIGHT", "CAP_HEIGHT", "CAP_HEIGHT", "CAP_HEIGHT"]), "textTrim lineHeight keeps builder4's rule: every fixed box with a line height off the natural one", JSON.stringify(trims(El, cl)));
 }
 
 // ============================================================================================

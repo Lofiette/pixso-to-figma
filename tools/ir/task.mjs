@@ -91,8 +91,9 @@ export function taskType(irType) {
   return irType === "COMPONENT_SET" ? "FRAME" : irType;
 }
 // The builder's settings (docs/M1.md §3, D11); textFit's values are the IR's (schema.SETTINGS.textFit).
-// textTrim (docs/M1.md §15.14): which texts the textLine pass trims to the cap height: "source", where
-// the IR's firstLineShift says Pixso drew the first line above its half-leading place; "lineHeight",
+// textTrim (docs/M1.md §15.14): which texts the textLine pass trims to the cap height: "source", a
+// TOP-aligned one where the IR's firstLineShift says Pixso drew the first line above its half-leading
+// place (none in the six measured files; the source's own trims are written at creation); "lineHeight",
 // every text whose line height is 1 px or more off the font's natural one (builder4's rule); "none".
 export const TASK_SETTINGS = { layoutOrder: ["creation", "deepestFirst"], textRead: ["measure", "inLoop"], textTrim: ["source", "lineHeight", "none"] };
 export const TASK_SETTING_DEFAULTS = { textFit: "widen", layoutOrder: "deepestFirst", textRead: "measure", textTrim: "source",

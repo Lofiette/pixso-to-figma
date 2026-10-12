@@ -468,18 +468,23 @@ B.flowGroupPass = async function (st) {
 // ---------- textLine (builder4.js:591-671) ----------
 // leadingTrim CAP_HEIGHT on a text whose line height differs from the font's natural one by 1 px or
 // more, taken back wherever it moves the node. Which texts, task.settings.textTrim says:
-//   "source" (default)  only where the IR's firstLineShift says Pixso drew the first baseline 1 px or
-//                       more above its half-leading place (tools/pix/ir/text.mjs);
+//   "source" (default)  only a TOP-aligned text whose IR firstLineShift says Pixso drew the first
+//                       baseline 1 px or more above its half-leading place (tools/pix/ir/text.mjs);
 //   "lineHeight"        every such text (builder4's rule);
 //   "none"              none.
 // builder4's premise, that Pixso and Figma put the first line of such a text in different places, does
 // not hold: both lay it out with half-leading (docs/M1.md §15.14). Measured on U, 2026-10-07: the stored
-// first baseline of 13 532 of the 13 539 texts it can be checked on is within half a pixel of the
-// half-leading place, and the other four local files have none above it. The guard cannot see a box
-// that does not move: under "lineHeight" the trim stayed on 838 fixed or pinned texts of U's run, which
-// put their glyphs 1 px low (CENTER) or 3 to 4 px high (TOP) in 57 audited roots, and half a pixel off
-// in 27 more. Under "source" 7 texts of U are trimmed, labels whose stored baseline sits 1.86 px higher.
-// The natural height is measured on one scratch text node, stamped pxScratch and removed after.
+// first baseline of all 13 532 texts it can be checked on is within half a pixel of the half-leading
+// place, and five more local files have none above it; the texts Pixso trims, its own or its text
+// style's leadingTrim, are written trimmed at creation (U 33). The guard cannot see a box that does not
+// move: under "lineHeight" the trim stayed on 838 fixed or pinned texts of U's run, which put their
+// glyphs 1 px low (CENTER) or 3 to 4 px high (TOP) in 57 audited roots, and half a pixel off in 27
+// more. Under "source" no text of the six files is trimmed here. Only in a TOP box does a cap-height
+// trim move the first baseline up (to the cap height, from (lineHeight - natural) / 2 + ascent): in a
+// BOTTOM box it moves it down by (lineHeight + natural) / 2 - ascent (Inter 12/13: 2.14 px), in a
+// CENTER one by cap / 2 + natural / 2 - ascent (Inter: about 0), so those are left untrimmed
+// (detail.textTrimNotTop). The natural height is measured on one scratch text node, stamped pxScratch
+// and removed after.
 B.textLinePass = async function (st) {
   var ctx = st.ctx, C = st.counters, D = st.detail, F = ctx.figma, probe = null, cache = {}, trimmed = [];
   var rule = st.settings.textTrim || PXF_TASK.TASK_SETTING_DEFAULTS.textTrim;
@@ -494,6 +499,7 @@ B.textLinePass = async function (st) {
     // The source says Pixso drew the first line where Figma draws it untrimmed (detail.textTrimHalfLeading).
     var shift = rec.props.firstLineShift;
     if (rule === "source" && !(typeof shift === "number" && shift <= -1)) { D.textTrimHalfLeading = (D.textTrimHalfLeading || 0) + 1; continue; }
+    if (rule === "source" && ctx.prop(rec, "textAlignVertical") !== "TOP") { D.textTrimNotTop = (D.textTrimNotTop || 0) + 1; continue; }
     var setLH = lh.unit === "PIXELS" ? lh.value : (lh.value / 100) * fs;
     var use = IR.textFont(ctx, ctx.prop(rec, "fontName")) || st.settings.fallbackFont;
     var key = use.family + "|" + use.style + "|" + fs;
