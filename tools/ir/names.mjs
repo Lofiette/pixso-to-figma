@@ -5,15 +5,18 @@
 //   rootNamesFromPix(pix) -> (guid) => [name] | null  the names a stored instance's root entries carry
 //
 // Measured live in Pixso through its plugin API on U (counts only):
-//   - an INSTANCE whose stored name is "Instance <n>" (AUTO_INSTANCE_NAME; U 4 867), or that has no
+//   - an INSTANCE whose stored name is "Instance <n>" or "Экземпляр <n>" (AUTO_INSTANCE_NAME; U 4 867 and 18), or that has no
 //     stored name (U 2 527), is shown under the name its root override entry carries (the entry naming
 //     the instance itself, guidPath [] or [symbolID]), and without one under its master's name, or, when
 //     the master is a variant of a state group, under the group's: 2026-10-06, 66 "Instance <n>" (25 and
 //     50 sampled, 9 in both); 2026-10-12, 80 with no name; 146 of 146. The master's or the group's name
 //     alone gave 138: the other 8 carry a root name that is neither, and showed it. A root entry's name
-//     is never "" nor "Instance <n>" (on any of the six local files). A named instance is shown under its
-//     stored name (14 of 15; the other was renamed in the live file, and no root entry of it names it
-//     otherwise).
+//     is never "" nor "Instance <n>" (on any of the six local files). A named instance whose stored name
+//     is its master's or set's is shown under it (20 of 20, 2026-10-12). One whose stored name differs
+//     from both (U 10 315) is shown under its stored name 47 times of 80, under its master's or set's 32,
+//     under a root entry's 1: no stored field tells these apart (they look like auto names kept from
+//     before the master was renamed), so the reader keeps the stored name and the identity check may
+//     find such a sampled instance differing.
 //   - a TEXT whose stored name is "" (U 466) is shown under its characters: 47 of 50 exactly, the
 //     other 3 with each line break shown as a space and the trailing spaces trimmed (textShownAs). A
 //     named text is shown under its stored name (10 of 10).
@@ -23,7 +26,10 @@
 // (tools/ir/identity.mjs), whatever setting the IR was read with.
 import { CODE, headerSetting } from "./schema.mjs";
 
-export const AUTO_INSTANCE_NAME = /^Instance \d+$/;
+// Pixso's Russian interface names a new instance "Экземпляр <n>": U 18, P 15, O 13, M 0. On U they are
+// shown by the same rule, 18 of 18: 15 under their root entry's name, 3 under the set's or the master's
+// (measured live 2026-10-12).
+export const AUTO_INSTANCE_NAME = /^(Instance|Экземпляр) \d+$/;
 
 // The forms Pixso shows an empty-named text's characters in.
 export function textShownAs(characters) {

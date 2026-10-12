@@ -902,6 +902,10 @@ try {
   check("--names display (the default): \"Instance <n>\" or no name takes the root entry's name, else the set's or the master's; any other name and an empty text's stay", () =>
     eq(names(D), ["Button", "Badge (shown)", "Icon/Star", "Instance 7a", "Card (shown)", "Spacer", "", ""]));
   check("--names stored keeps every stored name (\"\" where none is stored)", () => eq(names(S), ["Instance 7", "Instance 12", "Instance 3", "Instance 7a", "", "", "", ""]));
+  check("an instance auto-named by Pixso's Russian interface (\"Экземпляр <n>\") takes the same display name; \"Экземпляр\" alone is a name", () => {
+    const R = pixToIR(mutated((v, at) => { plant(v, at); at("1:33").name = "Экземпляр 3"; at("1:61").name = "Экземпляр"; }));
+    return eq([rec("1:33", R.ir).name, rec("1:61", R.ir).name], ["Icon/Star", "Экземпляр"]);
+  });
   check("the set's name comes from the stored state group, whatever --variant-sets makes of it", () => eq(rec("1:61", F.ir).name, "Button"));
   check("two root entries naming the instance merge by --override-merge, as its root override does", () => eq([rec("1:62", D.ir).name, rec("1:62", first.ir).name], ["Badge (shown)", "Badge (old)"]));
   check("stats.names counts the population under either setting", () => {
