@@ -209,7 +209,7 @@ as plain strings).
 | `page` | top-level records only: index into `pages` |
 | `guid` | the source guid, unique in the IR |
 | `type` | one of `FRAME GROUP SECTION COMPONENT COMPONENT_SET INSTANCE RECTANGLE ELLIPSE POLYGON STAR LINE VECTOR BOOLEAN_OPERATION TEXT SLICE SLOT` |
-| `name` | the layer name: as Pixso shows it under `names` `display` (an `INSTANCE` stored as "Instance <n>" takes its master's or its state group's name), as stored under `stored`; an empty `TEXT` name stays empty either way (`docs/M1.md` §15.16) |
+| `name` | the layer name: as Pixso shows it under `names` `display` (an `INSTANCE` stored as "Instance <n>" or with no name takes the name its root override entry carries, else its master's or its state group's), as stored under `stored`; an empty `TEXT` name stays empty either way (`docs/M1.md` §15.16). A root entry's own `name` compares with this one (§9, `docs/M2A.md` D8) |
 | `props` | Figma properties, plus the IR's own below |
 | `overrideKey` | the layer's guid in its library's own file (library copies only; capability `overrideKeys`) |
 | `instance` | `INSTANCE` records only, §9 |

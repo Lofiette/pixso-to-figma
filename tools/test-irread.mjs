@@ -721,32 +721,58 @@ try {
 } finally { rmSync(tmp, { recursive: true, force: true }); }
 
 // ---------- 14. layer names (docs/M1.md §15.16) ----------
-// Pixso shows an instance named "Instance <n>" under its master's name, or its state group's when the
-// master is a variant of one, and an empty-named text under its characters (measured live on U,
-// 2026-10-06). Planted on the fixture: the Button instance (a variant of the state group "Button"), the
-// Badge instance (the library copy "Badge"), the trailing icon inside Card's master ("Icon/Star"), a
-// name that only looks like the pattern, an instance with no stored name and two empty-named texts.
+// Pixso shows an instance named "Instance <n>", or with no name, under the name its root override entry
+// carries, else under its master's name, or its state group's when the master is a variant of one; an
+// empty-named text under its characters (measured live on U, 2026-10-06 and 2026-10-12). Planted on the
+// fixture: the Button instance (a variant of the state group "Button"), the Badge instance (the library
+// copy "Badge", two root entries naming it, which --override-merge decides between), the trailing icon
+// inside Card's master ("Icon/Star"), a name that only looks like the pattern with a root entry naming
+// it otherwise, two instances with no stored name (one named by a root entry), two empty-named texts.
 {
+  const G = (s, l) => ({ sessionID: s, localID: l });
   const plant = (v, at) => {
     at("1:61").name = "Instance 7"; at("1:62").name = "Instance 12"; at("1:33").name = "Instance 3";
-    at("1:32").name = "Instance 7a"; delete at("1:60").name;
+    at("1:62").symbolData.symbolOverrides = [{ guidPath: { guids: [] }, name: "Badge (old)", overrideLevel: 1 }, { guidPath: { guids: [G(1, 40)] }, name: "Badge (shown)" }];
+    at("1:32").name = "Instance 7a"; at("1:32").symbolData.symbolOverrides = [{ guidPath: { guids: [G(1, 20)] }, name: "Lead" }];
+    delete at("1:60").name; at("1:60").symbolData.symbolOverrides.push({ guidPath: { guids: [G(1, 30)] }, name: "Card (shown)" });
+    delete at(M2A.iNoDerived).name;
     at(IDS.text).name = ""; at(IDS.textNoLines).name = "";
   };
   const file = mutated(plant);
   const D = pixToIR(file), S = pixToIR(file, { settings: { names: "stored" } }), F = pixToIR(file, { settings: { variantSets: "frames" } });
-  const names = (r) => ["1:61", "1:62", "1:33", "1:32", "1:60", IDS.text, IDS.textNoLines].map((g) => rec(g, r.ir).name);
-  check("the IR validates under --names display and stored", () => [D, S, F].every((r) => validate(r.ir).ok) && D.ir.header.settings.names === "display" && S.ir.header.settings.names === "stored");
-  check("--names display (the default): \"Instance <n>\" takes its set's or its master's name; any other name and an empty text's stay", () =>
-    eq(names(D), ["Button", "Badge", "Icon/Star", "Instance 7a", "", "", ""]));
-  check("--names stored keeps every stored name (\"\" where none is stored)", () => eq(names(S), ["Instance 7", "Instance 12", "Instance 3", "Instance 7a", "", "", ""]));
+  const first = pixToIR(file, { settings: { overrideMerge: "first" } });
+  const GUIDS = ["1:61", "1:62", "1:33", "1:32", "1:60", M2A.iNoDerived, IDS.text, IDS.textNoLines];
+  const names = (r) => GUIDS.map((g) => rec(g, r.ir).name);
+  check("the IR validates under --names display and stored", () => [D, S, F, first].every((r) => validate(r.ir).ok) && D.ir.header.settings.names === "display" && S.ir.header.settings.names === "stored");
+  check("--names display (the default): \"Instance <n>\" or no name takes the root entry's name, else the set's or the master's; any other name and an empty text's stay", () =>
+    eq(names(D), ["Button", "Badge (shown)", "Icon/Star", "Instance 7a", "Card (shown)", "Spacer", "", ""]));
+  check("--names stored keeps every stored name (\"\" where none is stored)", () => eq(names(S), ["Instance 7", "Instance 12", "Instance 3", "Instance 7a", "", "", "", ""]));
   check("the set's name comes from the stored state group, whatever --variant-sets makes of it", () => eq(rec("1:61", F.ir).name, "Button"));
+  check("two root entries naming the instance merge by --override-merge, as its root override does", () => eq([rec("1:62", D.ir).name, rec("1:62", first.ir).name], ["Badge (shown)", "Badge (old)"]));
   check("stats.names counts the population under either setting", () => {
-    eq(D.stats.names, { autoInstances: 3, toSet: 1, toMaster: 2, unnamedInstances: 1, emptyTexts: 2 });
+    eq(D.stats.names, { auto: { n: 3, toRoot: 1, toSet: 1, toMaster: 1, rootDiffers: 1 }, unnamed: { n: 2, toRoot: 1, toSet: 0, toMaster: 1, rootDiffers: 1 }, namedRootDiffers: 1, emptyTexts: 2 });
     eq(S.stats.names, D.stats.names);
-    eq(stats.names, { autoInstances: 0, toSet: 0, toMaster: 0, unnamedInstances: 0, emptyTexts: 0 });
+    const zero = { n: 0, toRoot: 0, toSet: 0, toMaster: 0, rootDiffers: 0 };
+    eq(stats.names, { auto: zero, unnamed: zero, namedRootDiffers: 0, emptyTexts: 0 });
   });
-  check("the setting changes names and the header, nothing else: overrides, components and sets are the same", () => {
-    const strip = (r) => { const c = JSON.parse(JSON.stringify(r.ir)); delete c.header.settings.names; c.nodes.forEach((n) => { delete n.name; }); return JSON.stringify(c); };
+  // D8: a root entry's name equal to the record's is an echo; a different one is dropped root-box.
+  const nameNoted = (r, code, re) => GUIDS.filter((g) => notesOf(g, r.ir).some((x) => x.code === code && re.test(x.detail)));
+  const rootBoxName = (r) => nameNoted(r, CODE.OVERRIDE_FIELD_DROPPED, /^root-box: (.*, )?name 1\b/);
+  const echoName = (r) => nameNoted(r, CODE.OVERRIDE_ECHO, /: (.*, )?name 1\b/);
+  check("a root entry's name compares with the record's: an echo under display where the record took it, dropped root-box under stored (and for a named instance)", () => {
+    eq([rootBoxName(D), rootBoxName(first), rootBoxName(S)], [["1:32"], ["1:32"], ["1:62", "1:32", "1:60"]]);
+    eq([echoName(D), echoName(first), echoName(S)], [["1:62", "1:60"], ["1:62", "1:60"], []]);
+    const dD = D.stats.m2a.overrides.rootBox, dS = S.stats.m2a.overrides.rootBox;
+    eq([dD.echo - dS.echo, dS.differs - dD.differs], [2, 2]);
+  });
+  check("the setting changes names, the header and those notes on the root names, nothing else: overrides, components and sets are the same", () => {
+    const strip = (r) => {
+      const c = JSON.parse(JSON.stringify(r.ir));
+      delete c.header.settings.names;
+      c.nodes.forEach((n) => { delete n.name; });
+      c.notes = c.notes.filter((x) => !((x.code === CODE.OVERRIDE_FIELD_DROPPED && x.detail === "root-box: name 1") || (x.code === CODE.OVERRIDE_ECHO && x.detail === "1 field: name 1")));
+      return JSON.stringify(c);
+    };
     return strip(D) === strip(S);
   });
 }

@@ -778,32 +778,57 @@ function pixRunGroup() {
 async function namesGroup() {
   const { makeFixture, IDS } = await import("./pix/fixture.mjs");
   const { pixToIR } = await import("./pix/ir/index.mjs");
+  const { readPix } = await import("./pix/read.mjs");
+  const { rootNamesFromPix } = await import("./ir/names.mjs");
   // Planted as U holds them: instances named "Instance <n>" (a variant of the state group "Button", the
-  // library copy "Badge", "Icon/Star" inside Card's master) and two empty-named texts, one with a line
-  // break in its characters.
+  // library copy "Badge" with a root entry naming it, "Icon/Star" inside Card's master), an instance
+  // with no stored name (Card's) and two empty-named texts, one with a line break in its characters.
   const at = (v, g) => v.pixsoNodes.find((n) => n.guid.sessionID + ":" + n.guid.localID === g);
   const pix = makeFixture("valid", { mutate: (v) => {
     at(v, "1:61").name = "Instance 7"; at(v, "1:62").name = "Instance 12"; at(v, "1:33").name = "Instance 3";
+    at(v, "1:62").symbolData.symbolOverrides = [{ guidPath: { guids: [{ sessionID: 1, localID: 40 }] }, name: "Badge (shown)" }];
+    delete at(v, "1:60").name;
     at(v, IDS.text).name = ""; at(v, IDS.textNoLines).name = "";
   } }).pix;
   const D = pixToIR(pix), S = pixToIR(pix, { settings: { names: "stored" } }), F = pixToIR(pix, { settings: { names: "stored", variantSets: "frames" } });
-  // What Pixso's API answers for them (measured live on U, 2026-10-06): the set's or the master's name,
-  // and the characters with the line break shown as a space.
-  const shown = { "1:61": "Button", "1:62": "Badge", "1:33": "Icon/Star", [IDS.text]: "Hi \u{1F600} there second", [IDS.textNoLines]: "plain" };
-  const ask = (r, wrong) => {
+  const roots = rootNamesFromPix(readPix(pix));
+  // What Pixso's API answers for them (measured live on U, 2026-10-06 and 2026-10-12): the root entry's
+  // name, else the set's or the master's, and the characters with the line break shown as a space.
+  const shown = { "1:61": "Button", "1:62": "Badge (shown)", "1:33": "Icon/Star", "1:60": "Card", [IDS.text]: "Hi \u{1F600} there second", [IDS.textNoLines]: "plain" };
+  const ask = (r, wrong, rootsOf, ir) => {
+    const I = ir || r.ir;
     const said = Object.assign({}, shown, wrong || {});
-    const ix = (g) => r.ir.nodes.findIndex((n) => n.guid === g);
-    const sampled = Object.keys(shown).concat(["1:60", IDS.textFromStyle]).map(ix);
-    const answers = r.ir.nodes.map((n) => ({ id: n.guid, type: n.type, name: Object.prototype.hasOwnProperty.call(said, n.guid) ? said[n.guid] : n.name }));
-    return compareIdentity(r.ir, "Fixture", { file: "Fixture", pageIds: r.ir.pages.filter((p) => !p.internal).map((p) => p.guid) }, sampled, answers);
+    const ix = (g) => I.nodes.findIndex((n) => n.guid === g);
+    const sampled = Object.keys(shown).concat([IDS.textFromStyle]).map(ix);
+    const answers = I.nodes.map((n) => ({ id: n.guid, type: n.type, name: Object.prototype.hasOwnProperty.call(said, n.guid) ? said[n.guid] : n.name }));
+    return compareIdentity(I, "Fixture", { file: "Fixture", pageIds: I.pages.filter((p) => !p.internal).map((p) => p.guid) }, sampled, answers, rootsOf);
   };
-  const qs = [ask(D), ask(S), ask(F)];
+  const qs = [ask(D), ask(D, null, roots), ask(S, null, roots), ask(F, null, roots)];
   check(qs.every((q) => q.same && q.q5 && q.sample.nameDiffers === 0 && q.sample.agree === 7),
-    "identity: Pixso's names agree with an IR read under --names display, and with one read under stored (frames too): \"Instance <n>\" as its set or master, an empty text as its characters",
+    "identity: Pixso's names agree with an IR read under --names display, and, given the .pix's root entries, with one read under stored (frames too): an auto-named or unnamed instance as its root entry, set or master, an empty text as its characters",
     JSON.stringify(qs.map((q) => q.detail)));
-  const wrong = [ask(S, { "1:61": "Renamed", "1:33": "Badge", [IDS.text]: "plain" }), ask(D, { "1:61": "Renamed", "1:33": "Badge", [IDS.text]: "plain" })];
-  check(wrong.every((q) => !q.q5 && q.sample.nameDiffers === 3),
-    "identity: a rename, another master's name, or another text's characters still differ", JSON.stringify(wrong.map((q) => q.detail)));
+  const noPix = ask(S);
+  check(!noPix.q5 && noPix.sample.nameDiffers === 1 && roots("1:62").length === 1 && rootNamesFromPix(null) === null && rootNamesFromPix({ images: new Map() }) === null,
+    "identity: without the .pix, an IR read under stored cannot give the root entry's name (D8 drops it), and that instance differs", JSON.stringify(noPix.detail));
+  const wrong = [ask(S, { "1:61": "Renamed", "1:33": "Badge", [IDS.text]: "plain" }, roots), ask(D, { "1:61": "Renamed", "1:33": "Badge", [IDS.text]: "plain", "1:62": "Badge" }, roots)];
+  check(same(wrong.map((q) => [q.q5, q.sample.nameDiffers]), [[false, 3], [false, 4]]),
+    "identity: a rename, another master's name, another text's characters, or (read under display) the master's name where a root entry names the instance still differ", JSON.stringify(wrong.map((q) => q.detail)));
+  // A FRAME parent's name stands for a state group's only where the IR cannot tell the two apart: under
+  // --variant-sets frames, before version 3, or a group VARIANT_SET_REJECTED names. Badge's master is
+  // moved into a plain frame of the IR read under stored (parse).
+  const plain = S.ir.nodes.findIndex((n) => n.type === "FRAME" && !S.ir.notes.some((x) => x.node !== undefined && S.ir.nodes[x.node] === n && x.code === CODE.VARIANT_SET_REJECTED));
+  const moved = (edit) => {
+    const c = JSON.parse(JSON.stringify(S.ir));
+    const mi = c.nodes.findIndex((n) => n.guid === "1:40");
+    c.nodes[mi].parent = plain; delete c.nodes[mi].page;
+    if (edit) edit(c);
+    return ask(S, { "1:62": c.nodes[plain].name }, null, c);
+  };
+  const frameQs = [moved(), moved((c) => { c.notes.push({ code: CODE.VARIANT_SET_REJECTED, node: plain, detail: "no-equals" }); }),
+    moved((c) => { c.header.settings.variantSets = "frames"; }), moved((c) => { c.header.version = 2; })];
+  check(plain >= 0 && same(frameQs.map((q) => q.sample.nameDiffers), [1, 0, 0, 0]),
+    "identity: a master's plain FRAME parent gives no name under --variant-sets parse; a rejected group's does, and any FRAME's under frames or before version 3",
+    JSON.stringify(frameQs.map((q) => q.detail)));
   // The planner hands the builder the header's names; an IR read before the setting had stored names.
   const old = JSON.parse(JSON.stringify(S.ir)); delete old.header.settings.names;
   const namesOf = (ir, o) => [...new Set(planM1(ir, null, Object.assign({ runId: RUN }, o || {})).tasks.map((t) => t.settings.names))];

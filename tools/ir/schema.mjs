@@ -64,8 +64,9 @@ export const SETTINGS = {
   echo: ["drop", "keep"],                           // D9
   instanceOwn: ["overrides", "own"],                // D11
   derivedGeometry: ["changed", "all", "none"],      // D10
-  // docs/M1.md §15.16: a layer's name as Pixso shows it (an instance named "Instance <n>" under its
-  // master's or its set's name; an empty-named text left to Figma's autoRename), or as stored.
+  // docs/M1.md §15.16: a layer's name as Pixso shows it (an instance named "Instance <n>" or with no name
+  // under its root entry's name, else its master's or its set's; an empty-named text left to Figma's
+  // autoRename), or as stored.
   names: ["display", "stored"],
 };
 // The thirteen settings M2a adds (docs/M2A.md §3), in the order of that table.
@@ -87,7 +88,7 @@ export const SETTING_DEFAULTS = { overrides: "fidelity", drift: "link", deleted:
   variantSets: "parse", variantGrammar: "names", axisOrder: "vocabulary", swapDangling: "skip", swapReset: "on",
   swapFallback: "derived", swapDefault: "layer", rejectedProps: "copy", defaultAssignments: "keep", overrideMerge: "outer",
   echo: "drop", instanceOwn: "overrides", derivedGeometry: "changed", kitmaps: "default",
-  names: "display" };   // names: Pixso's names measured live on U, 2026-10-06 (docs/M1.md §15.16)
+  names: "display" };   // names: Pixso's names measured live on U, 2026-10-06 and -12 (docs/M1.md §15.16)
 // Settings added to IR version 3 after IRs of it were written (docs/M1.md §15.16): an IR whose header
 // lacks one was read before it existed, with the value given here, and stays valid. Every IR the reader
 // writes now records them.

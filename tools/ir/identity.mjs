@@ -8,8 +8,10 @@
 //        trailing ".pix" and surrounding spaces; every user page of the IR is open in Pixso, and every
 //        page Pixso lists is a page of the IR (the internal canvas may or may not be listed)
 // q5     Pixso's API ids are the .pix guids (Q5): every one of SAMPLE_SIZE sampled IR records is found
-//        by its guid with the same name and the same type (an IR FRAME may be Pixso's COMPONENT_SET:
-//        a state group, D7)
+//        by its guid with a name Pixso may show for it (names.mjs shownNamesOf: its own name, an empty
+//        text's characters, an auto-named or unnamed instance's root entry, master or state group name;
+//        the root entry's only when the .pix is given, docs/M1.md §15.16) and the same type (an IR FRAME
+//        may be Pixso's COMPONENT_SET: a state group, D7)
 // code   null when both hold, else CODE.SOURCE_IDENTITY_MISMATCH: the planner then skips the MCP links
 //        of the image chain (links 2 and 3). A Pixso that does not answer gives same false, transport
 //        true; that is not a mismatch, and the code is null (the links are skipped as unavailable)
@@ -21,7 +23,7 @@
 import { CODE, isComponentNote } from "./schema.mjs";
 import { BUILT_TYPE, taskType } from "./task.mjs";
 import { SCRIPTS } from "./mcp-readonly.mjs";
-import { shownNames } from "./names.mjs";
+import { shownNamesOf, rootNamesFromPix } from "./names.mjs";
 
 export const SAMPLE_SIZE = 20;
 const CHANGED_BY_READER = [CODE.SOURCE_FEATURE_UNSUPPORTED, CODE.BOOLEAN_FLATTENED, CODE.GEOMETRY_INVALID];
@@ -52,8 +54,9 @@ export function documentNameOf(pix, ir) {
   return null;
 }
 
-// The comparison alone, for answers already read (the tests call it directly).
-export function compareIdentity(ir, expectName, open, sampled, answers) {
+// The comparison alone, for answers already read (the tests call it directly). rootNamesOf (names.mjs
+// rootNamesFromPix) gives an instance's root entry names, which an IR read under --names stored lacks.
+export function compareIdentity(ir, expectName, open, sampled, answers, rootNamesOf) {
   const parts = [];
   let same = true;
   if (expectName === null || normName(expectName) !== normName(open && open.file)) { same = false; parts.push("the root name differs"); }
@@ -69,14 +72,13 @@ export function compareIdentity(ir, expectName, open, sampled, answers) {
   const byId = new Map((Array.isArray(answers) ? answers : []).filter((a) => a && typeof a.id === "string").map((a) => [a.id, a]));
   // Measured on U's audit (2026-10-06): the 3 of 20 names that differed on a file not renamed were two
   // instances named "Instance <n>" and an empty-named text, which Pixso shows under other names.
-  const guidIndex = new Map(ir.nodes.map((r, i) => [r.guid, i]));
-  const indexOf = (g) => guidIndex.get(g);
+  const shown = shownNamesOf(ir, rootNamesOf || null);
   for (const i of sampled) {
     const r = ir.nodes[i];
     const a = byId.get(r.guid);
     if (!a || a.missing) { s.missing++; continue; }
     const types = SAME_TYPE[r.type] || [r.type];
-    const typeOk = types.indexOf(a.type) >= 0, nameOk = shownNames(ir, i, indexOf).indexOf(a.name) >= 0;
+    const typeOk = types.indexOf(a.type) >= 0, nameOk = shown(i).indexOf(a.name) >= 0;
     if (!typeOk) s.typeDiffers++;
     if (!nameOk) s.nameDiffers++;
     if (typeOk && nameOk) s.agree++;
@@ -104,6 +106,6 @@ export async function checkIdentity(pix, ir, mcp) {
     }
     answers = r.value;
   }
-  const c = compareIdentity(ir, documentNameOf(pix, ir), open.value, sampled, answers);
+  const c = compareIdentity(ir, documentNameOf(pix, ir), open.value, sampled, answers, rootNamesFromPix(pix));
   return Object.assign(c, { transport: false, code: c.same && c.q5 ? null : CODE.SOURCE_IDENTITY_MISMATCH });
 }

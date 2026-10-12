@@ -29,6 +29,7 @@ import { componentEntry, masterRef, setEntry } from "./components.mjs";
 import { bindingsOf } from "./properties.mjs";
 import { drawnStyles } from "./styles.mjs";
 import { AUTO_INSTANCE_NAME } from "../../ir/names.mjs";
+import { mergeEntries } from "./overrides.mjs";
 
 const NEVER = new Set(NEVER_OMIT);
 const RECT_LIKE = new Set(["FRAME", "COMPONENT", "RECTANGLE"]);
@@ -216,28 +217,36 @@ export function emit(cx, planned, out) {
 }
 
 // The record's name (docs/M1.md §15.16, tools/ir/names.mjs). Pixso shows an INSTANCE whose stored name
-// is "Instance <n>" under its master's name, or under the state group's when the master is a variant of
-// one (measured live on U, 2026-10-06: 46 of 50 sampled; the other 4 had changed in the live file). Under
-// --names display (the default) the record carries that name, under stored the stored one. The master
-// is the stored node symbolData names, a library copy included, whether or not it is a record; with no
-// name to show instead, the stored one stays. A TEXT keeps its stored name: an empty one is left to
-// Figma's autoRename by the builder. An INSTANCE with no stored name stays "": what Pixso shows for it
-// was not measured (U 2 527).
+// is "Instance <n>", or that has none, under the name its root override entry carries (the entries whose
+// guidPath is [] or [symbolID], merged by --override-merge as instanceData merges them), and without one
+// under its master's name, or the state group's when the master is a variant of one. Measured live on U:
+// 66 instances named "Instance <n>" (2026-10-06) and 80 with no name (2026-10-12), 146 of 146 by this
+// rule; the master's or the group's name alone gave 138, the other 8 carrying a root name that is
+// neither. Under --names display (the default) the record carries that name, under stored the stored
+// one. The master is the stored node symbolData names, a library copy included, whether or not it is a
+// record; with no name to show instead, the stored one stays. A named INSTANCE keeps its stored name
+// even where its root entry names it otherwise (U 51): none was sampled live. A TEXT keeps its stored
+// name: an empty one is left to Figma's autoRename by the builder.
 function recordName(cx, p, n) {
   const stored = typeof n.name === "string" ? n.name : "";
   const N = cx.stats.names;
   if (p.type === "TEXT" && stored === "") N.emptyTexts++;
   if (p.type !== "INSTANCE") return stored;
-  if (typeof n.name !== "string") N.unnamedInstances++;
-  if (!AUTO_INSTANCE_NAME.test(stored)) return stored;
-  N.autoInstances++;
-  const sid = n.symbolData && n.symbolData.symbolID ? guidStr(n.symbolData.symbolID) : null;
-  const m = sid ? cx.byGuid.get(sid) : null;
+  const R = cx.resolver, S0 = R.declared(n);
+  const roots = ((n.symbolData && n.symbolData.symbolOverrides) || []).filter((e) => { const g = R.pathGuids(e); return g.length === 0 || (g.length === 1 && g[0] === S0); });
+  const root = roots.length ? mergeEntries(roots, cx.settings.overrideMerge || "outer").fields.name : undefined;
+  const named = (s) => typeof s === "string" && s !== "";
+  const K = typeof n.name !== "string" ? N.unnamed : AUTO_INSTANCE_NAME.test(stored) ? N.auto : null;
+  if (!K) { if (named(root) && root !== stored) N.namedRootDiffers++; return stored; }
+  K.n++;
+  const m = S0 ? cx.byGuid.get(S0) : null;
   const up = m && m.parentIndex ? cx.byGuid.get(guidStr(m.parentIndex.guid)) : null;
   const set = !!up && !!up.isStateGroup && cx.typeName(up) === "FRAME";
-  const shown = set ? up.name : m ? m.name : undefined;
-  if (typeof shown !== "string" || shown === "") return stored;
-  N[set ? "toSet" : "toMaster"]++;
+  const master = set ? up.name : m ? m.name : undefined;
+  if (named(root) && named(master) && root !== master) K.rootDiffers++;
+  const shown = named(root) ? root : named(master) ? master : undefined;
+  if (shown === undefined) return stored;
+  K[named(root) ? "toRoot" : set ? "toSet" : "toMaster"]++;
   return cx.settings.names === "display" ? shown : stored;
 }
 
