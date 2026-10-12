@@ -66,7 +66,7 @@ function flagGroup() {
   const bad = M2A_SETTINGS.filter((k) => d[k] !== SETTING_DEFAULTS[k]);
   check(!bad.length, "pix-run defaults every M2a setting to SETTING_DEFAULTS", bad.join(", "));
   const takes = M2A_SETTINGS.every((k) => SETTINGS[k].every((v) => runArgs(["x.pix", SETTING_FLAGS[k], v])[k] === v));
-  check(takes && Object.keys(RUN_SETTINGS).length === 20 + 13, "pix-run takes every value of every M2a flag (33 settings in all, --text-trim since docs/M1.md §15.14)");
+  check(takes && Object.keys(RUN_SETTINGS).length === 20 + 13 + 2, "pix-run takes every value of every M2a flag (35 settings in all: --text-trim since docs/M1.md §15.14, and §15.15's two)");
   const refused = M2A_SETTINGS.filter((k) => !/one of/.test(threw(() => runArgs(["x.pix", SETTING_FLAGS[k], "maybe"]))));
   check(!refused.length, "pix-run refuses a value outside each M2a setting's list, naming the choices", refused.join(", "));
   const irTakes = M2A_SETTINGS.every((k) => IR_FLAGS[SETTING_FLAGS[k]] === k && SETTINGS[k].every((v) => irArgs(["x.pix", "--stats-only", SETTING_FLAGS[k], v]).settings[k] === v));

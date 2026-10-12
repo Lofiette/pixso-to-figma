@@ -32,7 +32,11 @@ MCP reader ──┘
     `includeBorders` becomes `strokesIncludedInLayout`, and `frameMaskDisabled` becomes `clipsContent: false`;
   - a minimum or maximum size stored as NaN or FLT_MAX is unset, and is left out;
   - `count` becomes `pointCount` and `starInnerScale` becomes `innerRadius`;
-  - a colour's `a` becomes the paint's `opacity`.
+  - a colour's `a` becomes the paint's `opacity`;
+  - an image filter's `vibrance` becomes `saturation` (Pixso's own plugin API names it so);
+  - a LINE, drawn by Pixso from (0, 0) to its size's (w, h), is turned onto that segment with the segment's
+    length as its width, where its stored stroke area runs along it (`lineDirection`); a dash pattern with no gap
+    is not written (`dashNoGap`; both `docs/M1.md` §15.15).
 - **It says what it knows.** The header's capabilities declare what the source provides. The builder, the kit-map
   resolver and the verifier use only what is declared, and the validator refuses content that the header does not
   declare.
@@ -136,7 +140,9 @@ second source the planner may use beside a `.pix` (missing images, renders), and
 the planner checks that the open file is the `.pix` (root name, page guids, a sample of node guids) before it uses
 it, and records the outcome in its own state (`docs/M1.md` D9, SOURCE_IDENTITY_MISMATCH).
 
-**`settings`.** Every policy in REWRITE.md §11, plus the mode; all keys are required.
+**`settings`.** Every policy in REWRITE.md §11, plus the mode; all keys are required, except the later ones
+(`LATER_SETTINGS`): `lineDirection` and `dashNoGap`, which an IR read before them (2026-10-07) lacks and was read as
+`flat` and `keep`.
 
 | key | values | flag | owner's default |
 |---|---|---|---|
@@ -162,9 +168,13 @@ it, and records the outcome in its own state (`docs/M1.md` D9, SOURCE_IDENTITY_M
 | `echo` | `drop`, `keep` | `--echo` | `drop` (D9) |
 | `instanceOwn` | `overrides`, `own` | `--instance-own` | `overrides` (D11) |
 | `derivedGeometry` | `changed`, `all`, `none` | `--derived-geometry` | `changed` (D10) |
+| `lineDirection` | `stored`, `size`, `flat` | `--line-direction` | `stored`: a LINE whose size has a height runs as its own stored stroke area does, along (0,0)-(w,h) or along x (`docs/M1.md` §15.15) |
+| `dashNoGap` | `solid`, `keep` | `--dash-no-gap` | `solid`: a dash pattern with no gap is not written, as Pixso draws it solid (`docs/M1.md` §15.15) |
 
-`SETTING_DEFAULTS` in the schema holds the defaults of this table, and `M2A_SETTINGS` lists the thirteen keys version
-3 added (the D-numbers are `docs/M2A.md`'s).
+`SETTING_DEFAULTS` in the schema holds the defaults of this table, `M2A_SETTINGS` lists the thirteen keys version
+3 added (the D-numbers in those rows are `docs/M2A.md`'s), and `AUDIT_READER_SETTINGS` the two the first render
+audit added within version 3. `headerSetting(header, key)` gives a header's value, and a later setting's
+`LATER_SETTINGS` value where the header lacks it: `pix-run --from-ir` and `m2a-accept`'s second read take it so.
 
 ## 5. Pages
 
@@ -238,8 +248,8 @@ Version 2's decisions about what a record is (`docs/M1.md` §2):
   carries a `VECTOR_FROM_GEOMETRY`, `BOOLEAN_FLATTENED` or `SOURCE_FEATURE_UNSUPPORTED` note saying why it is built
   from geometry. `strokeGeometry` is never a source on its own. `LINE`, `STAR`, `POLYGON` and `BOOLEAN_OPERATION`
   are built natively and carry no build-source geometry, only, optionally, `oracleFillGeometry`. A Pixso CONNECTLINE
-  becomes a `VECTOR` from its network and a LINE with a height a `VECTOR` from its geometry, each with a
-  `SOURCE_FEATURE_UNSUPPORTED` note. Where the network and the stored geometry disagree in a known way the record has
+  becomes a `VECTOR` from its network and a LINE with a height and stored fill geometry a `VECTOR` from that
+  geometry, each with a `SOURCE_FEATURE_UNSUPPORTED` note; a LINE with a height and none stays a `LINE` (§1). Where the network and the stored geometry disagree in a known way the record has
   a `VECTOR_ORACLE_DIFFERS` note whose detail starts with the class (`region-no-fill`, `network-bounds`,
   `winding`). A native `BOOLEAN_OPERATION` whose stored result is out of date against its own operands (a union
   that leaves one out by more than 1 px, and every boolean made from such a one) has a `VECTOR_ORACLE_DIFFERS` note
@@ -411,15 +421,16 @@ one note per instance and class), including one whose only effect is to remove a
 detached or naming none, `maxLines` cleared) when no written field carries the removal (`no-equivalent`). Entries of one path are merged into one (`OVERRIDE_PATHS_MERGED`); an assignment
 that cannot be reached is a `STALE_ASSIGNMENT`, and a swap value naming nothing the IR can reference a
 `SWAP_VALUE_DANGLING`. Size, position, rotation and constraint fields stay in the IR even though Figma cannot apply
-them to instance sublayers (REWRITE.md §9, P13). One entry per path. A note about an entry names the instance by
-`node` and the entry by `path`, `[]` for the instance's own override.
+them to instance sublayers (REWRITE.md §9, P13). A `size` on a LINE also yields `relativeTransform`: Pixso draws a
+LINE along its size, so the length goes with its turn (`lineDirection`, `docs/M1.md` §15.15). One entry per path. A
+note about an entry names the instance by `node` and the entry by `path`, `[]` for the instance's own override.
 
 **Derived entries** are Pixso's resolved boxes as stored, **sparse**: `size` and `transform` only where Pixso stores
 them (absent means the master layer's, I), `lines` from the sublayer's stored baselines, `oracleSides` from its
 stroke-area path (the side oracle of D15, inside instances), `fillGeometry` and `strokeGeometry` (values indexes of
 lists, as on nodes) under `derivedGeometry` (`changed`: only where they differ from the target layer's own). `path`
 is never `[]`, `at` is as on overrides, every entry carries at least one key besides `path` and `at`, and there is
-one entry per path.
+one entry per path. A LINE's `size` and `transform` are as stored, not turned as its record is (`lineDirection`).
 
 ## 10. Styles
 
@@ -502,7 +513,7 @@ from the preflight and the kit-map resolution, and *build* codes come from Figma
 | `TEXT_LINES_UNKNOWN` | read | a buildable text with no stored baselines; it has no `lines` | named here (§3) |
 | `TEXT_GLYPHS_INVALID` | read | a text whose stored glyph outlines, which Pixso draws, are not glyph outlines (a stale glyph table): Pixso draws no text, a slab or nothing where Figma draws the characters. The detail starts with the class (`NOTE_CLASSES`: `drops-text`, an outline past 1e6 em; `slab`, one over 3 em; `empty`, none for a visible character), then the counts. The text is built from its characters (`docs/M1.md` §15.14) | named here (§7) |
 | `TEXT_VALUE_FROM_GLYPHS` | read | a `fontSize` or `letterSpacing` the node and its style leave out, taken from the stored glyphs Pixso draws where they agree on a value other than the absent default; the detail names each field with both values (`docs/M1.md` §15.14) | named here (§7) |
-| `SOURCE_FEATURE_UNSUPPORTED` | read | a Pixso feature Figma lacks, named in the detail, which starts with the feature from an open list (CONNECTLINE, LINE with height, SECTION strokes, SECTION corner radius, RIGHT_ANGLE, vibrance, hue filter, dashCap, deformationTransform, fontVariations, GRID, counter alignment <X>, strokeCap <X>, effect <TYPE>, export format <X>, paint type <X>, image paint without an image, text without a font name, inverse winding, open region loop, operand strokes under `--booleans native`, an operand without fill geometry, boolean without stored geometry, built natively, no stored geometry (a STAR or POLYGON), layoutGrids, fontVariantNumeric, fontVariantPosition, OpenType features, COLOR property), optionally followed by `: ` and text; dropped or converted, and counted per feature in `stats.unsupported`. The judge excuses a vector's paths only for the features that change the drawing (`judge.mjs` SFU_GEOMETRY, docs/M1.md §8.3) | named here (§7) |
+| `SOURCE_FEATURE_UNSUPPORTED` | read | a Pixso feature Figma lacks, named in the detail, which starts with the feature from an open list (CONNECTLINE, LINE with height, SECTION strokes, SECTION corner radius, RIGHT_ANGLE, hue filter, dashCap, deformationTransform, fontVariations, GRID, counter alignment <X>, strokeCap <X>, effect <TYPE>, export format <X>, paint type <X>, image paint without an image, text without a font name, inverse winding, open region loop, operand strokes under `--booleans native`, an operand without fill geometry, boolean without stored geometry, built natively, no stored geometry (a STAR or POLYGON), layoutGrids, fontVariantNumeric, fontVariantPosition, OpenType features, COLOR property), optionally followed by `: ` and text; dropped or converted, and counted per feature in `stats.unsupported`. The judge excuses a vector's paths only for the features that change the drawing (`judge.mjs` SFU_GEOMETRY, docs/M1.md §8.3) | named here (§7) |
 | `GEOMETRY_INVALID` | read | a NaN size, transform or path, or a boolean with no operand and no geometry; the box comes from the geometry or the children, or the node is not carried | named here (§7) |
 | `IMAGE_HASH_MISMATCH` | read | an archive image entry whose SHA-1 is not its name; treated as missing | named here (§4) |
 | `VECTOR_ORACLE_DIFFERS` | read | the stored network and the stored fill geometry disagree in a pre-registered class (`region-no-fill`, `network-bounds`, `winding`), or a boolean's stored result is out of date against its operands (`boolean-operands`) | named here (§3) |
@@ -655,7 +666,7 @@ one starting with its class. `tools/test-ir.mjs` validates this block.
       "variantSets": "parse", "variantGrammar": "names", "axisOrder": "vocabulary", "swapDangling": "skip",
       "swapReset": "on", "swapFallback": "derived", "swapDefault": "layer", "rejectedProps": "copy",
       "defaultAssignments": "keep", "overrideMerge": "last", "echo": "drop", "instanceOwn": "overrides",
-      "derivedGeometry": "changed", "kitmaps": "default" }
+      "derivedGeometry": "changed", "lineDirection": "stored", "dashNoGap": "solid", "kitmaps": "default" }
   },
   "pages": [
     { "guid": "0:1", "name": "Page 1", "internal": false, "background": 0 },

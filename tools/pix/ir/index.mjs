@@ -15,6 +15,8 @@
 //   swapDangling skip | strict, swapReset on | off, swapFallback derived | off, swapDefault layer | definition,
 //   rejectedProps copy | none, defaultAssignments keep | drop, overrideMerge last | first | outer,
 //   echo drop | keep, instanceOwn overrides | own, derivedGeometry changed | all | none
+//   the settings added after the first render audit (docs/M1.md §15.15; schema.AUDIT_READER_SETTINGS):
+//   lineDirection stored | size | flat, dashNoGap solid | keep
 //
 // THE M2a SEAM (docs/M2A.md §4, §5.3), each hook a module of its own with its contract in its header:
 //   plan (M1) -> familyIndex (families.mjs, part A) -> propIndex (propindex.mjs, P0, then part B)
@@ -42,6 +44,7 @@
 //                    stateGroupsInternal, lostBorder }   (IR indices; tools/pix/ir/populations.mjs)
 //     populationCounts, records, nonInstance, instances, vectors, text, spaceEvenly, strokeAlignDecided,
 //     cornerRadiusOnly, lostBorderSections, counterFillKeptFixed, thinStrokes, staleBooleans,
+//     lines: { alongSize, flat, noStoredArea, subPrecision, inFlow } and dashNoGap (tools/pix/ir/strokes.mjs),
 //     styles: { fill | stroke | effect: { same, styleWins, missing, noValue } } (tools/pix/ir/styles.mjs),
 //     m2a: newM2aStats() below, filled by parts A-C (docs/M2A.md §6) }
 //   ms also holds m2a: { families, props, resolve, instances }, the M2a phases inside ms.ir.
@@ -49,7 +52,7 @@
 import { createHash } from "node:crypto";
 import { readPix, childrenByParent } from "../read.mjs";
 import { corrupt } from "../../kiwi.mjs";
-import { CODE, FORMAT, VERSION, SETTINGS, SETTING_DEFAULTS, SETTING_KEYS, M2A_SETTINGS, NOTE_CLASSES, REASON_CODES, INTERNED_PROPS, canonicalJSON } from "../../ir/schema.mjs";
+import { CODE, FORMAT, VERSION, SETTINGS, SETTING_DEFAULTS, SETTING_KEYS, M2A_SETTINGS, AUDIT_READER_SETTINGS, NOTE_CLASSES, REASON_CODES, INTERNED_PROPS, canonicalJSON } from "../../ir/schema.mjs";
 import { validate } from "../../ir/validate.mjs";
 import { enumReader, STRUCTURE_TYPES } from "./enums.mjs";
 import { backgroundOf } from "./paints.mjs";
@@ -63,11 +66,11 @@ import { makeResolver } from "./resolve.mjs";
 import { instanceData } from "./overrides.mjs";
 import { staleBooleans } from "../../ir/operands.mjs";
 
-export const READER_SETTINGS = ["booleans", "spaceEvenlySingle", "textFit", "scope", "mode"].concat(M2A_SETTINGS);
+export const READER_SETTINGS = ["booleans", "spaceEvenlySingle", "textFit", "scope", "mode"].concat(M2A_SETTINGS, AUDIT_READER_SETTINGS);
 
 export function readerSettings(given) {
   const m2a = {};
-  for (const k of M2A_SETTINGS) m2a[k] = SETTING_DEFAULTS[k];
+  for (const k of M2A_SETTINGS.concat(AUDIT_READER_SETTINGS)) m2a[k] = SETTING_DEFAULTS[k];
   const s = Object.assign({ booleans: SETTING_DEFAULTS.booleans, spaceEvenlySingle: SETTING_DEFAULTS.spaceEvenlySingle,
     textFit: SETTING_DEFAULTS.textFit, scope: "file", mode: "design" }, m2a, given || {});
   for (const k of Object.keys(s)) {
@@ -122,6 +125,7 @@ function newStats() {
       letterSpacingFromGlyphs: 0, listSpacingFromParagraph: 0, truncatedLines: 0,
       firstLine: { halfLeading: 0, shifted: 0, unknown: 0, trimmedInSource: 0 }, glyphsInvalid: { "drops-text": 0, slab: 0, empty: 0 } },
     spaceEvenly: { between: 0, single: 0 }, strokeAlignDecided: {}, cornerRadiusOnly: {}, lostBorderSections: 0, counterFillKeptFixed: 0, thinStrokes: 0, staleBooleans: 0,
+    lines: { alongSize: 0, flat: 0, noStoredArea: 0, subPrecision: 0, inFlow: 0 }, dashNoGap: 0,
     styles: { fill: style0(), stroke: style0(), effect: style0() },
     m2a: newM2aStats(),
   };

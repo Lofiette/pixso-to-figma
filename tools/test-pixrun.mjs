@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CODE, ORACLE_PROPS, VERSION as IR_VERSION, M2A_SETTINGS, SETTING_DEFAULTS } from "./ir/schema.mjs";
+import { CODE, ORACLE_PROPS, VERSION as IR_VERSION, M2A_SETTINGS, AUDIT_READER_SETTINGS, SETTING_DEFAULTS } from "./ir/schema.mjs";
 import { SERVICE_PAGE_GUID, taskChars } from "./ir/task.mjs";
 import { validate, validateTask } from "./ir/validate.mjs";
 import { cleanTaskFor, derivePopulations, planM1, PLAN_DEFAULTS, CEILING_BASE_MS } from "./ir/plan.mjs";
@@ -28,6 +28,7 @@ import { REPO_ROOT } from "./ir/outside-repo.mjs";
 import { fakePixso } from "./test/fake-pixso.mjs";
 import { adoptIrSettings, parseArgs, runSettings, SETTINGS as RUN_SETTINGS } from "./pix-run.mjs";
 import { accept, legacyLostBorders } from "./m1-accept.mjs";
+import { readerSettingsOf as irReaderSettings } from "./m2a-accept.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 let failed = 0, passed = 0;
@@ -138,7 +139,7 @@ function syntheticIR(opts) {
       scope: { kind: "file" },
       capabilities: { authoredOverrides: true, resolvedOverrides: false, overrideKeys: true, publishIds: true, symbolVersions: true, derivedBoxes: true, inkBounds: false, renders: false },
       settings: Object.assign({ mode: "design", overrides: "fidelity", drift: "link", deleted: "publish", resync: "pixso-unless-edited", textFit: "widen", booleans: "auto",
-        spaceEvenlySingle: "between" }, Object.fromEntries(M2A_SETTINGS.map((k) => [k, SETTING_DEFAULTS[k]])), { kitmaps: "default" }) },
+        spaceEvenlySingle: "between" }, Object.fromEntries(M2A_SETTINGS.concat(AUDIT_READER_SETTINGS).map((k) => [k, SETTING_DEFAULTS[k]])), { kitmaps: "default" }) },
     pages: [{ guid: "0:1", name: "Page 1", internal: false, background: 0 }, { guid: "0:2", name: "Internal canvas", internal: true }],
     values, nodes, sets: [], components: comps, styles: [],
     images: [{ hash: hashes.png, present: true, format: "png" }, { hash: hashes.missing, present: false, format: "png" }, { hash: hashes.jpeg, present: true, format: "jpeg" }],
@@ -571,7 +572,12 @@ async function runGroup() {
   const odd = JSON.parse(JSON.stringify(r.stats)); odd.notCarried.newKind = 0;
   const Bo = planM1(r.ir, odd, { runId: RUN }).balance;
   check(!Bo.ok && !Bo.stored.ok && /newKind unknown to the planner/.test(Bo.stored.why), "a not-carried term the planner does not know fails the stored equation, by name", JSON.stringify(Bo.stored));
-  check(planM1(r.ir, r.stats, { runId: RUN }).balance.filtersUnrendered === 1, "the fixture's dropped vibrance filter is counted for FILTER_UNRENDERED");
+  // docs/M1.md §15.15: vibrance is Figma's saturation, so the fixture's is carried; a hue filter is still
+  // dropped and counted.
+  const { IDS } = await import("./pix/fixture.mjs");
+  const hue = pixToIR(makeFixture("valid", { mutate: (v) => { v.pixsoNodes.find((n) => n.guid.sessionID + ":" + n.guid.localID === IDS.mismatchRect).fillPaints[0].paintFilter.hue = 0.25; } }).pix, { settings: {} });
+  check(planM1(r.ir, r.stats, { runId: RUN }).balance.filtersUnrendered === 0 && planM1(hue.ir, hue.stats, { runId: RUN }).balance.filtersUnrendered === 1,
+    "the fixture's vibrance is carried as saturation (no FILTER_UNRENDERED); a dropped hue filter is counted for FILTER_UNRENDERED");
 }
 
 // ============================================================================================
@@ -756,7 +762,8 @@ function pixRunGroup() {
     const c = run(join(flipped, "tmp-data"));
     check(c.code === 1 && /inside the repository/.test(c.out), "pix-run refuses the repository named with its drive letter in the other case");
   } else console.log("skip the drive-letter case: not Windows");
-  check(Object.keys(RUN_SETTINGS).length === 20 + M2A_SETTINGS.length, "every setting of §3 is a pix-run flag (with --data, --only, --from-ir and --stats, and docs/M2A.md §3's thirteen)");
+  check(Object.keys(RUN_SETTINGS).length === 20 + M2A_SETTINGS.length + AUDIT_READER_SETTINGS.length && AUDIT_READER_SETTINGS.every((k) => RUN_SETTINGS["--" + k.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase())]),
+    "every setting of §3 is a pix-run flag (with --data, --only, --from-ir and --stats, docs/M2A.md §3's thirteen, --text-trim and docs/M1.md §15.15's two)");
   {
     // Review S7: --from-ir keeps the reader's settings the IR header records.
     const header = { settings: { textFit: "source-box", booleans: "flatten", spaceEvenlySingle: "center" }, scope: { kind: "pages", ids: ["0:4"] } };
@@ -767,6 +774,14 @@ function pixRunGroup() {
     check(why === null && a.textFit === "source-box" && a.booleans === "flatten" && a.spaceEvenlySingle === "center" && a.scope === "pages:0:4" &&
       /--text-fit widen contradicts the IR, which was read with source-box/.test(adoptIrSettings(b, header)) && adoptIrSettings(c, header) === null,
       "--from-ir takes booleans, spaceEvenlySingle, textFit and scope from the IR header, and refuses a flag that contradicts it");
+    // docs/M1.md §15.15: an IR read before lineDirection and dashNoGap existed (this header has neither) was
+    // read with LINEs flat and dash patterns as stored (schema.LATER_SETTINGS); --from-ir and m2a-accept's
+    // second read (G8) take it so.
+    const d = parseArgs(["--from-ir", "x.json", "--line-direction", "stored"]);
+    const g8 = irReaderSettings(header);
+    check(a.lineDirection === "flat" && a.dashNoGap === "keep" && /--line-direction stored contradicts the IR, which was read with flat/.test(adoptIrSettings(d, header) || "") &&
+      g8.lineDirection === "flat" && g8.dashNoGap === "keep",
+      "--from-ir and m2a-accept take an IR header without lineDirection and dashNoGap as flat and keep, and refuse a flag that contradicts it");
     const flat = JSON.parse(JSON.stringify(S.ir)); flat.header.settings.textFit = "source-box"; flat.header.settings.booleans = "flatten";
     writeFileSync(join(src, "ir-flat.json"), JSON.stringify(flat));
     let out = "", code = 0;

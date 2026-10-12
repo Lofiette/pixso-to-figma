@@ -20,7 +20,7 @@ import { decodeVectorNetwork } from "../network.mjs";
 import * as E from "./enums.mjs";
 import { r2, r4, r6, isFin, matrixOf, matrixFinite, mapBox, unionBox, guidStr } from "./util.mjs";
 import { effectsOf, exportSettingsOf, paintsOf } from "./paints.mjs";
-import { strokeProps, cornerProps, sideCensus, visiblePaint, weightOf, SIDE_FIELDS, CORNER_FIELDS } from "./strokes.mjs";
+import { strokeProps, cornerProps, sideCensus, visiblePaint, weightOf, lineSegment, SIDE_FIELDS, CORNER_FIELDS } from "./strokes.mjs";
 import { frameLayoutProps, childLayoutProps, isAutoLayout } from "./layout.mjs";
 import { textProps, checkTextData } from "./text.mjs";
 import { vectorProps, geometryOf, geometryBox, networkToIR, networkBox } from "./vector.mjs";
@@ -99,10 +99,9 @@ export function plan(cx, pageNodes, inScope) {
         else p.noGeometry = true;
       }
     }
-    if (t === "LINE" && n.size && isFin(n.size.y) && n.size.y !== 0) {
-      p.lineHeight = true;
-      if (geometryOf(cx, n.fillGeometry, { quiet: true })) type = "VECTOR";
-    }
+    // A LINE with a height and stored fill geometry is built from that geometry (D13); one with none
+    // stays a LINE, turned onto its segment where Pixso draws it there (propsOf, §15.15).
+    if (t === "LINE" && n.size && isFin(n.size.y) && n.size.y !== 0 && geometryOf(cx, n.fillGeometry, { quiet: true })) type = "VECTOR";
     if ((t === "VECTOR" || t === "CONNECTLINE") && !hasVectorSource(cx, n)) {
       cx.noteGuid(CODE.GEOMETRY_INVALID, guidStr(n.guid), "a vector with no network and no stored geometry; not carried");
       return skip("degenerate");
@@ -227,15 +226,21 @@ function propsOf(cx, p, rec, parentNode, internal, drawn) {
     if (!NEVER.has(k) && Object.prototype.hasOwnProperty.call(DEFAULTS, k) && canonicalJSON(v) === canonicalJSON(DEFAULTS[k])) return;
     props[k] = known[k] === "value" ? cx.value(v) : v;
   };
-  // The box. A non-finite size takes the box planned for it.
-  put("relativeTransform", matrixOf(n.transform).map(r4));
-  const w = p.box ? p.box.w : r2(n.size.x), h = p.box ? p.box.h : r2(n.size.y);
+  // The box. A non-finite size takes the box planned for it; a LINE Pixso draws along its height is
+  // turned onto that segment, its width the segment's length (strokes.mjs lineSegment, §15.15).
+  const seg = type === "LINE" && !p.box ? lineSegment(cx, n) : null, turned = !!seg && !seg.flat;
+  put("relativeTransform", turned ? seg.transform : matrixOf(n.transform).map(r4));
+  const w = p.box ? p.box.w : turned ? seg.width : r2(n.size.x), h = p.box ? p.box.h : r2(n.size.y);
   put("width", Math.max(0, w));
   put("height", type === "LINE" ? 0 : Math.max(0, h));
   if (p.box) cx.note(CODE.GEOMETRY_INVALID, "a non-finite size; the box comes from " + p.box.from);
   if (n.visible === false) put("visible", false);
   if (n.locked) put("locked", true);
   childLayoutProps(cx, n, put, parentNode, type !== "INSTANCE" && isAutoLayout(cx, n));
+  // Figma drops the turn of a child in a flow, so the builder takes a turned LINE out of it (placePass,
+  // rotPinned), and with it the siblings the flow would move into its slot (flowAbsolute): counted
+  // (0 of the 28 turned LINEs of U and O, all ABSOLUTE or on a canvas, §15.15).
+  if (turned && parentNode && isAutoLayout(cx, parentNode) && props.layoutPositioning !== "ABSOLUTE") cx.stats.lines.inFlow++;
   if (type === "INSTANCE") return;   // a placeholder: its box and child layout only (docs/M1.md D6)
   // The styles it draws, bound (a type that takes none leaves them out).
   for (const k of ["fillStyle", "strokeStyle", "effectStyle"]) if (drawn && drawn[k] !== undefined) put(k, drawn[k]);
@@ -286,7 +291,7 @@ function propsOf(cx, p, rec, parentNode, internal, drawn) {
     // judge would count 0 paths against Figma's (review S3): a counted loss of the oracle instead.
     if (!fill) cx.feature("no stored geometry", "a " + type + " built natively, its paths unchecked");
   } else if (type === "LINE") {
-    if (p.lineHeight) cx.feature("LINE with height", "no stored geometry: built as a line, height dropped");
+    if (seg && seg.flat) cx.feature("LINE with height", seg.why + ": built flat, height dropped");
     put("oracleFillGeometry", geometryOf(cx, n.fillGeometry) || undefined);
   } else if (type === "BOOLEAN_OPERATION") {
     put("booleanOperation", E.BOOLEAN_OP[cx.en("PixsoNode", "booleanOperation")(n.booleanOperation)] || "UNION");
