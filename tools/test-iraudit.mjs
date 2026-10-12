@@ -38,6 +38,10 @@
 //     its clipping ancestors clip it away); a text with invalid stored glyphs in its own class where the
 //     difference lies near it; a 1-device-pixel line on a pixel boundary compared by its two-row band,
 //     and every real stroke difference there still failing. Each fails under the first pass's settings;
+//   - which pixels a picture draws (--drawn-by, §16.5): visible leaves out what is white on both sides
+//     (a white card one engine exports opaque and the other transparent, a shadow's faint edge) and
+//     still counts a visible difference on both sides (an image placeholder against an image with white
+//     margins in a white frame, drawn here and in the fixture run), where ink makes it one of size;
 //   - the offline re-judge (tools/ir-rejudge.mjs): a run audited with --pictures all, judged again from
 //     its folder, reproduces itself root for root, and under another setting matches a live pass under
 //     it; an export the folder does not keep (another scale, the reports of a search's 4x pictures) is
@@ -263,6 +267,7 @@ const rootOf = (res, i) => res.audit.roots.find((e) => e.i === i);
   check(d.maxSide === 800 && d.ink === 191 && d.grossMax === 0.01 && d.meanMax === 5 && d.section === "crop" && d.placeholders === "mask" && d.opacity === "both" &&
     d.sizeTol === 1 && d.tileMeanMax === 0 && d.register === "bounds" && d.registerFitPx === 4 && d.sizeBy === "drawn" && d.drawnAlpha === 16 &&
     d.placeholderExtent === "drawn" && d.glyphNotes === "mask" && d.hairlines === "band" && d.blank === "not-compared" && d.hiddenInSource === "skip" &&
+    d.drawnBy === "alpha" && d.drawnWhiteTol === 16 &&
     Object.keys(AUDIT_SETTINGS).every((f) => AUDIT_SETTINGS[f][2] !== undefined),
     "every policy is a setting with a stated default (" + Object.keys(AUDIT_SETTINGS).length + " settings)");
   let refused = 0;
@@ -401,6 +406,27 @@ const LP = localPixso();
   const m2 = rootOf(tightM, 2);
   check(t2 && t2.ok === false && t2.masks.imagePlaceholders === 1 && /IMAGE_PLACEHOLDER/.test(t2.why) && m2 && m2.ok === true && m2.masks.masked === 2 && m2.metrics.mean === 0,
     "an image the run could not carry differs by default and the root says it holds an IMAGE_PLACEHOLDER; --image-placeholders mask leaves it out", show([t2 && t2.why, m2 && m2.masks]));
+  // Which pixels a picture draws (--drawn-by, §16.5): inside root 2's white frame Figma draws the grey
+  // placeholder where Pixso draws nothing over the frame's white (the toy rasteriser draws no image).
+  // By visible that white counts on Pixso's side, where Figma's is grey, and every root comes out as by
+  // alpha; by ink it does not, and root 2's content difference becomes one of size. Each pass names its
+  // settings, whatever the defaults.
+  const io = { mcp: LP, figmaExport: FIG.exportJob };
+  const byAlpha = await auditOf(GOOD, io, ["--drawn-by", "alpha"]), alphaT = rootOf(await auditOf(GOOD, io, ["--mean-max", "0.1", "--drawn-by", "alpha"]), 2);
+  const unlike = [];
+  let visT = null;
+  for (const t of ["8", "16"]) {
+    const vis = await auditOf(GOOD, io, ["--drawn-by", "visible", "--drawn-white-tol", t]);
+    for (const e of vis.audit.roots) { const c = rootOf(byAlpha, e.i); if (!c || c.ok !== e.ok || c.why !== e.why) unlike.push([t, e.i, e.why]); }
+    const v2 = rootOf(await auditOf(GOOD, io, ["--mean-max", "0.1", "--drawn-by", "visible", "--drawn-white-tol", t]), 2);
+    if (!v2 || !alphaT || v2.why !== alphaT.why) unlike.push([t, 2, v2 && v2.why]);
+    visT = v2;
+  }
+  const ink2 = rootOf(await auditOf(GOOD, io, ["--drawn-by", "ink", "--drawn-white-tol", "8"]), 2);
+  check(unlike.length === 0 && byAlpha.audit.counts.failed === 0 && alphaT && alphaT.ok === false && !/differ in size/.test(alphaT.why) &&
+    ink2 && ink2.ok === false && /differ in size/.test(ink2.why || ""),
+    "by --drawn-by visible (within 8 and 16) every root of the fixture run comes out as by alpha, and root 2 under --mean-max 0.1 fails on its content alone (" +
+    (visT && visT.why) + "); by ink root 2 differs in size (" + (ink2 && ink2.why) + ")", show([unlike, alphaT && alphaT.why, ink2 && [ink2.why, ink2.metrics.drawn]]));
   // A mask that covers the whole root leaves nothing to compare: not compared, never ok.
   const all = await auditOf(GOOD, { mcp: LP, figmaExport: FIG.exportJob }, ["--mask-pad", "1000", "--blank", "compare"]);
   const n2 = rootOf(all, 2);
@@ -992,6 +1018,56 @@ const art = (W, H, rects) => {
     const still = [];
     for (const k of Object.keys(cases)) { const r = (await unit(ir, [0], F, pix(cases[k]))).e(0); if (r.ok !== false) still.push(k + ": " + show([r.ok, r.metrics, r.hairlines])); }
     check(still.length === 0, "the band hides only where the line's ink sits in it: dashes, another colour, a crisp line a row lower and a shorter line all still fail", still.join(" | "));
+  }
+
+  // §16.3, §16.5: which pixels a picture draws (--drawn-by). The second pass failed 4 roots on the size
+  // rule whose pictures agree over white (means 0.47-0.54): a shadow's edge at alpha 16-19 in Figma's
+  // picture and 12-15 in Pixso's, at most 16 levels off white. visible leaves out what is white on both
+  // sides within --drawn-white-tol; alpha counts it; ink leaves out every white pixel, and so makes a
+  // content difference inside a white frame one of size. Each case names its settings, whatever the
+  // defaults.
+  {
+    const ALPHA = ["--drawn-by", "alpha"], VIS = (t) => ["--drawn-by", "visible", "--drawn-white-tol", String(t)], INK = (t) => ["--drawn-by", "ink", "--drawn-white-tol", String(t)];
+    const ir = { nodes: [rec(-1, "FRAME", 100, 40, 0, 0)], values: [], notes: [] }, box = { x: 0, y: 0, width: 100, height: 40 };
+    const text = { box: [12, 13, 50, 27], c: DARK };
+    // A white card (a shade off white, 4 levels): opaque in Figma's picture, transparent in Pixso's.
+    const F = { 0: { img: art(100, 40, [{ box: [0, 0, 100, 40], c: [251, 251, 252] }, text]), box, render: box } }, P = { 0: { img: art(100, 40, [text]), box } };
+    const run = async (args) => (await unit(ir, [0], F, P, args)).e(0);
+    const al = await run(ALPHA), vi = await run(VIS(8)), ink = await run(INK(8)), v2 = await run(VIS(2));
+    check(holds(() => al.ok === false && /differ in size/.test(al.why) && al.metrics.mean < 5 && vi.ok === true && show(vi.metrics.drawn.figma) === show([12, 13, 50, 27]) &&
+      show(vi.metrics.drawn.pixso) === show([12, 13, 50, 27]) && ink.ok === true && v2.ok === false && /differ in size/.test(v2.why)),
+      "a white card Figma exports opaque and Pixso transparent, the pictures alike over white (mean " + val(() => al.metrics.mean) + "), fails on size by alpha; " +
+      "by visible what is white on both sides is drawn by neither and it passes, as by ink; 4 levels off white is white within --drawn-white-tol 8, not 2",
+      show([al.why, vi.metrics, ink.ok, v2.why]));
+    // A shadow's faint edge (the 4 roots): a card 92x32 whose shadow reaches 6 px past it, the outer 4 px
+    // at alpha 17 in Figma's picture (13 levels off white) and 12 in Pixso's, the inner 2 px at 60 in
+    // both. The pictures are the same extent; Figma reports render bounds, Pixso none. The outer edge
+    // drawn at alpha 128 in Figma is a visible difference, and still fails.
+    const ir2 = { nodes: [rec(-1, "FRAME", 92, 32, 0, 0)], values: [], notes: [] }, b2 = { x: 0, y: 0, width: 92, height: 32 }, SH = [60, 70, 110];
+    const card = (outer) => art(104, 44, [[0, 0, 104, 4], [0, 40, 104, 44], [0, 4, 4, 40], [100, 4, 104, 40]].map((q) => ({ box: q, c: SH, a: outer / 255 }))
+      .concat([{ box: [4, 4, 100, 40], c: SH, a: 60 / 255 }, { box: [6, 6, 98, 38], c: [255, 255, 255] }, { box: [18, 19, 56, 33], c: DARK }]));
+    const SF = (outer) => ({ 0: { img: card(outer), box: b2, render: { x: -6, y: -6, width: 104, height: 44 } } }), SP = { 0: { img: card(12), box: b2 } };
+    const sh = async (outer, args) => (await unit(ir2, [0], SF(outer), SP, args)).e(0);
+    const fa = await sh(17, ALPHA), f8 = await sh(17, VIS(8)), f16 = await sh(17, VIS(16)), dv = await sh(128, VIS(16));
+    check(holds(() => fa.ok === false && /differ in size/.test(fa.why) && fa.register.rule.join() === "same extent,same extent" && fa.metrics.mean < 5 &&
+      f8.ok === false && /differ in size/.test(f8.why) && f16.ok === true && show(f16.metrics.drawn.figma) === show([-2, -2, 94, 34]) && show(f16.metrics.drawn.pixso) === show([-2, -2, 94, 34]) &&
+      dv.ok === false && /differ in size/.test(dv.why) && show(dv.metrics.drawn.figma) === show([-6, -6, 98, 38]) && show(dv.metrics.drawn.pixso) === show([-2, -2, 94, 34])),
+      "a shadow whose outer 4 px are at alpha 17 in Figma and 12 in Pixso fails on size by alpha (mean " + val(() => fa.metrics.mean) + "); by visible that edge, 13 levels " +
+      "off white on one side and 9 on the other, is white within --drawn-white-tol 16 and the card passes, not within 8; the edge at alpha 128 in Figma still fails by visible",
+      show([fa.why, f8.why, f16.metrics, dv.why]));
+    // A visible difference counts on both sides, white or not: an image placeholder (grey) in a white
+    // frame against the image, whose white margins are the frame's white. By visible both sides draw the
+    // placeholder's box (Pixso's white margins count where Figma's grey is) and the root fails on its
+    // content alone, as by alpha; by ink Pixso draws only the image, and it is a size difference too.
+    const PF = { 0: { img: art(100, 40, [{ box: [0, 0, 100, 40], c: [255, 255, 255] }, { box: [20, 8, 80, 32], c: [200, 200, 200] }]), box, render: box } };
+    const PP = { 0: { img: art(100, 40, [{ box: [0, 0, 100, 40], c: [255, 255, 255] }, { box: [30, 14, 70, 26], c: BLUE }]), box } };
+    const pr = async (args) => (await unit(ir, [0], PF, PP, args)).e(0);
+    const pa = await pr(ALPHA), pv = await pr(VIS(8)), p32 = await pr(VIS(32)), pi = await pr(INK(8));
+    check(holds(() => pa.ok === false && !/differ in size/.test(pa.why) && /mean difference/.test(pa.why) && pv.why === pa.why && p32.why === pa.why &&
+      show(pv.metrics.drawn.figma) === show([20, 8, 80, 32]) && show(pv.metrics.drawn.pixso) === show([20, 8, 80, 32]) &&
+      pi.ok === false && /differ in size/.test(pi.why) && show(pi.metrics.drawn.pixso) === show([30, 14, 70, 26])),
+      "an image placeholder against an image with white margins in a white frame fails on its content (" + pa.why + ") by alpha and by visible (within 8 and 32), " +
+      "where both sides draw the placeholder's box; by ink it is a size difference too", show([pa.why, pv.metrics.drawn, p32.why, pi.why]));
   }
 }
 
