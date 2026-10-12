@@ -38,7 +38,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { CODE, M2A_SETTINGS, AUDIT_READER_SETTINGS, SETTINGS as IR_SETTINGS, SETTING_DEFAULTS, SETTING_FLAGS, VERSION as IR_VERSION, canonicalJSON, fnv1a64 } from "./ir/schema.mjs";
+import { CODE, M2A_SETTINGS, AUDIT_READER_SETTINGS, SETTINGS as IR_SETTINGS, SETTING_DEFAULTS, SETTING_FLAGS, VERSION as IR_VERSION, canonicalJSON, fnv1a64, headerSetting } from "./ir/schema.mjs";
 import { TASK_SETTINGS, maxTaskChars } from "./ir/task.mjs";
 import { validate } from "./ir/validate.mjs";
 import { assertOutsideRepo } from "./ir/outside-repo.mjs";
@@ -118,7 +118,8 @@ export function adoptIrSettings(o, header) {
   const sc = header && header.scope;
   const fromHeader = { booleans: hs.booleans, spaceEvenlySingle: hs.spaceEvenlySingle, textFit: hs.textFit,
     scope: sc && sc.kind === "pages" && Array.isArray(sc.ids) ? "pages:" + sc.ids.join(",") : sc && sc.kind === "file" ? "file" : undefined };
-  for (const k of READ_SETTINGS) fromHeader[k] = hs[k];
+  // An IR read before the render audit's two settings existed was read with their LATER_SETTINGS values.
+  for (const k of READ_SETTINGS) fromHeader[k] = header ? headerSetting(header, k) : undefined;
   for (const k of Object.keys(READER_FLAGS)) {
     const v = fromHeader[k];
     if (v === undefined) continue;

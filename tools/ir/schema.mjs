@@ -71,7 +71,8 @@ export const SETTINGS = {
 // The thirteen settings M2a adds (docs/M2A.md §3), in the order of that table.
 export const M2A_SETTINGS = ["variantSets", "variantGrammar", "axisOrder", "swapDangling", "swapReset", "swapFallback",
   "swapDefault", "rejectedProps", "defaultAssignments", "overrideMerge", "echo", "instanceOwn", "derivedGeometry"];
-// The reader settings added after the first render audit (docs/M1.md §15.15), read like M2a's.
+// The reader settings added after the first render audit (docs/M1.md §15.15), read like M2a's; an IR
+// read before them is valid without them (LATER_SETTINGS below).
 export const AUDIT_READER_SETTINGS = ["lineDirection", "dashNoGap"];
 export const SETTING_KEYS = Object.keys(SETTINGS).concat(["kitmaps"]);
 export const SETTING_FLAGS = { mode: "--mode", overrides: "--overrides", drift: "--drift", deleted: "--deleted",
@@ -90,6 +91,14 @@ export const SETTING_DEFAULTS = { overrides: "fidelity", drift: "link", deleted:
   variantSets: "parse", variantGrammar: "names", axisOrder: "vocabulary", swapDangling: "skip", swapReset: "on",
   swapFallback: "derived", swapDefault: "layer", rejectedProps: "copy", defaultAssignments: "keep", overrideMerge: "outer",
   echo: "drop", instanceOwn: "overrides", derivedGeometry: "changed", lineDirection: "stored", dashNoGap: "solid", kitmaps: "default" };
+// Settings added to IR version 3 after IRs of it were written (docs/M1.md §15.15): an IR whose header
+// lacks one was read before it existed, with the value given here (LINEs flat, dash patterns as
+// stored), and stays valid. Every IR the reader writes now records them.
+export const LATER_SETTINGS = { lineDirection: "flat", dashNoGap: "keep" };
+export function headerSetting(header, k) {
+  const S = (header && header.settings) || {};
+  return S[k] !== undefined ? S[k] : Object.prototype.hasOwnProperty.call(LATER_SETTINGS, k) ? LATER_SETTINGS[k] : undefined;
+}
 
 // Figma's node types, which the IR speaks. Pixso never produces SLOT, but the Figma Сова kit uses
 // it inside its components, and the matcher and verifier read Figma trees with this same list.
@@ -453,6 +462,7 @@ export function validateIR(ir, options) {
   else {
     closed(S, SETTING_KEYS, "header.settings");
     for (const k of Object.keys(SETTINGS)) {
+      if (S[k] === undefined && Object.prototype.hasOwnProperty.call(LATER_SETTINGS, k)) continue;
       if (SETTINGS[k].indexOf(S[k]) < 0) err("header.settings." + k, (S[k] === undefined ? "missing" : "got " + show(S[k])) + "; must be one of " + SETTINGS[k].join(", ") + " (" + SETTING_FLAGS[k] + ")");
     }
     if (!(isStr(S.kitmaps) && S.kitmaps.length > 0)) err("header.settings.kitmaps", "must be \"default\" or the directory given with --kitmaps; got " + show(S.kitmaps));

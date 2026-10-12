@@ -237,6 +237,10 @@ function propsOf(cx, p, rec, parentNode, internal, drawn) {
   if (n.visible === false) put("visible", false);
   if (n.locked) put("locked", true);
   childLayoutProps(cx, n, put, parentNode, type !== "INSTANCE" && isAutoLayout(cx, n));
+  // Figma drops the turn of a child in a flow, so the builder takes a turned LINE out of it (placePass,
+  // rotPinned), and with it the siblings the flow would move into its slot (flowAbsolute): counted
+  // (0 of the 28 turned LINEs of U and O, all ABSOLUTE or on a canvas, §15.15).
+  if (turned && parentNode && isAutoLayout(cx, parentNode) && props.layoutPositioning !== "ABSOLUTE") cx.stats.lines.inFlow++;
   if (type === "INSTANCE") return;   // a placeholder: its box and child layout only (docs/M1.md D6)
   // The styles it draws, bound (a type that takes none leaves them out).
   for (const k of ["fillStyle", "strokeStyle", "effectStyle"]) if (drawn && drawn[k] !== undefined) put(k, drawn[k]);

@@ -515,17 +515,18 @@ check("a LINE with a height and no stored stroke area runs along its size: turne
   // 20.88 and 240 + 0.2873 * 20.88, is (240, 246): the node's (w, h).
   const r = rec(IDS.lineHeight);
   eq([r.type, r.props.width, r.props.height, r.props.relativeTransform], ["LINE", 20.88, 0, [0.9578, -0.2873, 220, 0.2873, 0.9578, 240]]);
-  eq([notesOf(IDS.lineHeight), stats.lines, ir.header.settings.lineDirection], [[], { alongSize: 1, flat: 0, noStoredArea: 1, subPrecision: 0 }, "stored"]);
+  eq([notesOf(IDS.lineHeight), stats.lines, ir.header.settings.lineDirection], [[], { alongSize: 1, flat: 0, noStoredArea: 1, subPrecision: 0, inFlow: 0 }, "stored"]);
 });
-check("a LINE follows its own stored stroke area; --line-direction size and flat override it; a height under 0.005 is none", () => {
+check("a LINE follows its own stored stroke area; --line-direction size and flat override it; a height under 0.005 is none; a turned one in a flow is counted", () => {
   const line = (edit, settings) => pixToIR(mutated((v, at) => {
     const n = at(IDS.lineHeight);
     if (edit.area) { v.blobs.push({ bytes: encodePath(edit.area) }); n.strokePaddingPath = [Object.assign({}, at(IDS.ring).strokePaddingPath[0], { blobIndex: v.blobs.length - 1 })]; }
     if (edit.size) n.size = edit.size;
     if (edit.transform) n.transform = edit.transform;
+    if (edit.flow) { n.parentIndex = { guid: at(IDS.sides).guid, position: "z" }; if (edit.flow === "absolute") n.autoLayoutAbsolutePos = true; }
   }), { settings });
   const lineOf = (r) => { const p = rec(IDS.lineHeight, r.ir).props; return [p.width, p.height, p.relativeTransform, notesOf(IDS.lineHeight, r.ir).map((n) => n.detail), r.stats.lines]; };
-  const L = (alongSize, flat, noStoredArea, subPrecision) => ({ alongSize, flat, noStoredArea, subPrecision });
+  const L = (alongSize, flat, noStoredArea, subPrecision, inFlow) => ({ alongSize, flat, noStoredArea, subPrecision, inFlow: inFlow || 0 });
   // Pixso's stroke area of the 1 px line along x (flat), and along (20, 6): its middle in y says which.
   const flatArea = [[1, 0, -0.5], [2, 20, -0.5], [2, 20, 0.5], [2, 0, 0.5], [0]];
   const segArea = [[1, 0.14, -0.48], [2, 20.14, 5.52], [2, 19.86, 6.48], [2, -0.14, 0.48], [0]];
@@ -541,6 +542,9 @@ check("a LINE follows its own stored stroke area; --line-direction size and flat
   eq(lineOf(line({ transform: { m00: -1, m01: 0, m02: 220, m10: 0, m11: 1, m12: 240 } })).slice(0, 3), [20.88, 0, [-0.9578, 0.2873, 220, 0.2873, 0.9578, 240]]);
   // 0.001 px of height (U 157, P 88 such LINEs) is under the IR's precision: no turn, no note.
   eq(lineOf(line({ size: { x: 20, y: 0.001 } })), [...flat, [], L(0, 0, 0, 1)]);
+  // A turned LINE that is an AUTO child of a flow (here Sides, a row) is counted: the builder takes it out
+  // of the flow (rotPinned). One ABSOLUTE in a flow, as U's and O's 27 are, and one kept flat are not.
+  eq([line({ flow: "auto" }), line({ flow: "absolute" }), line({ flow: "auto" }, { lineDirection: "flat" })].map((r) => r.stats.lines), [L(1, 0, 1, 0, 1), L(1, 0, 1, 0, 0), L(0, 1, 0, 0, 0)]);
 });
 check("a LINE with height and stored fill geometry is a VECTOR from it", () => {
   const r = pixToIR(mutated((v, at) => { at(IDS.lineHeight).fillGeometry = [{ blobIndex: 14, windingRule: at(IDS.heart).fillGeometry[0].windingRule }]; }));

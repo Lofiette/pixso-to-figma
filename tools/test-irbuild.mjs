@@ -1113,6 +1113,32 @@ check(DOUBLE_FEATURES.layout === true && DOUBLE_FEATURES.text === true, "the dou
     "lines: a LINE turned onto its segment (a quarter turn; a diagonal ABSOLUTE in a flow) is built with the IR's matrix and length, and judged in place",
     JSON.stringify([R.failures, v.width, v.relativeTransform, d.width, d.relativeTransform, d.layoutPositioning, R.counters.rotPinned, J.geometry.worst]));
 }
+{
+  // A turned LINE that is an AUTO child of a flow (none in the data: stats.lines.inFlow, 0 in U and O):
+  // a vertical divider stored Pixso's way, 0.001 x 24, between two cards in a row with 8 px gaps. Figma
+  // drops a flow child's turn, and a LINE has no quarter-turn bake (bakesQuarterTurn: RECTANGLE,
+  // ELLIPSE and FRAME only), so the builder takes it out of the flow with its turn (rotPinned 1), and
+  // the card after it, which the flow would move into the LINE's slot, leaves the flow too to keep its
+  // place (flowAbsolute 1); the card before it stays in the flow.
+  const line = (i, parent, box, p) => rec(i, parent, "LINE", box, painted(Object.assign({ strokes: [SOLID(0.27, 0.33, 0.44)], strokeAlign: "CENTER" }, p || {})));
+  const nodes = [frame(0, -1, [T6(0, 0), 200, 24], { layoutMode: "HORIZONTAL", primaryAxisSizingMode: "FIXED", counterAxisSizingMode: "FIXED", itemSpacing: 8 }),
+    rect(1, 0, [T6(0, 0), 40, 24], { fills: [SOLID(1, 1, 1)] }), line(2, 0, [ROT90(48, 0), 24, 0]), rect(3, 0, [T6(56, 0), 40, 24], { fills: [SOLID(1, 1, 1)] })];
+  const task = mkTask({ nodes });
+  valid("a turned LINE in a flow", task);
+  const E = env();
+  const { R, ctx } = await build(E, task);
+  const vt = Object.assign({}, task, { op: "verify" });
+  const V = await E.IR.ops.verify(E.IR.makeCtx(E.figma, vt, { id: "v" }), vt);
+  const values = []; for (const k of Object.keys(task.values)) values[Number(k)] = task.values[k];
+  const ir = { nodes: task.nodes.map((t) => ({ parent: t.parent, guid: t.guid, type: t.type, name: t.name, props: t.props })), values, notes: [] };
+  const J = judgeTask({ ir, task, build: R, verify: JSON.parse(JSON.stringify(V)) });
+  const l = nodeOf(E, ctx, 2), c = nodeOf(E, ctx, 3);
+  check(R.failures.length === 0 && R.counters.rotPinned === 1 && R.counters.flowAbsolute === 1 && !R.detail.quarterTurnsBaked && l.layoutPositioning === "ABSOLUTE" &&
+    near(l.width, 24, 1e-6) && sameM(flat(l.relativeTransform), ROT90(48, 0)) && sameM(flat(c.relativeTransform), T6(56, 0)) &&
+    c.layoutPositioning === "ABSOLUTE" && nodeOf(E, ctx, 1).layoutPositioning !== "ABSOLUTE" && J.count.ok && J.geometry.visibleOver05 === 0,
+    "lines: a turned LINE in a flow leaves it with its turn (rotPinned 1, no bake), and the card after it leaves too to keep its place (flowAbsolute 1)",
+    JSON.stringify([R.failures, R.counters.rotPinned, R.counters.flowAbsolute, R.detail.quarterTurnsBaked, l.layoutPositioning, l.width, l.relativeTransform, c.relativeTransform, c.layoutPositioning, J.count.ok, J.geometry.visibleOver05, J.geometry.worst]));
+}
 
 console.log("");
 if (failed) { console.log(failed + " IR builder check" + (failed === 1 ? "" : "s") + " failed"); process.exit(1); }

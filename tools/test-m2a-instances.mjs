@@ -260,6 +260,23 @@ check("an override's dash pattern with no gap is solid, as on a node: an echo ov
   same([dashOf(withDash([1, 0])), dashOf(withDash([1, 0], null, { dashNoGap: "keep" })), dashOf(withDash([2, 2]))], ["none", [1, 0], [2, 2]]);
   same([dashOf(withDash([1.5, 0], [4, 2])), dashOf(withDash([1.5, 0], [4, 2], { dashNoGap: "keep" }))], [[], [1.5, 0]]);
 });
+check("an override's size on a LINE carries the turn with the length, as Pixso draws a LINE along its size (lineDirection, docs/M1.md §15.15)", () => {
+  // Planted: Row's Bg made a LINE (200 x 40, no stored stroke area, so the layer is turned onto (200, 40)),
+  // and Entries' [Bg] entries set its size. None of the six local files has such an entry.
+  const withSize = (size, settings) => read(settings, (value) => {
+    const at = (s, l) => value.pixsoNodes.find((n) => n.guid.sessionID === s && n.guid.localID === l);
+    at(5, 404).type = at(5, 408).type;
+    for (const o of at(5, 520).symbolData.symbolOverrides) if (o.guidPath.guids.length === 1 && o.guidPath.guids[0].localID === 404) o.size = size;
+  });
+  const boxOf = (r) => { const o = ovAt(r.ir, M2A.iEntries, P(M2A.rowBg)); return ["width", "height", "relativeTransform"].map((f) => (o && o.fields[f] !== undefined ? o.fields[f] : "-")); };
+  // Flat (a 0.001 px height is none): the length, and the layer's turn undone. The same direction: the
+  // length only, the turn an echo. Upright: a quarter turn.
+  const runs = [withSize({ x: 200, y: 0.001 }), withSize({ x: 100, y: 20 }), withSize({ x: 0.001, y: 40 })];
+  same(runs.map(boxOf), [[200, 0, [1, 0, 0, 0, 1, 0]], [101.98, 0, "-"], [40, 0, [0, -1, 0, 1, 0, 0]]]);
+  truth(runs.every((r) => validate(r.ir).ok), "an IR with a LINE's turned size override does not validate");
+  // Under --line-direction flat neither the layer nor the override is turned.
+  same(boxOf(withSize({ x: 100, y: 20 }, { lineDirection: "flat" })), [100, 0, "-"]);
+});
 check("a bound text's override is kept against the property's effective value (boundConflicts: Entries' and Text styles' titles)", () => {
   same(ovAt(BASE.ir, M2A.iEntries, P(M2A.rowTitle)).fields, { characters: "Override title" });
   same(BASE.stats.m2a.overrides.boundConflicts, 2);

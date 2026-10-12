@@ -131,12 +131,12 @@ export function dashNoGap(dash) {
 
 // A LINE's segment (docs/M1.md D13, §15.15). Pixso draws a LINE from (0, 0) to (size.x, size.y); Figma
 // draws one from (0, 0) to (width, 0). The stored stroke area runs along Pixso's segment on every LINE
-// of U, P and I (470, 97, 18 of them), and the first render audit of U (2026-10-07) drew its one
+// of U, P and N (470, 97, 18 of them), and the first render audit of U (2026-10-07) drew its one
 // vertical LINE (0.001 px wide) at its full height, where the IR had built it 0 long. M's 23 LINEs with a
 // height and 14 of O's 27 store an area that runs flat along x instead (O's other 13 along the segment),
 // and what Pixso draws for those is not measured. lineDirection "stored" follows each LINE's own area
 // (with none, the segment, as drawn in U); "size" always takes the segment; "flat" drops the height, as
-// M1 was first built. A height that rounds to 0 at the IR's two decimals (U 157, O 46, M 44, P 88, I 1:
+// M1 was first built. A height that rounds to 0 at the IR's two decimals (U 157, O 46, M 44, P 88, N 1:
 // 0.001 px) is no height.
 // Returns null for a LINE drawn along its width, else { flat: true, why } or { width, transform }: the
 // LINE's length and its matrix turned onto the segment, both at the IR's precision. Counted in

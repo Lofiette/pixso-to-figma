@@ -140,7 +140,9 @@ second source the planner may use beside a `.pix` (missing images, renders), and
 the planner checks that the open file is the `.pix` (root name, page guids, a sample of node guids) before it uses
 it, and records the outcome in its own state (`docs/M1.md` D9, SOURCE_IDENTITY_MISMATCH).
 
-**`settings`.** Every policy in REWRITE.md §11, plus the mode; all keys are required.
+**`settings`.** Every policy in REWRITE.md §11, plus the mode; all keys are required, except the later ones
+(`LATER_SETTINGS`): `lineDirection` and `dashNoGap`, which an IR read before them (2026-10-07) lacks and was read as
+`flat` and `keep`.
 
 | key | values | flag | owner's default |
 |---|---|---|---|
@@ -171,7 +173,8 @@ it, and records the outcome in its own state (`docs/M1.md` D9, SOURCE_IDENTITY_M
 
 `SETTING_DEFAULTS` in the schema holds the defaults of this table, `M2A_SETTINGS` lists the thirteen keys version
 3 added (the D-numbers in those rows are `docs/M2A.md`'s), and `AUDIT_READER_SETTINGS` the two the first render
-audit added within version 3 (an IR read before them lacks them and is refused, as any IR missing a setting).
+audit added within version 3. `headerSetting(header, key)` gives a header's value, and a later setting's
+`LATER_SETTINGS` value where the header lacks it: `pix-run --from-ir` and `m2a-accept`'s second read take it so.
 
 ## 5. Pages
 
@@ -417,15 +420,16 @@ one note per instance and class), including one whose only effect is to remove a
 detached or naming none, `maxLines` cleared) when no written field carries the removal (`no-equivalent`). Entries of one path are merged into one (`OVERRIDE_PATHS_MERGED`); an assignment
 that cannot be reached is a `STALE_ASSIGNMENT`, and a swap value naming nothing the IR can reference a
 `SWAP_VALUE_DANGLING`. Size, position, rotation and constraint fields stay in the IR even though Figma cannot apply
-them to instance sublayers (REWRITE.md §9, P13). One entry per path. A note about an entry names the instance by
-`node` and the entry by `path`, `[]` for the instance's own override.
+them to instance sublayers (REWRITE.md §9, P13). A `size` on a LINE also yields `relativeTransform`: Pixso draws a
+LINE along its size, so the length goes with its turn (`lineDirection`, `docs/M1.md` §15.15). One entry per path. A
+note about an entry names the instance by `node` and the entry by `path`, `[]` for the instance's own override.
 
 **Derived entries** are Pixso's resolved boxes as stored, **sparse**: `size` and `transform` only where Pixso stores
 them (absent means the master layer's, I), `lines` from the sublayer's stored baselines, `oracleSides` from its
 stroke-area path (the side oracle of D15, inside instances), `fillGeometry` and `strokeGeometry` (values indexes of
 lists, as on nodes) under `derivedGeometry` (`changed`: only where they differ from the target layer's own). `path`
 is never `[]`, `at` is as on overrides, every entry carries at least one key besides `path` and `at`, and there is
-one entry per path.
+one entry per path. A LINE's `size` and `transform` are as stored, not turned as its record is (`lineDirection`).
 
 ## 10. Styles
 

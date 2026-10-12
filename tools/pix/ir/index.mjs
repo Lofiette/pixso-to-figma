@@ -44,7 +44,7 @@
 //                    stateGroupsInternal, lostBorder }   (IR indices; tools/pix/ir/populations.mjs)
 //     populationCounts, records, nonInstance, instances, vectors, text, spaceEvenly, strokeAlignDecided,
 //     cornerRadiusOnly, lostBorderSections, counterFillKeptFixed, thinStrokes, staleBooleans,
-//     lines: { alongSize, flat, noStoredArea, subPrecision } and dashNoGap (tools/pix/ir/strokes.mjs),
+//     lines: { alongSize, flat, noStoredArea, subPrecision, inFlow } and dashNoGap (tools/pix/ir/strokes.mjs),
 //     styles: { fill | stroke | effect: { same, styleWins, missing, noValue } } (tools/pix/ir/styles.mjs),
 //     m2a: newM2aStats() below, filled by parts A-C (docs/M2A.md §6) }
 //   ms also holds m2a: { families, props, resolve, instances }, the M2a phases inside ms.ir.
@@ -122,7 +122,7 @@ function newStats() {
     vectors: { networks: 0, fromNetwork: 0, fromGeometry: 0, loopsClosed: 0, loopsDropped: 0, regionFills: 0, vertexRadiusZero: 0, classes: { "region-no-fill": 0, "network-bounds": 0, winding: 0 } },
     text: { fontFromStyle: 0, rawLineHeight: 0, percentOneAuto: 0, styleValueOverridden: 0, trailingBaseStyleIds: 0 },
     spaceEvenly: { between: 0, single: 0 }, strokeAlignDecided: {}, cornerRadiusOnly: {}, lostBorderSections: 0, counterFillKeptFixed: 0, thinStrokes: 0, staleBooleans: 0,
-    lines: { alongSize: 0, flat: 0, noStoredArea: 0, subPrecision: 0 }, dashNoGap: 0,
+    lines: { alongSize: 0, flat: 0, noStoredArea: 0, subPrecision: 0, inFlow: 0 }, dashNoGap: 0,
     styles: { fill: style0(), stroke: style0(), effect: style0() },
     m2a: newM2aStats(),
   };

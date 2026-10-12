@@ -64,6 +64,7 @@
 // reference, inheritGridStyleID is dropped "no-equivalent" (M1 carries no layout grids), and of the
 // child-sizing fields M1 writes layoutGrow from the primary one and layoutAlign from the counter one
 // (part C's request, applied by part E). width and height are one setter: when either differs, neither is an echo (so min and max).
+// A size on a LINE target also yields relativeTransform, the turn Pixso's size gives it (LINE_SIZE, docs/M1.md §15.15).
 // A style a written field binds is registered through styles.mjs with the note's path (STYLE_VALUE_DIFFERS,
 // STYLE_MISSING_IN_SOURCE); fonts and images the written values use join the IR's through cx. A Pixso
 // feature Figma lacks that only the override brings is counted in stats.unsupported and noted
@@ -97,6 +98,11 @@ const T = (to, by) => Object.freeze({ fate: "translate", to: Object.freeze(to), 
 const C = (by) => Object.freeze({ fate: "consume", by });
 const D = (why) => Object.freeze({ fate: "drop", why });
 const SIDES = ["strokeWeight", "strokeWeights"], CORNERS = ["cornerRadius", "cornerRadii"];
+// Pixso draws a LINE from (0, 0) to its size (docs/M1.md §15.15), so on a LINE target a size also turns
+// it: translate carries the composed turn as relativeTransform beside the length, never a length
+// without its direction (an echo where the direction is the layer's). No override in the six local
+// files sets a LINE's size.
+const LINE_SIZE = ["width", "height", "relativeTransform"];
 const FONT_VARIANT = "a font variant Figma's text API does not set (M1: SOURCE_FEATURE_UNSUPPORTED on nodes)";
 const OT = "OpenType features (M1: SOURCE_FEATURE_UNSUPPORTED on nodes)";
 
@@ -678,7 +684,7 @@ export function instanceData(cx, n, i, master, indexOf) {
       if (f.fate === "drop") { drop("no-equivalent", k); continue; }
       if (spec.notCarried) { drop("layer-not-carried", k); continue; }
       if (spec.isRoot && BOX_SET.has(k)) { rootBox(k, spec.fields[k]); continue; }
-      const tos = f.to.filter((t) => spec.allowed.has(t));
+      const tos = (k === "size" && spec.base.type === "LINE" ? LINE_SIZE : f.to).filter((t) => spec.allowed.has(t));
       if (!tos.length) { drop("not-on-type", k); continue; }
       L.translated++;
       for (const t of tos) set.add(t);

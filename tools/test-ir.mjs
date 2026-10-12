@@ -415,7 +415,10 @@ if (example) {
 
 // ---------- version 3: settings, overrides, derived entries, instances, preferred values, notes (docs/M2A.md §5.1) ----------
 for (const k of schema.M2A_SETTINGS.concat(schema.AUDIT_READER_SETTINGS)) {
-  expectError("the " + k + " setting missing", mut(minimal, (ir) => { delete ir.header.settings[k]; }), "header.settings." + k, true);
+  // A setting added after IRs of version 3 were written (LATER_SETTINGS) may be absent: that IR was read
+  // before it existed. Every other one is required.
+  if (Object.prototype.hasOwnProperty.call(schema.LATER_SETTINGS, k)) expectValid("the " + k + " setting missing (an IR read before it)", mut(minimal, (ir) => { delete ir.header.settings[k]; }));
+  else expectError("the " + k + " setting missing", mut(minimal, (ir) => { delete ir.header.settings[k]; }), "header.settings." + k, true);
   expectError("the " + k + " setting outside its enum", mut(minimal, (ir) => { ir.header.settings[k] = "sometimes"; }), "header.settings." + k, true);
   for (const v of schema.SETTINGS[k]) if (v !== schema.SETTING_DEFAULTS[k]) expectValid("the " + k + " setting " + v, mut(minimal, (ir) => { ir.header.settings[k] = v; }));
 }
@@ -428,8 +431,14 @@ for (const k of schema.M2A_SETTINGS.concat(schema.AUDIT_READER_SETTINGS)) {
   // docs/M1.md §15.15: the two reader settings of the first render audit, defaulting to what Pixso's stored
   // stroke area shows.
   if (S.SETTING_DEFAULTS.lineDirection !== "stored" || S.SETTING_DEFAULTS.dashNoGap !== "solid") bad.push("lineDirection and dashNoGap do not default to stored and solid");
+  // An IR read before them was read with LINEs flat and dash patterns as stored, and headerSetting says so.
+  const old = { settings: { textFit: "widen" } }, now = { settings: { lineDirection: "size", dashNoGap: "solid" } };
+  if (S.LATER_SETTINGS.lineDirection !== "flat" || S.LATER_SETTINGS.dashNoGap !== "keep" || S.headerSetting(old, "lineDirection") !== "flat" || S.headerSetting(old, "dashNoGap") !== "keep" ||
+    S.headerSetting(now, "lineDirection") !== "size" || S.headerSetting(now, "dashNoGap") !== "solid" || S.headerSetting(old, "textFit") !== "widen" || S.headerSetting(old, "booleans") !== undefined)
+    bad.push("LATER_SETTINGS or headerSetting: an IR read before lineDirection and dashNoGap does not read as flat and keep");
+  for (const k of Object.keys(S.LATER_SETTINGS)) if (!S.SETTINGS[k] || S.SETTINGS[k].indexOf(S.LATER_SETTINGS[k]) < 0) bad.push(k + "'s later value is none of its values");
   if (bad.length) bad.forEach((b) => fail("settings: " + b));
-  else ok("settings: the thirteen M2a settings and the render audit's two each have values, a default and a flag of their own");
+  else ok("settings: the thirteen M2a settings and the render audit's two each have values, a default and a flag of their own; an IR read before the two reads them as flat and keep");
 }
 if (example) {
   const OV = (ir) => ir.nodes[1].instance.overrides;

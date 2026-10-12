@@ -28,6 +28,7 @@ import { REPO_ROOT } from "./ir/outside-repo.mjs";
 import { fakePixso } from "./test/fake-pixso.mjs";
 import { adoptIrSettings, parseArgs, SETTINGS as RUN_SETTINGS } from "./pix-run.mjs";
 import { accept, legacyLostBorders } from "./m1-accept.mjs";
+import { readerSettingsOf as irReaderSettings } from "./m2a-accept.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 let failed = 0, passed = 0;
@@ -769,6 +770,14 @@ function pixRunGroup() {
     check(why === null && a.textFit === "source-box" && a.booleans === "flatten" && a.spaceEvenlySingle === "center" && a.scope === "pages:0:4" &&
       /--text-fit widen contradicts the IR, which was read with source-box/.test(adoptIrSettings(b, header)) && adoptIrSettings(c, header) === null,
       "--from-ir takes booleans, spaceEvenlySingle, textFit and scope from the IR header, and refuses a flag that contradicts it");
+    // docs/M1.md §15.15: an IR read before lineDirection and dashNoGap existed (this header has neither) was
+    // read with LINEs flat and dash patterns as stored (schema.LATER_SETTINGS); --from-ir and m2a-accept's
+    // second read (G8) take it so.
+    const d = parseArgs(["--from-ir", "x.json", "--line-direction", "stored"]);
+    const g8 = irReaderSettings(header);
+    check(a.lineDirection === "flat" && a.dashNoGap === "keep" && /--line-direction stored contradicts the IR, which was read with flat/.test(adoptIrSettings(d, header) || "") &&
+      g8.lineDirection === "flat" && g8.dashNoGap === "keep",
+      "--from-ir and m2a-accept take an IR header without lineDirection and dashNoGap as flat and keep, and refuse a flag that contradicts it");
     const flat = JSON.parse(JSON.stringify(S.ir)); flat.header.settings.textFit = "source-box"; flat.header.settings.booleans = "flatten";
     writeFileSync(join(src, "ir-flat.json"), JSON.stringify(flat));
     let out = "", code = 0;
