@@ -58,10 +58,10 @@
 // - what each picture draws (outside the masks, at an alpha of --drawn-alpha or more) whose edges are
 //   further apart than --size-tol node units is a difference in itself (a wrapped line shows that way,
 //   whatever the colours); --size-by picture compares the pictures' sizes instead, as the first pass did.
-//   --drawn-by alpha (default) counts every such pixel; visible leaves out a pixel that is white (every
-//   channel within --drawn-white-tol of 255, over white) where the other picture, registered, is white
-//   too, so white on white and a faint edge are drawn by neither while a visible difference counts on
-//   both sides; ink leaves out every white pixel (§16.5);
+//   --drawn-by visible (default, §16.6) leaves out a pixel that is white (every channel within
+//   --drawn-white-tol 16 of 255, over white) where the other picture, registered, is white too, so white
+//   on white and a shadow's faint edge are drawn by neither while a visible difference counts on both
+//   sides; alpha counts every such pixel (§16.2's rule); ink leaves out every white pixel (§16.5);
 // - "ink on one side" is a channel differing by more than --ink (191 of 255); its share is held to
 //   --gross-max, the mean difference to --mean-max (a low-contrast defect moves the mean, not the
 //   share), and the worst tile's mean to --tile-mean-max when that is above 0.
@@ -87,7 +87,7 @@ export const AUDIT_SETTINGS = {
   "--size-tol": ["sizeTol", num(0, 100000), 1, true],
   "--size-by": ["sizeBy", ["drawn", "picture"], "drawn", true],
   "--drawn-alpha": ["drawnAlpha", int(1, 255), 16, true],
-  "--drawn-by": ["drawnBy", ["alpha", "visible", "ink"], "alpha", true],
+  "--drawn-by": ["drawnBy", ["visible", "alpha", "ink"], "visible", true],
   "--drawn-white-tol": ["drawnWhiteTol", int(0, 254), 16, true],
   "--register": ["register", ["bounds", "top-left"], "bounds", true],
   "--register-fit-px": ["registerFitPx", num(0, 64), 4, true],
@@ -116,6 +116,12 @@ export function defaultAuditSettings() {
   for (const f of Object.keys(AUDIT_SETTINGS)) o[AUDIT_SETTINGS[f][0]] = AUDIT_SETTINGS[f][2];
   return o;
 }
+
+// key -> the value that gives the rule the audit followed before the setting existed, where that is not
+// the default: an audit recorded then (its settings do not name the key) was judged by it, and
+// tools/ir-rejudge.mjs takes it for that audit. drawnBy: alpha (§16.2's rule) until §16.6 made visible
+// the default; U's pass of 2026-10-12 names neither drawnBy nor drawnWhiteTol.
+export const SETTINGS_BEFORE = { drawnBy: "alpha" };
 
 // The settings a root's result depends on, hashed: a root kept from an earlier pass is reused only when
 // this, the snapshot and the runId are the same.
@@ -629,25 +635,30 @@ export function downsample(img, k, p) {
 // fractional offset spreads by a pixel), or null when it draws nothing there. The faintest fringe is
 // left out: of the 28 595 pixels at alpha 1-15 in Figma's half of the 435 same-size pairs the U audit
 // kept, 2 419 are transparent in Pixso's (its indexed PNGs), and an edge should not move on that.
-// Which of those pixels count (--drawn-by, §16.5):
-// - alpha: all of them;
-// - visible: not one that is white (each channel over white within --drawn-white-tol of 255) where the
-//   other side `other`, registered, is white too: every pixel of it the place overlaps (one, or two or
-//   four at a fractional offset) white over white, a pixel outside it or under its masks white. Every
-//   pixel it overlaps rather than a blend of them, so the test is the same seen from either side: where
-//   one side is visibly not white, the other's pixels over it count, and both edges reach it within a
-//   pixel. Under its masks white, because what the masks leave out is not compared: at a fractional
-//   offset a mask's edge falls a pixel apart on the two sides, and on the U pass an instance Pixso
-//   draws under its mask made Figma's empty frame beside it count (3 roots failed on that). The
-//   comparison is over white, so what is white on both sides is drawn by neither as far as it can
-//   tell (the second pass's 4 roots, §16.3: a shadow's edge at alpha 16-19 on one side and 12-15 on
-//   the other, at most 16 levels off white), while a pixel where the two differ visibly counts on
+// Which of those pixels count (--drawn-by, §16.5, §16.6):
+// - visible (the default): not one that is white (each channel over white within --drawn-white-tol of
+//   255) where the other side `other`, registered, is white too: every pixel of it the place overlaps
+//   (one, or two or four at a fractional offset) white over white, a pixel outside it or under its
+//   masks white. Every pixel it overlaps rather than a blend of them, so the test is the same seen from
+//   either side: where one side is visibly not white, the other's pixels over it count, and both edges
+//   reach it within a pixel. Under its masks white, because what the masks leave out is not compared:
+//   at a fractional offset a mask's edge falls a pixel apart on the two sides, and on the U pass an
+//   instance Pixso draws under its mask made Figma's empty frame beside it count (3 roots failed on
+//   that). The comparison is over white, so what is white on both sides is drawn by neither as far as
+//   it can tell (the second pass's 4 roots, §16.3: a shadow's edge at alpha 16-19 on one side and 12-15
+//   on the other, at most 16 levels off white), while a pixel where the two differ visibly counts on
 //   both sides, white or not (an image placeholder against an image with white margins inside a white
-//   frame stays a difference of content, not of size);
+//   frame stays a difference of content, not of size). Calibrated on every root of U's second pass
+//   (§16.6): within 12 to 48 exactly those 4 roots pass and no other verdict moves, below 12 none of
+//   them, and within 64 also the 2 counters whose figures Pixso sets 3 px wider (their last column
+//   about 30 levels off white). 16 is --drawn-alpha's floor (black at alpha 16 is 16 levels off white),
+//   and there the 4 roots' edges drop out whole rather than agree within a pixel;
+// - alpha: all of them (§16.2's rule, the default until §16.6; settings that do not name drawnBy were
+//   made before visible existed, SETTINGS_BEFORE);
 // - ink: not one that is white, whatever the other holds (tried and dropped on the second pass: that
 //   case becomes a size difference).
 function drawnOf(sd, other, S) {
-  const lo = (S.drawnAlpha || 1) / 255, by = S.drawnBy || "alpha", wl = 255 - (S.drawnWhiteTol || 0) - EPS;
+  const lo = (S.drawnAlpha || 1) / 255, by = S.drawnBy || SETTINGS_BEFORE.drawnBy, wl = 255 - (S.drawnWhiteTol || 0) - EPS;
   const white = (rgb, k) => rgb[k] >= wl && rgb[k + 1] >= wl && rgb[k + 2] >= wl;
   // visible: per own column and row, the first pixel of the other side it overlaps and whether it
   // overlaps the next one too.

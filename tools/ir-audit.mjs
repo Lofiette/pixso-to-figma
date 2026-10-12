@@ -3,7 +3,7 @@
 //
 //   node tools/ir-audit.mjs <runDir> [--max-side 800] [--max-scale 1] [--ink 191] [--gross-max 0.01]
 //     [--mean-max 5] [--tile 32] [--tile-mean-max 0] [--size-tol 1] [--size-by drawn|picture] [--drawn-alpha 16]
-//     [--drawn-by alpha|visible|ink] [--drawn-white-tol 16]
+//     [--drawn-by visible|alpha|ink] [--drawn-white-tol 16]
 //     [--register bounds|top-left] [--register-fit-px 4] [--register-supersample 4] [--supersample-max-side 1600]
 //     [--section crop|children|none]
 //     [--placeholders mask|compare] [--placeholder-extent drawn|box] [--mask-pad 2] [--image-placeholders compare|mask]

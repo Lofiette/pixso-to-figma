@@ -42,10 +42,14 @@
 //     (a white card one engine exports opaque and the other transparent, a shadow's faint edge) and
 //     still counts a visible difference on both sides (an image placeholder against an image with white
 //     margins in a white frame, drawn here and in the fixture run), where ink makes it one of size;
+//     visible within 16 is the default (§16.6): with no flag the shadow's edge passes and a counter whose
+//     figures Pixso sets 3 px wider still fails, which within 64 it no longer does; a pass under the
+//     defaults reuses nothing from a pass by alpha;
 //   - the offline re-judge (tools/ir-rejudge.mjs): a run audited with --pictures all, judged again from
 //     its folder, reproduces itself root for root, and under another setting matches a live pass under
 //     it; an export the folder does not keep (another scale, the reports of a search's 4x pictures) is
-//     refused or named, and its root set apart.
+//     refused or named, and its root set apart; an audit recorded before --drawn-by is judged by alpha,
+//     the rule it ran, not by today's default.
 // Everything is synthetic, and everything written goes to the system's temporary folder.
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -267,7 +271,7 @@ const rootOf = (res, i) => res.audit.roots.find((e) => e.i === i);
   check(d.maxSide === 800 && d.ink === 191 && d.grossMax === 0.01 && d.meanMax === 5 && d.section === "crop" && d.placeholders === "mask" && d.opacity === "both" &&
     d.sizeTol === 1 && d.tileMeanMax === 0 && d.register === "bounds" && d.registerFitPx === 4 && d.sizeBy === "drawn" && d.drawnAlpha === 16 &&
     d.placeholderExtent === "drawn" && d.glyphNotes === "mask" && d.hairlines === "band" && d.blank === "not-compared" && d.hiddenInSource === "skip" &&
-    d.drawnBy === "alpha" && d.drawnWhiteTol === 16 &&
+    d.drawnBy === "visible" && d.drawnWhiteTol === 16 &&
     Object.keys(AUDIT_SETTINGS).every((f) => AUDIT_SETTINGS[f][2] !== undefined),
     "every policy is a setting with a stated default (" + Object.keys(AUDIT_SETTINGS).length + " settings)");
   let refused = 0;
@@ -560,6 +564,14 @@ const LP = localPixso();
   const n2 = FIG.calls();
   const other = await auditFolder(GOOD.runDir, parseAuditArgs([GOOD.runDir, "--mean-max", "4"]), { mcp: LP, figmaExport: FIG.exportJob, log: qlog });
   check(other.code === 2 && FIG.calls() - n2 === other.audit.counts.roots, "a pass under another threshold renders every root again");
+  // §16.6 changed the default rule of what a picture draws (alpha to visible), and with it every root's
+  // key: a pass under the defaults keeps nothing from a pass made by --drawn-by alpha.
+  await auditFolder(GOOD.runDir, parseAuditArgs([GOOD.runDir, "--drawn-by", "alpha"]), { mcp: LP, figmaExport: FIG.exportJob, log: qlog });
+  const n3 = FIG.calls();
+  const byDefault = await auditFolder(GOOD.runDir, o, { mcp: LP, figmaExport: FIG.exportJob, log: qlog });
+  check(byDefault.code === 2 && byDefault.audit && FIG.calls() - n3 === byDefault.audit.counts.roots && byDefault.audit.settings.drawnBy === "visible",
+    "a pass under the defaults (--drawn-by visible) renders every root again after a pass by --drawn-by alpha, the default before §16.6 (" +
+    (FIG.calls() - n3) + " of " + (byDefault.audit ? byDefault.audit.counts.roots : "?") + " rendered)");
 
   const r = rootOf(CLEAN, 19);
   const wrong = await FIG.exportJob({ op: "export", id: r.figma.id, src: r.guid, snap: "0".repeat(16), constraint: { type: "SCALE", value: 1 } });
@@ -1068,6 +1080,25 @@ const art = (W, H, rects) => {
       pi.ok === false && /differ in size/.test(pi.why) && show(pi.metrics.drawn.pixso) === show([30, 14, 70, 26])),
       "an image placeholder against an image with white margins in a white frame fails on its content (" + pa.why + ") by alpha and by visible (within 8 and 32), " +
       "where both sides draw the placeholder's box; by ink it is a size difference too", show([pa.why, pv.metrics.drawn, p32.why, pi.why]));
+    // §16.6: visible within 16 is the default, calibrated on U's second pass, where 12 to 48 pass the 4
+    // roots and move no other verdict while 64 also passes 2 counters whose figures Pixso sets 3 px wider
+    // (C04). A counter like those: three 2 px strokes, Pixso's second 1 px and third 2 px further right
+    // and a last column 30 levels off white (black at alpha 30), so what it draws ends 3 px further
+    // right; the strokes are grey, so neither ink on one side nor the mean sees it. With no flag the
+    // shadow's edge and the white card pass and the counter fails on size alone; within 64 its last
+    // column is white over white, its edges 2 px apart, and it passes.
+    const ir3 = { nodes: [rec(-1, "FRAME", 200, 14, 0, 0)], values: [], notes: [] }, b3 = { x: 0, y: 0, width: 200, height: 14 }, GREY = [135, 135, 135];
+    const stroke = (x) => ({ box: [x, 3, x + 2, 14], c: GREY });
+    const KF = { 0: { img: art(200, 14, [stroke(10), stroke(20), stroke(30)]), box: b3, render: b3 } };
+    const KP = { 0: { img: art(200, 14, [stroke(10), stroke(21), stroke(32), { box: [34, 3, 35, 14], c: [0, 0, 0], a: 30 / 255 }]), box: b3 } };
+    const ct = async (args) => (await unit(ir3, [0], KF, KP, args)).e(0);
+    const dS = await sh(17, []), dW = await run([]), dC = await ct([]), c64 = await ct(VIS(64)), cA = await ct(ALPHA);
+    check(holds(() => dS.ok === true && dW.ok === true && dC.ok === false && /differ in size/.test(dC.why) && !/ink on one side|mean difference/.test(dC.why) &&
+      show(dC.metrics.drawn.figma) === show([10, 3, 32, 14]) && show(dC.metrics.drawn.pixso) === show([10, 3, 35, 14]) && dC.metrics.gross === 0 && dC.metrics.mean < 5 &&
+      c64.ok === true && show(c64.metrics.drawn.pixso) === show([10, 3, 34, 14]) && cA.ok === false && cA.why === dC.why),
+      "by default (visible within 16) the shadow's faint edge and the white card pass, and a counter whose figures Pixso sets 3 px wider fails on size alone, as by alpha " +
+      "(mean " + val(() => dC.metrics.mean) + "); within 64 its last column, 30 levels off white, is left out and it passes",
+      show([dS.why, dW.why, dC.why, val(() => dC.metrics), c64.why, val(() => c64.metrics.drawn)]));
   }
 }
 
@@ -1108,6 +1139,25 @@ const art = (W, H, rects) => {
   const refusedFlag = await rejudgeMain([GOOD.runDir, "--fresh"], (m) => lines.push(m));
   check(code === 0 && refusedFlag === 1 && lines.some((l) => /^changed against the recorded pass: 0 roots/.test(l)),
     "the command re-judges the folder (--check exit 0: nothing changed) and refuses the live audit's own flags", lines.join(" | "));
+  // An audit recorded before --drawn-by existed (U's pass of §16.3 names neither drawnBy nor
+  // drawnWhiteTol) was judged by alpha: re-judged with no setting given it is judged by alpha again and
+  // reproduces itself, where today's default visible (§16.6), given, moves the drawn extents of the
+  // roots whose white frame it leaves out; the command says what it took.
+  const byA = await auditOf(GOOD, { mcp: LP, figmaExport: FIG.exportJob }, ["--pictures", "all", "--drawn-by", "alpha"]);
+  const legacy = JSON.parse(JSON.stringify(byA.audit));
+  delete legacy.settings.drawnBy; delete legacy.settings.drawnWhiteTol;
+  writeFileSync(join(GOOD.runDir, "audit", "audit.json"), JSON.stringify(legacy));
+  const ls = rejudgeSettings(legacy, {});
+  const llines = [];
+  const lcode = await rejudgeMain([GOOD.runDir, "--check"], (m) => llines.push(m));
+  const asNow = await rejudge(GOOD.runDir, { settings: rejudgeSettings(legacy, { drawnBy: "visible" }).settings });
+  check(holds(() => rec.audit.settings.drawnBy === "visible" && ls.settings.drawnBy === "alpha" && ls.missing.join() === "drawnBy,drawnWhiteTol" && lcode === 0 &&
+    llines.some((l) => /^settings: the recorded pass's own; not in the recorded settings \(the rule before them, else the default\): drawnBy "alpha", drawnWhiteTol 16$/.test(l)) &&
+    llines.some((l) => /^changed against the recorded pass: 0 roots/.test(l)) &&
+    asNow.audit.settings.drawnBy === "visible" && asNow.diff.length > 0 && asNow.diff.every((x) => x.fields.join() === "metrics")),
+    "an audit recorded before --drawn-by is re-judged by alpha, the rule it ran, and reproduces itself (--check exit " + lcode + "), not by the default visible (a pass now " +
+    "records " + rec.audit.settings.drawnBy + "), which moves the drawn extents of " + asNow.diff.length + " roots; the command names what it took",
+    show([llines.slice(1, 2), asNow.diff.slice(0, 3)]));
 
   // A root searched on pictures at 4x (an arrow connector, as C20 of section 10): the folder keeps the
   // 4x pair and its sizes, not the reports that came with it.

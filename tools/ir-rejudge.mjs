@@ -13,7 +13,9 @@
 //
 // A setting not given is the recorded pass's own (audit.json's settings), so with no setting at all
 // the re-judge is the recorded pass again, and every root must come out as it did (--check: exit 3
-// when a root that is not apart does not). A setting the recorded pass did not have takes its default.
+// when a root that is not apart does not). A setting the recorded pass did not have was added after it:
+// it takes the value that gives the rule the audit followed before (render-audit's SETTINGS_BEFORE:
+// --drawn-by alpha, which visible replaced as the default in docs/M1.md §16.6), else its default.
 //
 // What the folder answers, and what it does not (each request the stubs refuse is named in the
 // root's why, and the root is "apart": its result is not what a live pass under those settings would
@@ -44,7 +46,7 @@ import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertOutsideRepo } from "./ir/outside-repo.mjs";
-import { AUDIT_SETTINGS, auditRun, defaultAuditSettings, guidIndex, parseAuditArgs } from "./ir/render-audit.mjs";
+import { AUDIT_SETTINGS, SETTINGS_BEFORE, auditRun, defaultAuditSettings, guidIndex, parseAuditArgs } from "./ir/render-audit.mjs";
 import { canonicalJSON } from "./ir/schema.mjs";
 import { readRun } from "./ir-audit.mjs";
 
@@ -210,13 +212,16 @@ export function compareAudits(a, b, opts) {
 }
 
 // The settings of a re-judge: the recorded pass's, with the given ones over them (a key the recorded
-// pass did not have takes its default). given: { key: value } (parseAuditArgs's settings, its given).
+// pass did not have takes the value of the rule before the setting, SETTINGS_BEFORE, else its default).
+// given: { key: value } (parseAuditArgs's settings, its given). missing: the keys the recorded pass did
+// not have.
 export function rejudgeSettings(recorded, given) {
   const S = defaultAuditSettings(), from = recorded && recorded.settings ? recorded.settings : {};
   const missing = [];
   for (const f of Object.keys(AUDIT_SETTINGS)) {
     const key = AUDIT_SETTINGS[f][0];
-    if (from[key] !== undefined) S[key] = from[key]; else missing.push(key);
+    if (from[key] !== undefined) S[key] = from[key];
+    else { missing.push(key); if (SETTINGS_BEFORE[key] !== undefined) S[key] = SETTINGS_BEFORE[key]; }
   }
   for (const key of Object.keys(given || {})) S[key] = given[key];
   return { settings: S, missing };
@@ -286,8 +291,10 @@ export async function main(argv, log) {
   const C = audit.counts, R = recorded.counts || {};
   const changed = Object.keys(o.given).filter((k) => canonicalJSON(o.given[k]) !== canonicalJSON(recorded.settings ? recorded.settings[k] : undefined));
   say("RE-JUDGE  " + String(audit.snapshot).slice(0, 16) + "…  run " + audit.runId + "  (the audit of " + (recorded.made || "?") + ", pictures " + (recorded.settings ? recorded.settings.pictures : "?") + ")");
+  // A key the recorded pass did not have and the command did not give: the value taken for it.
+  const taken = missing.filter((k) => !Object.prototype.hasOwnProperty.call(o.given, k));
   say("settings: " + (changed.length ? changed.map((k) => k + " " + JSON.stringify(recorded.settings ? recorded.settings[k] : undefined) + " -> " + JSON.stringify(settings[k])).join(", ") : "the recorded pass's own") +
-    (missing.length ? "; not in the recorded settings (defaults taken): " + missing.join(", ") : ""));
+    (taken.length ? "; not in the recorded settings (the rule before them, else the default): " + taken.map((k) => k + " " + JSON.stringify(settings[k])).join(", ") : ""));
   say("roots: " + C.roots + "; ok " + C.ok + ", not ok " + C.failed + ", not compared " + C.notCompared + "   (recorded: ok " + R.ok + ", not ok " + R.failed + ", not compared " + R.notCompared + ")");
   const fineN = apart.filter((x) => x.fine && !x.refused.length).length, refusedN = apart.filter((x) => x.refused.length).length;
   say("apart: " + apart.length + " (finer pictures answered with the reports at the export's scale " + fineN + ", a request the folder does not keep " + refusedN + ")");
