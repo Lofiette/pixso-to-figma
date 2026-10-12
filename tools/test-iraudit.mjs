@@ -37,7 +37,11 @@
 //     a placeholder masked by what its master draws (at a scaled instance's scale, and not at all where
 //     its clipping ancestors clip it away); a text with invalid stored glyphs in its own class where the
 //     difference lies near it; a 1-device-pixel line on a pixel boundary compared by its two-row band,
-//     and every real stroke difference there still failing. Each fails under the first pass's settings.
+//     and every real stroke difference there still failing. Each fails under the first pass's settings;
+//   - the offline re-judge (tools/ir-rejudge.mjs): a run audited with --pictures all, judged again from
+//     its folder, reproduces itself root for root, and under another setting matches a live pass under
+//     it; an export the folder does not keep (another scale, the reports of a search's 4x pictures) is
+//     refused or named, and its root set apart.
 // Everything is synthetic, and everything written goes to the system's temporary folder.
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -64,8 +68,9 @@ import { SCRIPTS, assertReadOnlyScript, makeMcpClient, readOnlyProblems } from "
 import { IDENTITY_SCRIPT } from "./extract-lib.mjs";
 import { fakePixso } from "./test/fake-pixso.mjs";
 import { AUDIT_SETTINGS, GLYPH_NOTE_CODES, auditRoots, auditRun, comparePictures, defaultAuditSettings, guidIndex, parseAuditArgs, placeBox, placeholderBoxes, registration, scaleAlpha } from "./ir/render-audit.mjs";
-import { CODE } from "./ir/schema.mjs";
+import { CODE, canonicalJSON } from "./ir/schema.mjs";
 import { auditFolder, main as auditMain, readRun } from "./ir-audit.mjs";
+import { compareAudits, main as rejudgeMain, rejudge, rejudgeSettings } from "./ir-rejudge.mjs";
 import { decodePNG } from "./pngutil.mjs";
 
 let failed = 0;
@@ -676,34 +681,37 @@ const LP = localPixso();
   check(refused.length === 0, "a PNG the standard does not allow, an indexed PNG without a palette, and an index past the palette are refused with a reason", show(refused));
 }
 
+// A picture drawn from rectangles with box-filter coverage, so an edge at a fraction of a pixel is
+// anti-aliased (sections 10 and 11).
+const art = (W, H, rects) => {
+  const rgba = Buffer.alloc(W * H * 4);
+  for (const q of rects || []) {
+    const [x0, y0, x1, y1] = q.box, c = q.c || [30, 30, 30], a = q.a === undefined ? 1 : q.a;
+    for (let y = Math.max(0, Math.floor(y0)); y < Math.min(H, Math.ceil(y1)); y++) {
+      const cy = Math.min(y + 1, y1) - Math.max(y, y0);
+      for (let x = Math.max(0, Math.floor(x0)); x < Math.min(W, Math.ceil(x1)); x++) {
+        const al = (Math.min(x + 1, x1) - Math.max(x, x0)) * cy * a;
+        if (al <= 0) continue;
+        const k = (y * W + x) * 4, da = rgba[k + 3] / 255, oa = al + da * (1 - al);
+        for (let ch = 0; ch < 3; ch++) rgba[k + ch] = Math.round((c[ch] * al + rgba[k + ch] * da * (1 - al)) / oa);
+        rgba[k + 3] = Math.round(oa * 255);
+      }
+    }
+  }
+  return { W, H, rgba };
+};
+
 // ============================================================================================
 // 10. what the first live pass taught the audit (docs/M1.md §16.2)
 // ============================================================================================
 // Each case is a small IR and two pictures drawn here, handed to auditRun directly: "Figma" and "Pixso"
 // answer as the plugin's export and the read-only script do (a PNG, the box, the render bounds when the
-// engine has them, the opacity). A picture is drawn from rectangles with box-filter coverage, so an
-// edge at a fraction of a pixel is anti-aliased, and it starts at what it draws, as both engines'
+// engine has them, the opacity). A picture is drawn from rectangles with box-filter coverage (art), so
+// an edge at a fraction of a pixel is anti-aliased, and it starts at what it draws, as both engines'
 // exports do. Every case is also run under the first pass's settings, where it fails.
 {
   const OLD = ["--register", "top-left", "--size-by", "picture", "--placeholder-extent", "box", "--opacity", "undo", "--blank", "compare",
     "--hidden-in-source", "compare", "--glyph-notes", "compare", "--hairlines", "pixel"];
-  const art = (W, H, rects) => {
-    const rgba = Buffer.alloc(W * H * 4);
-    for (const q of rects || []) {
-      const [x0, y0, x1, y1] = q.box, c = q.c || [30, 30, 30], a = q.a === undefined ? 1 : q.a;
-      for (let y = Math.max(0, Math.floor(y0)); y < Math.min(H, Math.ceil(y1)); y++) {
-        const cy = Math.min(y + 1, y1) - Math.max(y, y0);
-        for (let x = Math.max(0, Math.floor(x0)); x < Math.min(W, Math.ceil(x1)); x++) {
-          const al = (Math.min(x + 1, x1) - Math.max(x, x0)) * cy * a;
-          if (al <= 0) continue;
-          const k = (y * W + x) * 4, da = rgba[k + 3] / 255, oa = al + da * (1 - al);
-          for (let ch = 0; ch < 3; ch++) rgba[k + ch] = Math.round((c[ch] * al + rgba[k + ch] * da * (1 - al)) / oa);
-          rgba[k + 3] = Math.round(oa * 255);
-        }
-      }
-    }
-    return { W, H, rgba };
-  };
   let gs = 0;
   const rec = (parent, type, w, h, x, y, props, extra) => Object.assign({ parent, guid: "9:" + (++gs), type, name: type,
     props: Object.assign({ relativeTransform: [1, 0, x, 0, 1, y], width: w, height: h }, props || {}) }, extra || {});
@@ -985,6 +993,75 @@ const LP = localPixso();
     for (const k of Object.keys(cases)) { const r = (await unit(ir, [0], F, pix(cases[k]))).e(0); if (r.ok !== false) still.push(k + ": " + show([r.ok, r.metrics, r.hairlines])); }
     check(still.length === 0, "the band hides only where the line's ink sits in it: dashes, another colour, a crisp line a row lower and a shorter line all still fail", still.join(" | "));
   }
+}
+
+// ============================================================================================
+// 11. the offline re-judge (tools/ir-rejudge.mjs, docs/M1.md §16.4)
+// ============================================================================================
+// A run audited with --pictures all is judged again from its folder alone, by auditRun with the two
+// engines answering from the folder: under the recorded pass's own settings every root comes out as it
+// did; under another setting, as a live pass under that setting does. What the folder does not keep (an
+// export at another scale, the reports that came with the finer pictures of a registration search) is
+// refused or named, and the roots that needed it are apart.
+{
+  const holds = (f) => { try { return !!f(); } catch (err) { return false; } };
+  const val = (f) => { try { return f(); } catch (err) { return undefined; } };
+  // The live pass under --placeholders compare first: each audit replaces the folder's audit.
+  const liveCmp = await auditOf(GOOD, { mcp: LP, figmaExport: FIG.exportJob }, ["--placeholders", "compare"]);
+  const rec = await auditOf(GOOD, { mcp: LP, figmaExport: FIG.exportJob }, ["--pictures", "all"]);
+  const searched = rec.audit.roots.filter((e) => e.register && e.register.supersample && e.register.supersample.used !== false).map((e) => e.i);
+  const same = await rejudge(GOOD.runDir);
+  const rendered = rec.audit.roots.filter((e) => e.figma).length;
+  check(same.diff.length === 0 && same.apart.map((x) => x.i).join() === searched.join() && canonicalJSON(same.audit.counts) === canonicalJSON(rec.audit.counts) && rendered > 0,
+    "a run audited with --pictures all, re-judged from its folder under the recorded settings, reproduces every root (" + rec.audit.roots.length + ", " + rendered +
+    " rendered): ok, why, metrics and every other field", show([same.diff.slice(0, 3), same.apart, searched]));
+  const cmp = await rejudge(GOOD.runDir, { settings: rejudgeSettings(rec.audit, { placeholders: "compare" }).settings });
+  const d = compareAudits(liveCmp.audit, cmp.audit), r2 = cmp.audit.roots.find((e) => e.i === 2);
+  check(d.length === 0 && r2 && r2.ok === false && cmp.diff.some((x) => x.i === 2 && x.fields.indexOf("ok") >= 0),
+    "re-judged under --placeholders compare it is the live pass under that setting, root for root (root 2 fails: " + (r2 && r2.why) + ")", show(d.slice(0, 3)));
+  // An export at another scale is not in the folder: refused (a render missing, never ok) and apart.
+  const small = await rejudge(GOOD.runDir, { settings: rejudgeSettings(rec.audit, { maxSide: 100 }).settings });
+  const moved = small.audit.roots.filter((e) => typeof e.scale === "number" && rootOf(rec, e.i) && e.scale !== rootOf(rec, e.i).scale);
+  const apartI = small.apart.map((x) => x.i);
+  check(moved.length > 0 && moved.every((e) => e.ok === false && /^figma render missing: not kept in the run folder: /.test(e.why) && apartI.indexOf(e.i) >= 0) &&
+    small.apart.every((x) => moved.some((e) => e.i === x.i) || searched.indexOf(x.i) >= 0),
+    "under --max-side 100 the " + moved.length + " roots that would render at another scale are refused, never judged on the recorded pictures, and apart",
+    show([moved.slice(0, 2).map((e) => [e.i, e.ok, e.why]), small.apart.slice(0, 3)]));
+  const lines = [];
+  const code = await rejudgeMain([GOOD.runDir, "--check"], (m) => lines.push(m));
+  const refusedFlag = await rejudgeMain([GOOD.runDir, "--fresh"], (m) => lines.push(m));
+  check(code === 0 && refusedFlag === 1 && lines.some((l) => /^changed against the recorded pass: 0 roots/.test(l)),
+    "the command re-judges the folder (--check exit 0: nothing changed) and refuses the live audit's own flags", lines.join(" | "));
+
+  // A root searched on pictures at 4x (an arrow connector, as C20 of section 10): the folder keeps the
+  // 4x pair and its sizes, not the reports that came with it.
+  const dir = join(SCRATCH, "rejudge-fine");
+  mkdirSync(join(dir, "reports"), { recursive: true });
+  const nodes = [{ parent: -1, guid: "9:900", type: "VECTOR", name: "VECTOR", props: { relativeTransform: [1, 0, 0, 0, 1, 50], width: 100, height: 0 } }];
+  writeFileSync(join(dir, "ir.json"), JSON.stringify({ nodes, values: [], notes: [] }));
+  writeFileSync(join(dir, "states.json"), JSON.stringify({ snapshot: "6".repeat(16), runId: RUN, tasks: [{ op: "build", taskNo: 1, roots: [0] }, { op: "verify", taskNo: 2, state: "built", build: 1 }] }));
+  writeFileSync(join(dir, "reports", "2-verify.json"), JSON.stringify({ taskNo: 2, roots: [{ i: 0, found: true, id: "u:0" }] }));
+  const arrow = (reach, s) => art(100 * s, Math.ceil(reach * 2 * s), [{ box: [0, (reach - 1) * s, 100 * s, (reach + 1) * s] }, { box: [96 * s, 0, 100 * s, reach * 2 * s] }]);
+  const box = { x: 0, y: 50, width: 100, height: 0 };
+  const io = { identity: { same: true, q5: true, code: null, detail: "synthetic" }, log: qlog,
+    figmaExport: async (job) => {
+      const png = pngOf(arrow(7.4, job.constraint.value));
+      return { w: 100, h: 0, type: "VECTOR", opacity: 1, box, render: { x: 0, y: 50 - 7.4, width: 100, height: 14.8 }, bytes: png.length, d: png.toString("base64") };
+    },
+    mcp: { run: async (src) => {
+      const a = JSON.parse(/^const ARGS = (.*);$/m.exec(src)[1]), png = pngOf(arrow(6.66, a.scale));
+      return { ok: true, value: { w: 100, h: 0, type: "VECTOR", opacity: 1, box, render: null, n: png.length, d: png.toString("base64") } };
+    } } };
+  const fr = await auditFolder(dir, parseAuditArgs([dir, "--pictures", "all"]), io);
+  const saved = await rejudge(dir), refused = await rejudge(dir, { fine: "refuse" });
+  const f0 = val(() => fr.audit.roots[0]), q0 = val(() => refused.audit.roots[0]);
+  check(holds(() => f0.ok === true && f0.register.supersample.k === 4 && existsSync(join(dir, "audit", "pictures", "0@4x.pixso.png")) &&
+    saved.diff.length === 0 && saved.apart.length === 1 && saved.apart[0].fine === 4 && !saved.apart[0].refused.length &&
+    q0.register.supersample.used === false && /is missing: not kept in the run folder/.test(q0.register.supersample.why) &&
+    refused.apart.length === 1 && refused.apart[0].refused.length === 1 && refused.diff.length === 1 && refused.diff[0].fields.indexOf("register") >= 0),
+    "a root searched on both engines' pictures at 4x re-judges from the saved 4x pair with the reports at the export's scale (the same result, the root apart); " +
+    "with --fine refuse the search runs on the pictures as exported (mean " + val(() => q0.metrics.mean) + " against " + val(() => f0.metrics.mean) + "), says why, and is apart",
+    show([f0 && f0.register, saved.diff, saved.apart, q0 && q0.register, refused.apart]));
 }
 
 await PX.close();
