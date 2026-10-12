@@ -30,11 +30,14 @@
 //     the file, is a missing render; a section's children pair by index only when the counts match;
 //   - what the first live pass taught the audit (§16.2), each on pictures drawn here and handed to
 //     auditRun directly: pictures registered in the node's box frame (an arrow connector whose cap
-//     reaches further in Figma, an instance drawn beyond its box); a root neither engine draws, and
-//     Pixso's empty export, not compared; a root under a hidden ancestor not compared and not
-//     rendered; a placeholder masked by what its master draws; a text with invalid stored glyphs in its
-//     own class; a 1-device-pixel line on a pixel boundary compared by its two-row band, and every
-//     real stroke difference there still failing. Each fails under the first pass's settings.
+//     reaches further in Figma, an instance drawn beyond its box), the search run on both engines'
+//     pictures at 4x so one drawing at two sub-pixel phases compares equal; a root neither engine
+//     draws, and Pixso's empty export, not compared, while a picture blank on one side fails even where
+//     its placeholders cannot be placed; a root under a hidden ancestor not compared and not rendered;
+//     a placeholder masked by what its master draws (at a scaled instance's scale, and not at all where
+//     its clipping ancestors clip it away); a text with invalid stored glyphs in its own class where the
+//     difference lies near it; a 1-device-pixel line on a pixel boundary compared by its two-row band,
+//     and every real stroke difference there still failing. Each fails under the first pass's settings.
 // Everything is synthetic, and everything written goes to the system's temporary folder.
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -60,7 +63,7 @@ import { sampleGuids } from "./ir/identity.mjs";
 import { SCRIPTS, assertReadOnlyScript, makeMcpClient, readOnlyProblems } from "./ir/mcp-readonly.mjs";
 import { IDENTITY_SCRIPT } from "./extract-lib.mjs";
 import { fakePixso } from "./test/fake-pixso.mjs";
-import { AUDIT_SETTINGS, GLYPH_NOTE_CODES, auditRoots, auditRun, comparePictures, defaultAuditSettings, guidIndex, parseAuditArgs, placeBox, placeholderBoxes, scaleAlpha } from "./ir/render-audit.mjs";
+import { AUDIT_SETTINGS, GLYPH_NOTE_CODES, auditRoots, auditRun, comparePictures, defaultAuditSettings, guidIndex, parseAuditArgs, placeBox, placeholderBoxes, registration, scaleAlpha } from "./ir/render-audit.mjs";
 import { CODE } from "./ir/schema.mjs";
 import { auditFolder, main as auditMain, readRun } from "./ir-audit.mjs";
 import { decodePNG } from "./pngutil.mjs";
@@ -705,24 +708,26 @@ const LP = localPixso();
   const rec = (parent, type, w, h, x, y, props, extra) => Object.assign({ parent, guid: "9:" + (++gs), type, name: type,
     props: Object.assign({ relativeTransform: [1, 0, x, 0, 1, y], width: w, height: h }, props || {}) }, extra || {});
   // F, P: { record index: { img, box, render, opacity } }; P's { empty: true } is Pixso's 0-byte export.
+  // draw(scale) in place of img draws the picture at the scale asked, as both engines' exports do (a
+  // fixed img is the same picture at any scale: an engine whose finer export is not finer).
   const unit = async (ir, roots, F, P, args, more) => {
     const S = parseAuditArgs(["unit"].concat(args || [])).settings;
     const states = { snapshot: "5".repeat(16), runId: RUN, tasks: [{ op: "build", taskNo: 1, roots }, { op: "verify", taskNo: 2, state: "built", build: 1 }] };
     const reports = new Map([[2, { taskNo: 2, roots: roots.map((i) => ({ i, found: true, id: "u:" + i })) }]]);
     const byGuid = new Map(ir.nodes.map((r, i) => [r.guid, i]));
-    const calls = { figma: 0, pixso: 0 };
+    const calls = { figma: 0, pixso: 0, scales: [] };
     const A = await auditRun(Object.assign({ states, ir, reports, builds: new Map(), settings: S,
       figmaExport: async (job) => {
-        calls.figma++;
-        const i = byGuid.get(job.src), f = F[i], r = ir.nodes[i], png = pngOf(f.img);
+        calls.figma++; calls.scales.push(job.constraint.value);
+        const i = byGuid.get(job.src), f = F[i], r = ir.nodes[i], png = pngOf(f.draw ? f.draw(job.constraint.value) : f.img);
         return { w: r.props.width, h: r.props.height, type: r.type, opacity: f.opacity === undefined ? 1 : f.opacity, box: f.box, render: f.render || null, bytes: png.length, d: png.toString("base64") };
       },
-      pixsoRender: async (guid) => {
+      pixsoRender: async (guid, scale) => {
         calls.pixso++;
         const i = byGuid.get(guid), p = P[i], r = ir.nodes[i];
         const head = { w: r.props.width, h: r.props.height, type: r.type, opacity: p.opacity === undefined ? 1 : p.opacity, box: p.box, render: p.render || null };
         if (p.empty) return { ok: true, value: Object.assign(head, { n: 0, d: "" }) };
-        const png = pngOf(p.img);
+        const png = pngOf(p.draw ? p.draw(scale) : p.img);
         return { ok: true, value: Object.assign(head, { n: png.length, d: png.toString("base64") }) };
       } }, more || {}));
     return { A, calls, e: (i) => A.roots.find((x) => x.i === i) };
@@ -739,22 +744,59 @@ const LP = localPixso();
   // across the line and the shaft lies 0.74 px apart in them. Figma reports render bounds, Pixso none.
   {
     const ir = { nodes: [rec(-1, "VECTOR", 100, 0, 0, 50)], values: [], notes: [] };
-    const arrow = (reach) => art(100, Math.ceil(reach * 2), [{ box: [0, reach - 1, 100, reach + 1] }, { box: [96, 0, 100, reach * 2] }]);
+    const arrow = (reach, s) => { const k = s || 1; return art(100 * k, Math.ceil(reach * 2 * k), [{ box: [0, (reach - 1) * k, 100 * k, (reach + 1) * k] }, { box: [96 * k, 0, 100 * k, reach * 2 * k] }]); };
     const box = { x: 0, y: 50, width: 100, height: 0 };
-    const F = { 0: { img: arrow(7.4), box, render: { x: 0, y: 50 - 7.4, width: 100, height: 14.8 } } };
-    const P = { 0: { img: arrow(6.66), box } };
-    const now = await unit(ir, [0], F, P), old = await unit(ir, [0], F, P, ["--register", "top-left"]);
+    const F = { 0: { draw: (s) => arrow(7.4, s), box, render: { x: 0, y: 50 - 7.4, width: 100, height: 14.8 } } };
+    const P = { 0: { draw: (s) => arrow(6.66, s), box } };
+    const kept = [];
+    const now = await unit(ir, [0], F, P, [], { onRoot: (x, pics) => { for (const p of pics) kept.push(p.name + (p.figma && p.pixso ? "" : " (one side)")); } });
+    const old = await unit(ir, [0], F, P, ["--register", "top-left"]);
     const e = now.e(0), o = old.e(0);
-    check(holds(() => e.ok === true && e.register.rule.join() === "same extent,fitted" && Math.abs(e.register.offset[1] - 0.74) <= 0.15 && o.ok === false && o.metrics.mean > 5),
-      "an arrow connector whose cap reaches 7.4 px in Figma and 6.66 in Pixso passes registered (offset found " + val(() => e.register.offset[1]) + " px, mean " +
-      val(() => e.metrics.mean) + "); aligned at the top left it fails (mean " + val(() => o.metrics.mean) + ")", show([e.register, e.metrics, o.why]));
-    const P2 = { 0: { img: arrow(6.66), box, render: { x: 0, y: 50 - 6.66, width: 100, height: 13.32 } } };
-    const r = (await unit(ir, [0], F, P2)).e(0);
-    check(holds(() => r.ok === true && r.register.rule.join() === "render bounds,render bounds" && r.register.offset.join() === "0,0.74"),
+    // What is left at 4x is the caps' own difference: 1.48 rows of a 4 px cap, about 0.9 of the mean.
+    check(holds(() => e.ok === true && e.register.rule.join() === "same extent,fitted" && Math.abs(e.register.offset[1] - 0.74) <= 0.02 && e.register.supersample.k === 4 &&
+      e.metrics.mean < 1.5 && now.calls.scales.join() === "1,4" && now.calls.pixso === 2 && kept.join() === "0,0@4x" && o.ok === false && o.metrics.mean > 5),
+      "an arrow connector whose cap reaches 7.4 px in Figma and 6.66 in Pixso passes registered, searched on both engines' pictures at 4x, both kept (offset found " +
+      val(() => e.register.offset[1]) + " px, mean " + val(() => e.metrics.mean) + "); aligned at the top left it fails (mean " + val(() => o.metrics.mean) + ")", show([e.register, e.metrics, now.calls, kept, o.why]));
+    const one = await unit(ir, [0], F, P, ["--register-supersample", "1"]), e1 = one.e(0);
+    check(holds(() => e1.ok === true && Math.abs(e1.register.offset[1] - 0.74) <= 0.15 && !e1.register.supersample && one.calls.figma === 1 && e1.metrics.mean > e.metrics.mean),
+      "with --register-supersample 1 the search runs on the pictures as exported, resampled: offset " + val(() => e1.register.offset[1]) + " px, mean " + val(() => e1.metrics.mean),
+      show([e1.register, e1.metrics]));
+    // An engine whose export at 4x is the same picture: the search falls back to the pictures as exported.
+    const same = (await unit(ir, [0], F, { 0: { img: arrow(6.66), box } })).e(0);
+    check(holds(() => same.ok === true && same.register.supersample.used === false && /not 4 times the first/.test(same.register.supersample.why) && Math.abs(same.register.offset[1] - 0.74) <= 0.15),
+      "an export at 4x that is not 4 times finer is not used: the search runs on the pictures as exported, and the root says why", show(same.register));
+    const P2 = { 0: { draw: (s) => arrow(6.66, s), box, render: { x: 0, y: 50 - 6.66, width: 100, height: 13.32 } } };
+    const two = await unit(ir, [0], F, P2), r = two.e(0), png2 = pngOf(arrow(6.66));
+    check(holds(() => r.ok === true && r.register.rule.join() === "render bounds,render bounds" && r.register.offset.join() === "0,0.74" && two.calls.figma === 1),
       "with render bounds from both engines the offset is theirs, not searched (0.74 px)", show(r.register));
+    check(holds(() => show(r.figma.box) === show(box) && show(r.figma.render) === show({ x: 0, y: 42.6, width: 100, height: 14.8 }) && show(r.pixso.box) === show(box) &&
+      show(r.pixso.render) === show({ x: 0, y: 43.34, width: 100, height: 13.32 }) && r.pixso.bytes === png2.length && show(e.pixso.render) === "null"),
+      "each root records both engines' box, render bounds and Pixso's byte count, so a later pass can re-judge it offline", show([r.figma, r.pixso]));
     const far = (await unit(ir, [0], F, P, ["--register-fit-px", "0"])).e(0);
     check(holds(() => far.register.rule[1] === "placed (render bounds, centred (guessed))" && Math.abs(far.register.offset[1] - (7.4 - 7)) < 1e-6),
       "with --register-fit-px 0 nothing is searched: each picture is placed by its own rule (Pixso's centred, recorded so)", show(far.register));
+    // A picture 1 px over its box is not placed exactly, whatever the box's rounding noise (the review's
+    // two roots of one geometry: boxes of 800 and 800.0000000000001, pictures of 801, placed by two rules).
+    const L0 = [1, 0, 0, 0, 1, 0], pb = (W, H, h) => placeBox({ W, H, box: { x: 0, y: 0, width: 100, height: h }, render: null }, 1, [100, h], L0);
+    const ex = [800, 800.0000000000001].map((h) => pb(100, 801, h).exact.join() + "/" + pb(100, 800, h).exact.join());
+    const rg = [800, 800.0000000000001].map((h) => registration(pb(100, 801, h), pb(100, 800, h), [100, 801], [100, 800], defaultAuditSettings())[1].rule);
+    check(ex.join() === "true,false/true,true,true,false/true,true" && rg.join() === "fitted,fitted",
+      "a picture of 801 rows for a box of 800 is not placed exactly on that axis, with the box 800 or 800.0000000000001 alike, so both are searched", show([ex, rg]));
+    // The same 2 px line drawn by both engines, Figma's picture 15 rows at phase 0 and Pixso's 16 at phase
+    // 0.5 (the review's case): searched at 4x the pictures are one; resampled at 1x the split leaves 6.62.
+    const lineIR = { nodes: [rec(-1, "VECTOR", 100, 0, 0, 0)], values: [], notes: [] }, lb = { x: 0, y: 0, width: 100, height: 0 };
+    const line = (top, rows) => (s) => { const k = s || 1; return art(100 * k, Math.ceil(rows * k), [{ box: [0, (-1 - top) * k, 100 * k, (1 - top) * k] }]); };
+    const LF = { 0: { draw: line(-5, 15), box: lb, render: { x: 0, y: -5, width: 100, height: 15 } } }, LP = { 0: { draw: line(-5.5, 16), box: lb } };
+    const ln = (await unit(lineIR, [0], LF, LP)).e(0), l1 = (await unit(lineIR, [0], LF, LP, ["--register-supersample", "1"])).e(0);
+    check(holds(() => ln.ok === true && ln.metrics.mean < 0.5 && ln.register.offset[1] === -0.5 && l1.ok === false && l1.metrics.mean > 5),
+      "one 2 px line drawn at phases 0 and 0.5, the pictures 1 row apart in extent, passes searched at 4x (mean " + val(() => ln.metrics.mean) +
+      "); searched on the pictures as exported the split leaves mean " + val(() => l1.metrics.mean), show([ln.register, ln.metrics, l1.register, l1.metrics]));
+    // At exactly half a pixel the split is tried both ways: a pair and its mirror image score alike.
+    const band = (y0) => art(20, 12, [{ box: [0, y0, 20, y0 + 2] }]);
+    const flip = (img) => { const o = Buffer.alloc(img.rgba.length); for (let y = 0; y < img.H; y++) img.rgba.copy(o, (img.H - 1 - y) * img.W * 4, y * img.W * 4, (y + 1) * img.W * 4); return { W: img.W, H: img.H, rgba: o }; };
+    const S0 = defaultAuditSettings();
+    const ma = comparePictures({ img: band(5), at: [0, 0] }, { img: band(5.75), at: [0, -0.5] }, S0).mean, mb = comparePictures({ img: flip(band(5)), at: [0, 0] }, { img: flip(band(5.75)), at: [0, 0.5] }, S0).mean;
+    check(ma === mb, "at exactly half a pixel both ways of splitting the offset are tried: a pair and its mirror image score alike (" + ma + ", " + mb + ")");
   }
 
   // C20 and C25 together (one root of the U audit): Pixso draws the instance's dot 1 px above its box
@@ -804,6 +846,30 @@ const LP = localPixso();
     const pb2 = placeholderBoxes(ir2, 0, null, new Set(), { drawn: true, byGuid: guidIndex(ir2), memo: new Map() });
     check(holds(() => show(pb2.instances) === show([[0, 0, 100, 10], [5, 55, 55, 80]]) && pb2.overflow === 1),
       "an instance shorter than its master (which clips its taller child) is not grown; one whose master draws 30 below is cut to its clipping frame", show(pb2));
+    // A clipping frame wholly outside its clipping root clips everything under it away (the review's
+    // case: the instance's master draws 240 to its left and 210 below, which reached back into the root
+    // uncut): its instance draws nothing, so it masks nothing; an instance below its clipping frame, its
+    // overflow not reaching back into it, likewise. Moved inside, the first is cut to the frame. With
+    // --placeholder-extent box both stay masked by their boxes.
+    const n3 = [rec(-1, "FRAME", 200, 300, 0, 0, { clipsContent: true }), rec(0, "FRAME", 50, 50, 250, 0, { clipsContent: true }), null, rec(-1, "COMPONENT", 50, 20, 0, 900, { clipsContent: false }),
+      rec(3, "RECTANGLE", 50, 200, -240, 30), rec(0, "FRAME", 60, 60, 0, 100, { clipsContent: true }), null];
+    n3[2] = rec(1, "INSTANCE", 50, 20, 0, 0, {}, { instance: { master: { guid: n3[3].guid } } });
+    n3[6] = rec(5, "INSTANCE", 50, 20, 0, 70, {}, { instance: { master: { guid: n3[3].guid } } });
+    const ir3 = { nodes: n3, values: [], notes: [] }, o3 = () => ({ drawn: true, byGuid: guidIndex(ir3), memo: new Map() });
+    const out3 = placeholderBoxes(ir3, 0, null, new Set(), o3()), box3 = placeholderBoxes(ir3, 0, null, new Set(), { drawn: false });
+    n3[1].props.relativeTransform = [1, 0, 140, 0, 1, 0];
+    const in3 = placeholderBoxes(ir3, 0, null, new Set(), o3());
+    check(holds(() => out3.instances.length === 0 && out3.clipped === 2 && show(box3.instances) === show([[250, 0, 300, 20], [0, 170, 50, 190]]) &&
+      show(in3.instances) === show([[140, 0, 190, 50]]) && in3.clipped === 1),
+      "an instance its clipping ancestors clip away whole masks nothing (a frame wholly outside the root, an instance below its frame), and is counted; " +
+      "inside, it is cut to the frame", show([out3, box3, in3]));
+    // A scaled instance (IR v3's instance.scale) draws its master's overflow at its scale.
+    const n4 = [rec(-1, "FRAME", 200, 200, 0, 0), null, rec(-1, "COMPONENT", 20, 10, 0, 500, { clipsContent: false }), rec(2, "RECTANGLE", 20, 20, 0, 0)];
+    n4[1] = rec(0, "INSTANCE", 40, 20, 10, 10, {}, { instance: { master: { guid: n4[2].guid }, scale: 2 } });
+    const ir4 = { nodes: n4, values: [], notes: [] };
+    const pb4 = placeholderBoxes(ir4, 0, null, new Set(), { drawn: true, byGuid: guidIndex(ir4), memo: new Map() });
+    check(holds(() => show(pb4.instances) === show([[10, 10, 50, 50]])),
+      "an instance at scale 2 whose master draws 10 below its box is masked 20 below its own", show(pb4));
   }
 
   // C22, C23. Roots neither engine draws: a component at opacity 0 (Figma exports a transparent 1x1,
@@ -826,6 +892,24 @@ const LP = localPixso();
       "a picture blank on one side only still fails, and Pixso's 0-byte export is an answer, not a missing render", show([e(3).why, e(4).why, now.A.counts]));
     check(holds(() => o(0).ok === false && /differ in size: Figma 1x1, Pixso 20x20/.test(o(0).why) && /^pixso render missing: no picture/.test(o(1).why) && old.A.counts.missing === 3),
       "under the first pass's settings the opacity-0 root fails on size and the empty and hidden texts as missing renders", show([o(0).why, o(1).why, old.A.counts]));
+    check(holds(() => e(1).pixso.bytes === 0 && e(4).pixso.bytes === 0 && e(3).pixso.bytes > 0 && e(4).figma.picture.join() === "40,17"),
+      "each root records Pixso's byte count (0 for its empty exports), for a later pass to re-judge", show([e(1).pixso, e(3).pixso, e(4).pixso]));
+    // A picture blank on one side of a root that holds a placeholder (the review's case: the U audit's root
+    // whose Pixso export is 0 bytes, under --register top-left): the placeholder cannot be placed in the blank picture, which needs
+    // no mask, and the root still fails under either registration; so does one whose other picture cannot
+    // be placed either (smaller than its box, no render bounds). Before, all came out not compared.
+    const pn = [rec(-1, "FRAME", 60, 20, 0, 0), null, rec(-1, "COMPONENT", 20, 20, 0, 100)];
+    pn[1] = rec(0, "INSTANCE", 20, 20, 0, 0, {}, { instance: { master: { guid: pn[2].guid } } });
+    const pir = { nodes: pn, values: [], notes: [] }, pbx = { x: 0, y: 0, width: 60, height: 20 };
+    const ink = art(60, 20, [{ box: [30, 5, 50, 15], c: BLUE }]);
+    const pairs = [[{ 0: { img: ink, box: pbx, render: pbx } }, { 0: { empty: true, box: pbx } }], [{ 0: { img: blank1, box: pbx } }, { 0: { img: ink, box: pbx } }],
+      [{ 0: { img: art(30, 10, [{ box: [5, 2, 25, 8], c: BLUE }]), box: pbx } }, { 0: { empty: true, box: pbx } }]];
+    const one = [];
+    for (const args of [[], ["--register", "top-left"]]) for (const [FF, PP] of pairs) one.push((await unit(pir, [0], FF, PP, args)).e(0));
+    check(holds(() => one.every((x) => x.ok === false && x.masks.placeholders === 1) && /^Pixso draws nothing \(its export is 0 bytes\)/.test(one[3].why) &&
+      /cannot be placed in either picture, so what it draws is not known to be masked/.test(one[2].why) && /cannot be placed in either picture/.test(one[5].why)),
+      "a picture blank on one side of a root holding a placeholder fails, registered or laid at the top left, also where neither picture places the placeholder",
+      show(one.map((x) => [x.ok, x.class, (x.why || "").slice(0, 120)])));
   }
 
   // C24. Roots under a hidden ancestor in the source (the U audit's 8 masters of a hidden component set):
@@ -859,6 +943,25 @@ const LP = localPixso();
       GLYPH_NOTE_CODES.every((x) => CODE[x] === x) && GLYPH_NOTE_CODES.length === (CODE[GLYPHS] ? 1 : 0)),
       "a text with invalid stored glyphs (the reader's note) is masked and the root passes; compared, the root fails in its own class; skip does not compare it; " +
       "without the note it is an ordinary failure (the vocabulary " + (CODE[GLYPHS] ? "has" : "does not have yet") + " the code)", show([m.masks, c.e(0).why, s.why, plain.why]));
+    // The class only where the difference lies near the flagged texts (the review's case: the U audit's 2
+    // drop-down roots, their placeholders masked by their boxes, hold one flagged text each and 96-99 % of
+    // their difference is instance overflow). Here a rectangle 270 units right of the flagged text
+    // differs: an ordinary failure that holds the text, in the class only with --glyph-class any or a
+    // --glyph-near that reaches it. A root that is itself a flagged text, masked whole, is not compared,
+    // in the class too (the U audit's one such root was "masked").
+    const n2 = [rec(-1, "FRAME", 400, 40, 0, 0), rec(0, "TEXT", 20, 20, 10, 10, { characters: "ab" }), rec(0, "RECTANGLE", 80, 20, 300, 10), rec(-1, "TEXT", 60, 20, 500, 0, { characters: "ab" })];
+    const ir2 = { nodes: n2, values: [], notes: [{ code: GLYPHS, node: 1, detail: "planted" }, { code: GLYPHS, node: 3, detail: "planted" }] };
+    const b2 = { x: 0, y: 0, width: 400, height: 40 }, w2 = { box: [0, 0, 400, 40], c: [255, 255, 255] }, tb = { x: 500, y: 0, width: 60, height: 20 };
+    const F2 = { 0: { img: art(400, 40, [w2, { box: [12, 13, 28, 27] }, { box: [300, 10, 380, 30], c: [220, 30, 30] }]), box: b2, render: b2 }, 3: { img: art(60, 20, [{ box: [2, 3, 50, 17] }]), box: tb, render: tb } };
+    const P2 = { 0: { img: art(400, 40, [w2, { box: [10, 10, 30, 30] }, { box: [300, 10, 380, 30], c: BLUE }]), box: b2 }, 3: { img: art(60, 20, [{ box: [0, 0, 60, 20] }]), box: tb } };
+    const near = await unit(ir2, [0, 3], F2, P2, [], more), any = (await unit(ir2, [0, 3], F2, P2, ["--glyph-class", "any"], more)).e(0);
+    const far = (await unit(ir2, [0, 3], F2, P2, ["--glyph-near", "400"], more)).e(0), r0 = near.e(0), t3 = near.e(3);
+    check(holds(() => r0.ok === false && !r0.class && r0.glyphShare === 0 && /but most of the difference lies away from them/.test(r0.why) && any.class === "source-glyphs" &&
+      far.class === "source-glyphs" && far.glyphShare === 1 && t3.ok === null && t3.class === "source-glyphs" && /nothing is left once the masks are applied \(1 text whose/.test(t3.why) &&
+      near.A.counts.sourceGlyphs === 0 && near.A.counts.sourceGlyphsNotCompared === 1 && near.A.counts.failed === 1),
+      "a failing root is in the flagged texts' class only where its difference lies within --glyph-near of them (share " + val(() => r0.glyphShare) + "; with --glyph-near 400 " +
+      val(() => far.glyphShare) + "), or with --glyph-class any; a root that is a flagged text masked whole is not compared, in the class and counted apart",
+      show([r0.why, r0.glyphShare, any.class, far.glyphShare, t3, near.A.counts]));
   }
 
   // C16. A 1 px CENTER line at the bottom edge of a 50x20 link (the U audit's underlines): one opaque

@@ -235,7 +235,8 @@ export const SCRIPTS = Object.freeze({
   // The render audit's picture of one node (tools/ir-audit.mjs, docs/M1.md §16): a PNG at the scale
   // the audit gives both engines, with the node's size, type and opacity (Pixso's export applies its
   // own opacity, as Figma's does, §16.2), its box and, when Pixso has them, the bounds of what it draws.
-  // A node that draws nothing exports 0 bytes (n 0, d ""), which the audit reads as an answer.
+  // A hidden node and an empty text export 0 bytes (n 0, d ""), which the audit reads as an answer (the U
+  // audit, §16.2; a node at opacity 0 and a component with no paint export a transparent box instead).
   auditRender(guid, opts) {
     const scale = opts && opts.scale;
     need(GUID.test(guid), "a guid");

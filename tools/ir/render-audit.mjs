@@ -25,7 +25,8 @@
 //   pass's rules stay: undo (Figma's picture only) and apply (Pixso's alpha multiplied by it). Below
 //   --undo-opacity-min both and none compare them as exported;
 // - a root neither engine draws (every pixel transparent, or Pixso's export of 0 bytes) is not
-//   compared (--blank not-compared); a picture blank on one side only is compared, and differs;
+//   compared (--blank not-compared); a picture blank on one side only is compared, and differs (also
+//   where the placeholders cannot be placed in the other);
 // - a root under an ancestor hidden in the source is not compared (--hidden-in-source skip): Pixso
 //   draws nothing for it, while its build is a master the planner put on a page of its own;
 // - Figma renders a SECTION with a wider margin than its box: --section crop (default) cuts each picture
@@ -34,8 +35,10 @@
 // - the pictures are registered in the node's box frame (--register bounds): each engine's picture
 //   starts at what it draws, and where its box sits in it comes from what the engine reports (render
 //   bounds, else the box), from the other picture when both draw the same extent, or, when only the
-//   extents tell them apart, by a search within their difference (--register-fit-px); a fractional
-//   offset is split half and half, both pictures resampled alike. top-left lays both at their top left;
+//   extents tell them apart, by a search within their difference (--register-fit-px). The search runs on
+//   both engines' pictures at k times the scale, box-averaged back at each phase of 1/k px
+//   (--register-supersample, up to --supersample-max-side), else on the pictures as exported, a fractional
+//   offset split half and half, both pictures resampled alike. top-left lays both at their top left;
 // - an instance placeholder is an empty frame in M1 and Pixso draws the instance: --placeholders mask
 //   (default) leaves out of both pictures what each visible placeholder draws (--placeholder-extent
 //   drawn: its box grown by its master's overflow and drop shadows; box: its box), padded by --mask-pad;
@@ -44,7 +47,9 @@
 //   fails and says it holds image placeholders; mask leaves those nodes' boxes out like an instance's;
 // - a text whose stored glyph outlines are not glyphs (the reader's note) is drawn from those outlines
 //   by Pixso and from its characters by Figma: --glyph-notes mask (default) leaves its box out, skip
-//   does not compare the root, compare compares it as any other; such a root carries its own class;
+//   does not compare the root, compare compares it as any other. A failing root is in their class when
+//   more than --glyph-share-min of its difference lies within --glyph-near node units of their boxes
+//   (--glyph-class near; any: whenever it holds one);
 // - a 1-device-pixel CENTER horizontal LINE on a pixel boundary is one crisp row above it in Figma and
 //   two half rows in Pixso: --hairlines band compares that two-row band column by column, by what each
 //   column holds, when the pictures show exactly that pattern;
@@ -80,12 +85,17 @@ export const AUDIT_SETTINGS = {
   "--drawn-alpha": ["drawnAlpha", int(1, 255), 16, true],
   "--register": ["register", ["bounds", "top-left"], "bounds", true],
   "--register-fit-px": ["registerFitPx", num(0, 64), 4, true],
+  "--register-supersample": ["registerSupersample", int(1, 8), 4, true],
+  "--supersample-max-side": ["supersampleMaxSide", int(16, 16384), 1600, true],
   "--section": ["section", ["crop", "children", "none"], "crop", true],
   "--placeholders": ["placeholders", ["mask", "compare"], "mask", true],
   "--placeholder-extent": ["placeholderExtent", ["drawn", "box"], "drawn", true],
   "--mask-pad": ["maskPad", num(0, 10000), 2, true],
   "--image-placeholders": ["imagePlaceholders", ["compare", "mask"], "compare", true],
   "--glyph-notes": ["glyphNotes", ["mask", "skip", "compare"], "mask", true],
+  "--glyph-class": ["glyphClass", ["near", "any"], "near", true],
+  "--glyph-near": ["glyphNear", num(0, 100000), 256, true],
+  "--glyph-share-min": ["glyphShareMin", num(0, 1), 0.5, true],
   "--hairlines": ["hairlines", ["band", "pixel"], "band", true],
   "--opacity": ["opacity", ["both", "none", "undo", "apply"], "both", true],
   "--undo-opacity-min": ["undoOpacityMin", num(0.001, 1), 0.05, true],
@@ -202,6 +212,10 @@ function rectOf(m, q) {
 }
 const union = (a, b) => (!a ? b : !b ? a : [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])]);
 const meet = (a, b) => { if (!a) return b; if (!b) return a; const r = [Math.max(a[0], b[0]), Math.max(a[1], b[1]), Math.min(a[2], b[2]), Math.min(a[3], b[3])]; return r[2] > r[0] && r[3] > r[1] ? r : null; };
+// A clip with nothing left in it (a clipping frame wholly outside its clipping ancestor): everything
+// under it is clipped away. meet() reads null as "no clip", so an empty clip is this value instead.
+const CLIPPED = Object.freeze([0, 0, 0, 0]);
+const clipTo = (clip, box) => (clip === CLIPPED ? CLIPPED : meet(clip, box) || CLIPPED);
 
 // The root's linear part: how its own frame lies in the picture (a turned or flipped root's picture is
 // its turned box).
@@ -217,7 +231,8 @@ export function linearOf(rec) {
 // ABSOLUTE drop-down 300 px below its box, whose own master casts two 32 px shadows, so Pixso draws the
 // drop-down 364 px below each field and 32 px either side; masking only the box left 95-99 % of the
 // difference of the 3 roots that hold them. Taken as margins, not as the master's own boxes, so a
-// resized instance is not given its master's extra size. memo: a Map kept for the run.
+// resized instance is not given its master's extra size; a scaled instance (IR v3's instance.scale, the
+// uniform scale factor) draws its master's margins at its scale (marginsOf). memo: a Map kept for the run.
 export function overflowOf(ir, k, kids, byGuid, memo) {
   if (memo.has(k)) return memo.get(k);
   memo.set(k, [0, 0, 0, 0]);   // a cycle draws nothing more
@@ -226,8 +241,7 @@ export function overflowOf(ir, k, kids, byGuid, memo) {
   for (const c of kids.get(k) || []) {
     const rc = ir.nodes[c];
     if (rc.props.visible === false) continue;
-    const mk = masterOf(rc, byGuid);
-    const m = overflowOf(ir, mk !== null ? mk : c, kids, byGuid, memo);
+    const m = marginsOf(ir, c, kids, byGuid, memo);
     drawn = union(drawn, rectOf(rc.props.relativeTransform, [-m[0], -m[1], rc.props.width + m[2], rc.props.height + m[3]]));
   }
   let b = own;
@@ -248,6 +262,15 @@ function masterOf(r, byGuid) {
   const k = byGuid.get(r.instance.master.guid);
   return k === undefined ? null : k;
 }
+// What record c draws beyond its own box, in its own units: an instance its master's overflow at the
+// instance's scale (on the U file's IR v3: 29 visible scaled instances, at 0.74-3.56, have a master
+// that overflows), anything else its own.
+function marginsOf(ir, c, kids, byGuid, memo) {
+  const rc = ir.nodes[c], mk = masterOf(rc, byGuid);
+  if (mk === null) return overflowOf(ir, c, kids, byGuid, memo);
+  const m = overflowOf(ir, mk, kids, byGuid, memo), f = rc.instance && typeof rc.instance.scale === "number" && rc.instance.scale > 0 ? rc.instance.scale : 1;
+  return f === 1 ? m : m.map((v) => v * f);
+}
 export function guidIndex(ir) {
   const m = new Map();
   ir.nodes.forEach((r, i) => { if (typeof r.guid === "string") m.set(r.guid, i); });
@@ -258,12 +281,13 @@ export function guidIndex(ir) {
 // the records the build drew an IMAGE_PLACEHOLDER on; with it, { instances, images, … } (i itself
 // included). opts (optional): { drawn: true, byGuid, memo } grows each instance's box by what its master
 // draws (overflowOf), cut to the instance's clipping ancestors under i, and counts the ones that grew
-// (overflow); { glyphs: a Set of records } adds the visible ones under i as glyphTexts.
+// (overflow) and the ones those ancestors clip away whole (clipped: no mask); { glyphs: a Set of
+// records } adds the visible ones under i as glyphTexts.
 export function placeholderBoxes(ir, i, kids, images, opts) {
   const K = kids || childrenIndex(ir);
   const o = opts || {};
   const out = [], imgs = [], glyphTexts = [];
-  let overflow = 0;
+  let overflow = 0, clipped = 0;
   const I0 = [1, 0, 0, 0, 1, 0];
   const r0 = ir.nodes[i];
   if (images && images.has(i)) imgs.push(bboxOf(I0, r0.props.width, r0.props.height));
@@ -272,25 +296,29 @@ export function placeholderBoxes(ir, i, kids, images, opts) {
     for (const c of K.get(j) || []) {
       const r = ir.nodes[c];
       if (r.props.visible === false) continue;
+      // Under an empty clip nothing draws: no mask (drawn only; box keeps the first pass's masks).
+      if (o.drawn && clip === CLIPPED) { if (r.type === "INSTANCE") clipped++; else walk(c, null, CLIPPED); continue; }
       const mc = mul(m, r.props.relativeTransform);
       const box = bboxOf(mc, r.props.width, r.props.height);
       if (r.type === "INSTANCE") {
-        const mk = o.drawn ? masterOf(r, o.byGuid) : null;
-        const g = mk !== null ? overflowOf(ir, mk, K, o.byGuid, o.memo || new Map()) : [0, 0, 0, 0];
-        if (g.some((v) => v > 0)) {
-          const grown = meet(rectOf(mc, [-g[0], -g[1], r.props.width + g[2], r.props.height + g[3]]), clip);
-          out.push(grown ? union(grown, box) : box);
-          overflow++;
-        } else out.push(box);
+        if (!o.drawn) { out.push(box); continue; }
+        const g = masterOf(r, o.byGuid) !== null ? marginsOf(ir, c, K, o.byGuid, o.memo || new Map()) : [0, 0, 0, 0];
+        const grown = g.some((v) => v > 0);
+        // What it can draw, cut to its clipping ancestors; an instance they clip away whole draws
+        // nothing, and a mask there would hide what others draw.
+        const seen = meet(grown ? rectOf(mc, [-g[0], -g[1], r.props.width + g[2], r.props.height + g[3]]) : box, clip);
+        if (!seen) { clipped++; continue; }
+        out.push(grown ? union(seen, box) : box);
+        if (grown) overflow++;
         continue;
       }
       if (images && images.has(c)) imgs.push(box);
       if (o.glyphs && o.glyphs.has(c)) glyphTexts.push(box);
-      walk(c, mc, r.props.clipsContent ? meet(clip, box) : clip);
+      walk(c, mc, r.props.clipsContent ? clipTo(clip, box) : clip);
     }
   };
   walk(i, I0, r0.props.clipsContent ? [0, 0, r0.props.width, r0.props.height] : null);
-  return images || opts ? { instances: out, images: imgs, overflow, glyphTexts } : out;
+  return images || opts ? { instances: out, images: imgs, overflow, clipped, glyphTexts } : out;
 }
 
 // The 1-device-pixel CENTER horizontal LINEs under record i that sit on a pixel boundary, as bands in
@@ -332,7 +360,12 @@ export function placeBox(side, s, size, lin) {
   const bw = ext[0] * s, bh = ext[1] * s, tol = 1.5;
   const r = side.render && side.render.width >= 0 ? side.render : null;
   if (r && b && Math.abs(side.W - r.width * s) <= tol && Math.abs(side.H - r.height * s) <= tol) return { ox: (b.x - r.x) * s, oy: (b.y - r.y) * s, bw, bh, rule: "render bounds", exact: [true, true] };
-  if (Math.abs(side.W - bw) <= tol && Math.abs(side.H - bh) <= tol) return { ox: 0, oy: 0, bw, bh, rule: "box", exact: [Math.abs(side.W - bw) < 1, Math.abs(side.H - bh) < 1] };
+  // Exact: the picture less than a whole pixel over the box, the box's rounding noise allowed for (a box
+  // of 800.0000000000001, from the IR's transforms, is 800), so a picture of 801 for it holds a pixel the
+  // box does not place. On the U audit two roots of one geometry, boxes of 800 and 800.0000000000001 and
+  // pictures of 801, were placed by two rules before this.
+  const fits = (W, b) => Math.abs(W - b) < 1 - 1e-6;
+  if (Math.abs(side.W - bw) <= tol && Math.abs(side.H - bh) <= tol) return { ox: 0, oy: 0, bw, bh, rule: "box", exact: [fits(side.W, bw), fits(side.H, bh)] };
   if (side.W >= bw - tol && side.H >= bh - tol) return { ox: Math.max(0, (side.W - bw) / 2), oy: Math.max(0, (side.H - bh) / 2), bw, bh, rule: "centred (guessed)", exact: [false, false] };
   return null;
 }
@@ -349,7 +382,10 @@ export function placeBox(side, s, size, lin) {
 //   Pixso's stored arrow 6.66, so the connectors' pictures are 15 and 14 px across the line and the shaft
 //   lies 0.72-0.75 px apart in them; Pixso reported no render bounds for 31 of the 32;
 // - else each side's own placement (centred when guessed).
-export function registration(pF, pP, wF, wP, S) {
+// slack: how far past the extents' difference the window reaches (0.5 px; on pictures k times finer, k/2
+// of their pixels, the same half pixel).
+export function registration(pF, pP, wF, wP, S, slack) {
+  const sl = slack === undefined ? 0.5 : slack;
   return [0, 1].map((k) => {
     if (S.register === "top-left") return { d: 0, rule: "top left" };
     const o = (p) => (k ? p.oy : p.ox);
@@ -357,7 +393,7 @@ export function registration(pF, pP, wF, wP, S) {
     if (wF[k] === wP[k]) return { d: 0, rule: "same extent" };
     if (pF && pP && pF.exact[k] && pP.exact[k]) return { d: o(pF) - o(pP), rule: "reported" };
     const span = wF[k] - wP[k];
-    if (S.registerFitPx > 0 && Math.abs(span) <= S.registerFitPx) return { d: null, rule: "fitted", window: [Math.min(0, span) - 0.5, Math.max(0, span) + 0.5] };
+    if (S.registerFitPx > 0 && Math.abs(span) <= S.registerFitPx) return { d: null, rule: "fitted", window: [Math.min(0, span) - sl, Math.max(0, span) + sl] };
     if (pF && pP) return { d: o(pF) - o(pP), rule: "placed (" + pF.rule + ", " + pP.rule + ")" };
     return { d: 0, rule: "top left (the box is not placed)" };
   });
@@ -417,15 +453,21 @@ function maskBits(sd, masks) {
 
 const EPS = 1e-6;
 // Compare two sides on one canvas. Their offset (P.at - F.at) keeps its whole part exactly; its fraction
-// is split half and half, each side resampled (bilinear) by its half, so both are blurred alike: a
-// one-sided shift left the U audit's connectors at mean 6.7-12.5, a symmetric one at 0.56-4.59 (§16.2).
+// is split half and half, each side resampled (bilinear) by its half, so both are blurred alike: on the
+// U audit's saved connectors a one-sided shift left means of 6.7-12.5, the split 2.1-7.31 (§16.2). A
+// split cannot both keep whole offsets exact and move continuously through a half pixel: at exactly
+// half, split says which side takes the +0.5 (per axis, 1 or -1; compareBest tries both). What the
+// split leaves on two box-filtered pictures of one drawing at different phases is §16.2's residual
+// (--register-supersample removes it where the engines can export finer).
 // The canvas holds both (a pixel outside a side is that side's white); a pixel any contributing pixel of
 // which is masked on either side is left out. bands: hairlineBands, compared column by column where the
 // pictures show the hairline pattern (one crisp row above the boundary in Figma, two half rows in Pixso).
-function compareSides(cf, cp, S, bands) {
+// regions: boxes in the frame `at` is given in; the share of the summed difference whose pixel centre
+// lies in one of them is inRegions.
+function compareSides(cf, cp, S, bands, split, regions) {
   const has = (sd) => sd.W > 0 && sd.H > 0;
   const D = [cp.at[0] - cf.at[0], cp.at[1] - cf.at[1]];
-  const fr = D.map((v) => v - Math.round(v));
+  const fr = D.map((v, k) => { const f = v - Math.round(v); return split && split[k] && Math.abs(Math.abs(f) - 0.5) < EPS ? 0.5 * split[k] : f; });
   const g = [0, 0], N = [0, 0];
   for (let k = 0; k < 2; k++) {
     const len = (sd) => (k ? sd.H : sd.W);
@@ -499,6 +541,16 @@ function compareSides(cf, cp, S, bands) {
     for (const [x, d] of cols) { over[(r1 - 1) * W + x] = d; over[r1 * W + x] = 0; }
     bandsUsed++;
   }
+  // The regions as a bitmap over the canvas (a pixel is in when its centre is).
+  let inR = null, sumIn = 0;
+  if (regions && regions.length) {
+    inR = new Uint8Array(W * H);
+    for (const q of regions) {
+      const p0 = Math.max(0, Math.ceil(q[0] - g[0] - 0.5)), p1 = Math.min(W, Math.ceil(q[2] - g[0] - 0.5));
+      const q0 = Math.max(0, Math.ceil(q[1] - g[1] - 0.5)), q1 = Math.min(H, Math.ceil(q[3] - g[1] - 0.5));
+      for (let y = q0; y < q1; y++) if (p1 > p0) inR.fill(1, y * W + p0, y * W + p1);
+    }
+  }
   const T = S.tile;
   const tiles = new Map();
   let compared = 0, maskedN = 0, same = 0, gross = 0, sum = 0;
@@ -509,6 +561,7 @@ function compareSides(cf, cp, S, bands) {
       let d = over ? over[y * W + x] : -1;
       if (d < 0) { d = 0; for (let q = 0; q < 3; q++) { const dc = Math.abs(fa[q] - pa[q]); if (dc > d) d = dc; } }
       compared++; sum += d;
+      if (inR && inR[y * W + x]) sumIn += d;
       if (d < 0.5) same++; else if (d > S.ink) gross++;
       const tk = Math.floor(y / T) * 100000 + Math.floor(x / T);
       const t = tiles.get(tk) || [0, 0];
@@ -521,7 +574,48 @@ function compareSides(cf, cp, S, bands) {
   const r6 = (v) => Math.round(v * 1e6) / 1e6, r2 = (v) => Math.round(v * 100) / 100;
   return { canvas: [W, H], figma: [cf.W, cf.H], pixso: [cp.W, cp.H], compared, masked: maskedN, maskedShare: W * H ? r6(maskedN / (W * H)) : 0,
     same: compared ? r6(same / compared) : 0, gross: compared ? r6(gross / compared) : 0, mean: compared ? r2(sum / compared) : 0, worstTile: r2(worstTile),
-    drawn: { figma: drawnOf(cf, S.drawnAlpha), pixso: drawnOf(cp, S.drawnAlpha) }, offset: [r2(D[0]), r2(D[1])], bands: bandsUsed };
+    drawn: { figma: drawnOf(cf, S.drawnAlpha), pixso: drawnOf(cp, S.drawnAlpha) }, offset: [r2(D[0]), r2(D[1])], bands: bandsUsed,
+    inRegions: inR ? (sum > 0 ? r6(sumIn / sum) : 0) : null };
+}
+
+// compareSides, where an axis's offset is exactly half a pixel: both ways of splitting it, the lower
+// mean kept. Which side takes the +0.5 was an arbitrary choice before (Math.round's): the two ways give
+// 5.75 and 8.75 on one of the U audit's connectors, and a pair and its mirror image differed (8.62
+// against 12.04 on a 2 px band 0.75 px apart); now a pair and its mirror image score alike.
+function compareBest(cf, cp, S, bands, regions) {
+  const tie = [0, 1].map((k) => { const v = cp.at[k] - cf.at[k]; return Math.abs(Math.abs(v - Math.round(v)) - 0.5) < EPS; });
+  if (!tie[0] && !tie[1]) return compareSides(cf, cp, S, bands, null, regions);
+  let best = null;
+  for (const sx of tie[0] ? [1, -1] : [0]) for (const sy of tie[1] ? [1, -1] : [0]) {
+    const m = compareSides(cf, cp, S, bands, [sx, sy], regions);
+    if (!best || (m.compared && (!best.compared || m.mean < best.mean))) best = m;
+  }
+  return best;
+}
+
+// A picture taken k times finer, box-averaged back onto whole pixels whose first begins p = [px, py]
+// fine pixels before the picture's own first: pixel (m, l) is the mean of the fine pixels [k m - px,
+// k m - px + k) × [k l - py, k l - py + k), a fine pixel outside the picture transparent. The colour is
+// averaged premultiplied (so it lays over white as the fine pixels do) and kept unrounded.
+export function downsample(img, k, p) {
+  const px = p ? p[0] : 0, py = p ? p[1] : 0;
+  const W = Math.ceil((img.W + px) / k), H = Math.ceil((img.H + py) / k);
+  const rgba = new Float64Array(W * H * 4);
+  for (let y = 0; y < img.H; y++) {
+    const l = Math.floor((y + py) / k);
+    for (let x = 0; x < img.W; x++) {
+      const s = (y * img.W + x) * 4, a = img.rgba[s + 3];
+      if (!a) continue;
+      const o = (l * W + Math.floor((x + px) / k)) * 4;
+      rgba[o] += img.rgba[s] * a; rgba[o + 1] += img.rgba[s + 1] * a; rgba[o + 2] += img.rgba[s + 2] * a; rgba[o + 3] += a;
+    }
+  }
+  for (let o = 0; o < rgba.length; o += 4) {
+    const a = rgba[o + 3];
+    if (a > 0) { rgba[o] /= a; rgba[o + 1] /= a; rgba[o + 2] /= a; }
+    rgba[o + 3] = a / (k * k);
+  }
+  return { W, H, rgba };
 }
 
 // What a side draws outside its masks: the box of its pixels with an alpha of at least minAlpha (of 255),
@@ -547,9 +641,9 @@ function drawnOf(sd, minAlpha) {
 // y1] in its own pixels], at: [x, y] where its cut sits on the canvas (both [0, 0], the default: aligned
 // at their top left) }. Both are laid over white and compared over the canvas that holds both (a pixel
 // outside one picture is that picture's white); a pixel inside a mask on either side is left out.
-// opts: { bands } (hairlineBands, in the frame `at` is given in).
+// opts: { bands (hairlineBands), regions } (in the frame `at` is given in).
 export function comparePictures(F, P, S, opts) {
-  return compareSides(sideOf(F), sideOf(P), S, opts && opts.bands);
+  return compareBest(sideOf(F), sideOf(P), S, opts && opts.bands, opts && opts.regions);
 }
 
 export function scaleFor(rec, S) {
@@ -591,9 +685,10 @@ async function auditPair(j, job, ctx, crop, siblings) {
   if (job.child !== undefined && F.of !== siblings) { e.why = "figma render missing: the section has " + F.of + " children in Figma and " + siblings + " in the IR, so its children cannot be paired by index"; return { e, figmaPng: F.d }; }
   try { Pv = await pixsoRender(rec.guid, s); } catch (err) { Pv = { ok: false, error: String((err && err.message) || err) }; }
   const pv = Pv && Pv.ok ? Pv.value : null;
-  // Pixso's export of a node that draws nothing is 0 bytes (n 0), where Figma's is a transparent 1x1
-  // (the U audit, §16.2: the 2 hidden and the 2 empty texts among its roots, and nothing else): an
-  // answer, not a missing render.
+  // Pixso exports 0 bytes (n 0) for a hidden node and an empty text, where Figma's export is a transparent
+  // 1x1 (the U audit, §16.2: its 2 hidden and 2 empty texts, and one text whose stored outline is
+  // unbounded; a node at opacity 0 and a component with no paint export a transparent box): an answer,
+  // not a missing render.
   const emptyP = S.blank === "not-compared" && !!pv && !pv.e && pv.n === 0 && !pv.d;
   if (!pv || pv.e || (!emptyP && (typeof pv.d !== "string" || !pv.d))) { e.why = "pixso render missing: " + String((pv && pv.e) || (Pv && Pv.error) || "no picture").slice(0, 160); return { e, figmaPng: F.d }; }
   let fi, pi;
@@ -623,20 +718,23 @@ async function auditPair(j, job, ctx, crop, siblings) {
   if (found.glyphTexts.length && S.glyphNotes === "skip") { e.ok = null; e.class = "source-glyphs"; e.why = "not compared: " + glyphWhy(); return Object.assign({ e }, pngs); }
   // Opacity: both engines export the node with its own (§16.2).
   const op = typeof F.opacity === "number" ? F.opacity : typeof rec.props.opacity === "number" ? rec.props.opacity : 1;
-  let fImg = fi, pImg = pi, rule = "none";
+  // af, ap: what each picture's alpha is multiplied by (the pictures at k × the scale take the same).
+  let af = 1, ap = 1, rule = "none";
   if (op < 1) {
     const big = op >= S.undoOpacityMin;
-    if (S.opacity === "both" && big) { fImg = scaleAlpha(fi, 1 / op); pImg = scaleAlpha(pi, 1 / op); rule = "undone in both pictures"; }
-    else if (S.opacity === "undo" && big) { fImg = scaleAlpha(fi, 1 / op); rule = "undone in Figma's picture"; }
-    else if (S.opacity === "apply" || S.opacity === "undo") { pImg = scaleAlpha(pi, op); rule = "applied to Pixso's picture"; }
+    if (S.opacity === "both" && big) { af = ap = 1 / op; rule = "undone in both pictures"; }
+    else if (S.opacity === "undo" && big) { af = 1 / op; rule = "undone in Figma's picture"; }
+    else if (S.opacity === "apply" || S.opacity === "undo") { ap = op; rule = "applied to Pixso's picture"; }
     else rule = "compared as exported";
   }
+  const fImg = af === 1 ? fi : scaleAlpha(fi, af), pImg = ap === 1 ? pi : scaleAlpha(pi, ap);
   e.opacity = { value: op, rule };
   // What each export holds against the opacity: reported, not used to pick the rule (a translucent paint
   // lowers the most opaque pixel without any opacity).
   if (op < 1) e.opacity.maxAlpha = { figma: maxAlpha(fi), pixso: maxAlpha(pi), atOpacity: Math.round(255 * op) };
   // Where the pictures lie against each other (registration) and where the box is in each.
   const wF = [fi.W, fi.H], wP = [pi.W, pi.H];
+  const blankF = isBlank(fi), blankP = isBlank(pi);
   let cropF = null, cropP = null;
   if (crop) {
     if (!placeF || !placeP) { e.why = "the section's box cannot be placed in " + (!placeF ? "Figma's" : "Pixso's") + " picture"; return Object.assign({ e }, pngs); }
@@ -647,71 +745,168 @@ async function auditPair(j, job, ctx, crop, siblings) {
   // A cut section is registered by its two placements; anything else by registration().
   const reg = crop ? [0, 1].map((k) => ({ d: S.register === "top-left" ? 0 : (k ? placeF.oy - placeP.oy : placeF.ox - placeP.ox), rule: S.register === "top-left" ? "top left" : "the node's box" }))
     : registration(placeF, placeP, wF, wP, S);
-  // The box in each picture, from the side that places it: Pixso's is Figma's moved by the offset.
-  const boxAt = (d) => {
-    if (placeF) return { F: [placeF.ox, placeF.oy], P: [placeF.ox - d[0], placeF.oy - d[1]] };
-    if (placeP) return { F: [placeP.ox + d[0], placeP.oy + d[1]], P: [placeP.ox, placeP.oy] };
-    return null;
-  };
   // Placeholders, masked on both sides: the instances' (--placeholders mask), the images' the build
   // could not carry (--image-placeholders mask) and the texts drawn from outlines that are not glyphs
   // (--glyph-notes mask).
-  const boxes = (S.placeholders === "mask" ? found.instances : []).concat(S.imagePlaceholders === "mask" ? found.images : [])
-    .concat(S.glyphNotes === "mask" ? found.glyphTexts : []);
+  const glyphMasked = S.glyphNotes === "mask" ? found.glyphTexts : [];
+  const boxes = (S.placeholders === "mask" ? found.instances : []).concat(S.imagePlaceholders === "mask" ? found.images : []).concat(glyphMasked);
   e.masks = { placeholders: found.instances.length, overflow: found.overflow, imagePlaceholders: found.images.length, masked: boxes.length, pad: boxes.length ? S.maskPad : null };
+  if (found.clipped) e.masks.clipped = found.clipped;
   if (found.glyphTexts.length) e.masks.glyphTexts = found.glyphTexts.length;
-  if (boxes.length && !placeF && !placeP) { e.ok = null; e.class = "unplaced"; e.why = "not compared: the placeholders cannot be placed in either picture"; return Object.assign({ e }, pngs); }
+  // Placeholders that cannot be placed leave the root not compared, unless one picture draws nothing:
+  // what the other draws is then not known to be masked, and a blank side never passes (on the U audit,
+  // the root whose Pixso export is 0 bytes came out not compared under --register top-left before this).
+  const unplaced = (where) => {
+    if (blankF !== blankP) {
+      e.why = (blankP ? "Pixso" : "Figma") + " draws nothing" + (emptyP ? " (its export is 0 bytes)" : "") + " and " + (blankP ? "Figma" : "Pixso") + " draws " +
+        (blankP ? fi.W + "x" + fi.H : pi.W + "x" + pi.H) + " px; the placeholders cannot be placed in " + where + ", so what it draws is not known to be masked";
+      return Object.assign({ e }, pngs);
+    }
+    e.ok = null; e.class = "unplaced"; e.why = "not compared: the placeholders cannot be placed in " + where;
+    return Object.assign({ e }, pngs);
+  };
+  if (boxes.length && !placeF && !placeP) return unplaced("either picture");
   const pad = (b) => [b[0] - S.maskPad, b[1] - S.maskPad, b[2] + S.maskPad, b[3] + S.maskPad];
   const frameMasks = boxes.map((b) => toPixels(pad(b), lin, size, s, { ox: 0, oy: 0 }));
   const shift = (ms, o) => ms.map((m) => [m[0] + o[0], m[1] + o[1], m[2] + o[0], m[3] + o[1]]);
   const bands = S.hairlines === "band" && (placeF || placeP) ? hairlineBands(ir, j, kids, s) : [];
-  // The two sides at an offset d: each cut at the box frame's position of its first pixel. Under
-  // --register top-left each cut sits at 0, as in the first pass, and its masks by its own placement.
-  const sides = (d) => {
-    const at = boxAt(d);
-    const sf = { img: fImg, crop: cropF, masks: [] }, sp = { img: pImg, crop: cropP, masks: [] };
+  // Where the flagged texts' outlines can reach (--glyph-class near): their boxes grown by --glyph-near.
+  const glyphNear = found.glyphTexts.length && S.glyphClass === "near"
+    ? found.glyphTexts.map((b) => toPixels([b[0] - S.glyphNear, b[1] - S.glyphNear, b[2] + S.glyphNear, b[3] + S.glyphNear], lin, size, s, { ox: 0, oy: 0 })) : null;
+  // The two sides: pictures fI and pI, aF where the node's box sits in Figma's picture (null: not
+  // placed), dPic where Pixso's picture starts against Figma's; each cut sits at the box frame's
+  // position of its first pixel. Under --register top-left each cut sits at 0, as in the first pass, and
+  // its masks by its own placement (a blank picture needs none). regions: the flagged texts' reach in
+  // the canvas's frame, or null when the canvas is not the box frame.
+  const layout = (fI, pI, aF, dPic) => {
+    const sf = { img: fI, crop: cropF, masks: [] }, sp = { img: pI, crop: cropP, masks: [] };
     if (S.register === "top-left") {
       if (boxes.length) {
-        if (!placeF || !placeP) return null;
-        sf.masks = shift(frameMasks, [placeF.ox, placeF.oy]); sp.masks = shift(frameMasks, [placeP.ox, placeP.oy]);
+        if ((!placeF && !blankF) || (!placeP && !blankP)) return null;
+        if (placeF) sf.masks = shift(frameMasks, [placeF.ox, placeF.oy]);
+        if (placeP) sp.masks = shift(frameMasks, [placeP.ox, placeP.oy]);
       }
-      return { sf, sp, framed: false };
+      return { sf, sp, framed: false, regions: glyphNear && placeF ? shift(glyphNear, [placeF.ox, placeF.oy]) : null };
     }
-    const o = at || { F: [0, 0], P: [-d[0], -d[1]] };
+    const o = aF ? { F: aF, P: [aF[0] - dPic[0], aF[1] - dPic[1]] } : { F: [0, 0], P: [-dPic[0], -dPic[1]] };
     const cut = (c) => (c ? [Math.max(0, Math.round(c[0])), Math.max(0, Math.round(c[1]))] : [0, 0]);
     const cF = cut(cropF), cP = cut(cropP);
     sf.at = [cF[0] - o.F[0], cF[1] - o.F[1]]; sp.at = [cP[0] - o.P[0], cP[1] - o.P[1]];
     if (boxes.length) { sf.masks = shift(frameMasks, o.F); sp.masks = shift(frameMasks, o.P); }
-    return { sf, sp, framed: !!at };
+    return { sf, sp, framed: !!aF, regions: aF ? glyphNear : null };
   };
+  // At the export's scale: Pixso's picture at offset d; the box from the side that places it.
+  const sides = (d) => layout(fImg, pImg, placeF ? [placeF.ox, placeF.oy] : placeP ? [placeP.ox + d[0], placeP.oy + d[1]] : null, d);
   const d0 = reg.map((r) => (r.d === null ? 0 : r.d));
-  if (!sides(d0)) { e.ok = null; e.class = "unplaced"; e.why = "not compared: the placeholders cannot be placed in " + (!placeF ? "Figma's" : "Pixso's") + " picture"; return Object.assign({ e }, pngs); }
-  let d = d0, fitted = null;
-  if (reg.some((r) => r.d === null)) {
-    // The search: Figma's side is laid out once; Pixso's moves (its masks with it).
-    const base = sides(d0), cf = sideOf(base.sf), cp = sideOf(base.sp);
-    fitted = fitOffset(reg, (dd) => {
-      const x = sides(dd);
+  if (!sides(d0)) return unplaced((!placeF && !blankF) ? "Figma's picture" : "Pixso's picture");
+  const search = reg.some((r) => r.d === null);
+  // The search on pictures k times finer (--register-supersample): both engines export the node again
+  // at k × the scale, and each is box-averaged back onto whole pixels, Pixso's at each phase of 1/k px.
+  // The offset is then tried in steps of 1/k px with no resampling, and two box-filtered pictures of one
+  // drawing at different sub-pixel phases become one picture again. At the export's scale the split
+  // leaves a residual on identical drawings (§16.2: 2.25 on the connectors' shaft alone, 6.62 on a
+  // 2 px line in 15 rows at phases 0 and 0.5). Only where the search runs, and only up to
+  // --supersample-max-side; otherwise, or when an export at k × is missing or not k times the first,
+  // the search runs on the pictures as exported, and the root records why.
+  const fineFit = async () => {
+    // Both engines' exports take a scale up to 16 (the plugin's EXPORT_LIMITS, SCRIPTS.auditRender).
+    const big = Math.max(fi.W, fi.H, pi.W, pi.H), top = Math.floor(16 / s + EPS), k = Math.min(S.registerSupersample, Math.floor(S.supersampleMaxSide / big), top);
+    if (k < 2) return { k: S.registerSupersample, why: top < 2 ? "the scale is " + e.scale + " and an export takes up to 16" : "the pictures are too large (" + big + " px; --supersample-max-side " + S.supersampleMaxSide + ")" };
+    const sk = s * k;
+    let Fk = null, Pk = null;
+    try { Fk = await figmaExport(Object.assign({}, job, { constraint: { type: "SCALE", value: sk } })); } catch (err) { Fk = { e: String((err && err.message) || err) }; }
+    if (!Fk || Fk.e || typeof Fk.d !== "string" || !Fk.d) return { k, why: "Figma's picture at " + k + "x is missing: " + String((Fk && (Fk.e || Fk.error)) || "no picture").slice(0, 80) };
+    try { Pk = await pixsoRender(rec.guid, sk); } catch (err) { Pk = { ok: false, error: String((err && err.message) || err) }; }
+    const pk = Pk && Pk.ok ? Pk.value : null;
+    if (!pk || pk.e || typeof pk.d !== "string" || !pk.d) return { k, why: "Pixso's picture at " + k + "x is missing: " + String((pk && pk.e) || (Pk && Pk.error) || "no picture").slice(0, 80) };
+    let fk, qk;
+    try { fk = decodePNG(Buffer.from(Fk.d, "base64")); qk = decodePNG(Buffer.from(pk.d, "base64")); }
+    catch (err) { return { k, why: "a picture at " + k + "x does not decode: " + String(err.message).slice(0, 80) }; }
+    // Each must be its first picture k times finer, give or take a pixel of the first.
+    const finer = (a, b) => Math.abs(a.W - k * b.W) <= k && Math.abs(a.H - k * b.H) <= k;
+    if (!finer(fk, fi) || !finer(qk, pi)) return { k, why: "the pictures at " + k + "x are not " + k + " times the first (Figma " + fk.W + "x" + fk.H + ", Pixso " + qk.W + "x" + qk.H + ")" };
+    if (af !== 1) fk = scaleAlpha(fk, af);
+    if (ap !== 1) qk = scaleAlpha(qk, ap);
+    const pF = placeBox({ W: fk.W, H: fk.H, box: Fk.box, render: Fk.render }, sk, size, lin);
+    const pP = placeBox({ W: qk.W, H: qk.H, box: pk.box, render: pk.render }, sk, size, lin);
+    if (boxes.length && !pF && !pP) return { k, why: "the placeholders cannot be placed in either picture at " + k + "x" };
+    const rg = registration(pF, pP, [fk.W, fk.H], [qk.W, qk.H], { register: "bounds", registerFitPx: k * S.registerFitPx }, k / 2);
+    // Offsets in fine pixels: a known one rounded, a searched one every fine pixel of its window.
+    const cands = rg.map((r) => { if (r.d !== null) return [Math.round(r.d)]; const out = []; for (let n = Math.ceil(r.window[0] - EPS); n <= Math.floor(r.window[1] + EPS); n++) out.push(n); return out; });
+    const fD = downsample(fk, k), phases = new Map();
+    // Pixso's fine picture n fine pixels after Figma's: its phase n mod k, laid at floor(n / k).
+    const at = (n) => {
+      const p = n.map((v) => ((v % k) + k) % k), q = n.map((v, a) => (v - p[a]) / k), key = p.join();
+      if (!phases.has(key)) phases.set(key, downsample(qk, k, p));
+      const aF = pF ? [pF.ox / k, pF.oy / k] : pP ? [(pP.ox + n[0]) / k, (pP.oy + n[1]) / k] : null;
+      return Object.assign(layout(fD, phases.get(key), aF, q), { key });
+    };
+    // As at the export's scale, each side is laid over white once (Pixso's once per phase); an offset
+    // moves it and its masks.
+    let best = null, tried = 0, cf = null;
+    const laid = new Map();
+    for (const nx of cands[0]) for (const ny of cands[1]) {
+      const x = at([nx, ny]);
+      if (!cf) cf = sideOf(x.sf);
+      if (!laid.has(x.key)) laid.set(x.key, sideOf(x.sp));
+      const cp = laid.get(x.key);
       cf.at = x.sf.at; cf.bits = maskBits(cf, x.sf.masks); cp.at = x.sp.at; cp.bits = maskBits(cp, x.sp.masks);
-      const m = compareSides(cf, cp, S, x.framed ? bands : []);
-      return m.compared ? m.mean : Infinity;
-    });
-    d = fitted.d;
+      const mm = compareSides(cf, cp, S, x.framed ? bands : []);
+      tried++;
+      const v = mm.compared ? mm.mean : Infinity;
+      if (!best || v < best.v - 1e-9) best = { n: [nx, ny], v, lay: x };
+    }
+    const m = compareSides(sideOf(best.lay.sf), sideOf(best.lay.sp), S, best.lay.framed ? bands : [], null, best.lay.regions);
+    return { k, m, d: best.n.map((v) => v / k), reg: rg, tried, figma: [fk.W, fk.H], pixso: [qk.W, qk.H], pngs: { k, figma: Fk.d, pixso: pk.d } };
+  };
+  const fine = search && S.registerSupersample > 1 && !crop && S.register === "bounds" && !blankF && !blankP ? await fineFit() : null;
+  let d = d0, m;
+  const r2 = (v) => Math.round(v * 100) / 100;
+  if (fine && fine.m) {
+    m = fine.m; d = fine.d;
+    pngs.fine = fine.pngs;   // kept beside the pictures as exported, so a later pass can re-judge them
+    e.register = { rule: fine.reg.map((r) => r.rule), offset: d.map(r2), window: fine.reg.map((r) => (r.window ? r.window.map((v) => r2(v / fine.k)) : null)), tried: fine.tried,
+      supersample: { k: fine.k, figma: fine.figma, pixso: fine.pixso } };
+  } else {
+    let fitted = null;
+    if (search) {
+      // The search: Figma's side is laid out once; Pixso's moves (its masks with it).
+      const base = sides(d0), cf = sideOf(base.sf), cp = sideOf(base.sp);
+      fitted = fitOffset(reg, (dd) => {
+        const x = sides(dd);
+        cf.at = x.sf.at; cf.bits = maskBits(cf, x.sf.masks); cp.at = x.sp.at; cp.bits = maskBits(cp, x.sp.masks);
+        const mm = compareBest(cf, cp, S, x.framed ? bands : []);
+        return mm.compared ? mm.mean : Infinity;
+      });
+      d = fitted.d;
+    }
+    const lay = sides(d);
+    m = compareBest(sideOf(lay.sf), sideOf(lay.sp), S, lay.framed ? bands : [], lay.regions);
+    e.register = { rule: reg.map((r) => r.rule), offset: d.map(r2) };
+    if (fitted) { e.register.window = reg.map((r) => r.window || null); e.register.tried = fitted.tried; }
+    if (fine) e.register.supersample = { k: fine.k, used: false, why: fine.why };
   }
-  const lay = sides(d);
-  const m = compareSides(sideOf(lay.sf), sideOf(lay.sp), S, lay.framed ? bands : []);
-  e.register = { rule: reg.map((r) => r.rule), offset: [Math.round(d[0] * 100) / 100, Math.round(d[1] * 100) / 100] };
-  if (fitted) { e.register.window = reg.map((r) => r.window || null); e.register.tried = fitted.tried; }
   e.masks.maskedShare = m.maskedShare;
   if (bands.length) e.hairlines = { found: bands.length, compared: m.bands };
   e.metrics = { compared: m.compared, same: m.same, gross: m.gross, mean: m.mean, worstTile: m.worstTile, canvas: m.canvas, drawn: m.drawn };
-  if (!m.compared) { e.ok = null; e.class = "masked"; e.why = "not compared: nothing is left once the placeholders are masked"; return Object.assign({ e }, pngs); }
+  if (!m.compared) {
+    // Nothing left once masked: in the flagged texts' class when their masks are among those applied.
+    const what = [];
+    if (S.placeholders === "mask" && found.instances.length) what.push(found.instances.length + " instance placeholder" + (found.instances.length === 1 ? "" : "s"));
+    if (S.imagePlaceholders === "mask" && found.images.length) what.push(found.images.length + " image placeholder" + (found.images.length === 1 ? "" : "s"));
+    if (glyphMasked.length) what.push(glyphMasked.length + " text" + (glyphMasked.length === 1 ? "" : "s") + " whose stored glyph outlines are not glyphs");
+    e.ok = null; e.class = glyphMasked.length ? "source-glyphs" : "masked";
+    e.why = "not compared: nothing is left once the masks are applied (" + what.join(", ") + ")";
+    return Object.assign({ e }, pngs);
+  }
   e.compared = true;
   const tolPx = S.sizeTol * s + 1;
   const why = [];
   if (emptyP) why.push("Pixso draws nothing (its export is 0 bytes) and Figma draws " + fi.W + "x" + fi.H + " px");
   if (S.sizeBy === "picture") {
-    if (Math.abs(m.figma[0] - m.pixso[0]) > tolPx || Math.abs(m.figma[1] - m.pixso[1]) > tolPx) why.push("the pictures differ in size: Figma " + m.figma.join("x") + ", Pixso " + m.pixso.join("x") + " px at scale " + e.scale);
+    // The pictures as exported (a search at k × the scale compares them box-averaged back).
+    const pf = fine && fine.m ? wF : m.figma, pp = fine && fine.m ? wP : m.pixso;
+    if (Math.abs(pf[0] - pp[0]) > tolPx || Math.abs(pf[1] - pp[1]) > tolPx) why.push("the pictures differ in size: Figma " + pf.join("x") + ", Pixso " + pp.join("x") + " px at scale " + e.scale);
   } else {
     // What each draws outside the masks, edge by edge in the registered frame: overflow a mask covers
     // (an instance's) is not a difference, and an edge further than the tolerance is.
@@ -726,7 +921,18 @@ async function auditPair(j, job, ctx, crop, siblings) {
   if (m.mean > S.meanMax) why.push("mean difference " + m.mean + " over " + S.meanMax);
   if (S.tileMeanMax > 0 && m.worstTile > S.tileMeanMax) why.push("worst tile's mean " + m.worstTile + " over " + S.tileMeanMax);
   if (why.length && found.images.length && S.imagePlaceholders !== "mask") why.push("it holds " + found.images.length + " " + CODE.IMAGE_PLACEHOLDER + " paint" + (found.images.length === 1 ? "" : "s") + " (an image the run could not carry; --image-placeholders mask leaves them out)");
-  if (why.length && found.glyphTexts.length) { why.push(glyphWhy()); e.class = "source-glyphs"; }
+  if (why.length && found.glyphTexts.length) {
+    // The class only where the difference lies where the flagged texts' outlines can reach (--glyph-class
+    // near: more than --glyph-share-min of it within --glyph-near of their boxes); elsewhere the root is an
+    // ordinary failure that holds them. Measured on the U audit (§16.2): the root that draws slabs holds
+    // 69 % of its difference within 256 units of its 44 flagged texts, 17 % of its area (20 % within 64,
+    // 99 % within 512); the 2 drop-down roots, their placeholders masked by their boxes, hold 3.5-4.6 %
+    // within 256 units of their one flagged text, about that region's share of their area.
+    if (glyphNear) e.glyphShare = m.inRegions;
+    const near = S.glyphClass === "any" || (m.inRegions !== null && m.inRegions > S.glyphShareMin);
+    why.push(glyphWhy() + (near ? "" : m.inRegions === null ? ", but where the difference lies against them is not known (the box is not placed)" : ", but most of the difference lies away from them"));
+    if (near) e.class = "source-glyphs";
+  }
   e.ok = why.length === 0;
   e.why = why.length ? why.join("; ") : null;
   return Object.assign({ e }, pngs);
@@ -781,6 +987,7 @@ export async function auditRun(ctx) {
           const p = await auditPair(ch[k], cj, ctx2(ctx, kids), c.type === "SECTION" && S.section !== "none", ch.length);
           entry.children.push(Object.assign({ i: ch[k] }, p.e));
           if (p.figmaPng || p.pixsoPng) pics.push({ name: r.i + "-c" + k, figma: p.figmaPng, pixso: p.pixsoPng, ok: p.e.ok });
+          if (p.fine) pics.push({ name: r.i + "-c" + k + "@" + p.fine.k + "x", figma: p.fine.figma, pixso: p.fine.pixso, ok: p.e.ok });
         }
         const C = entry.children;
         entry.compared = C.some((c) => c.compared);
@@ -793,6 +1000,8 @@ export async function auditRun(ctx) {
         Object.assign(entry, p.e, { i: r.i, key });
         if (rec.type === "SECTION" && S.section === "none") entry.crop = "none (--section none)";
         if (p.figmaPng || p.pixsoPng) pics.push({ name: String(r.i), figma: p.figmaPng, pixso: p.pixsoPng, ok: p.e.ok });
+        // The pictures a search at k × the scale compared (--register-supersample), as <i>@<k>x.
+        if (p.fine) pics.push({ name: r.i + "@" + p.fine.k + "x", figma: p.fine.figma, pixso: p.fine.pixso, ok: p.e.ok });
       }
     }
     if (entry.ok !== true && entry.ok !== null) entry.ok = false;
@@ -800,10 +1009,12 @@ export async function auditRun(ctx) {
     log("  [" + n + "/" + roots.length + "] root " + r.i + " " + (entry.ok === true ? "ok" : entry.ok === null ? "not compared" : "NOT OK") + (entry.why ? ": " + entry.why : ""));
     if (ctx.onRoot) await ctx.onRoot(entry, pics);
   }
-  const cls = (c) => out.filter((e) => e.class === c).length;
+  const cls = (c, ok) => out.filter((e) => e.class === c && (ok === undefined || e.ok === ok)).length;
+  // The flagged texts' class is counted apart for the roots that fail in it and the ones not compared
+  // (--glyph-notes skip, or a root its masks cover whole).
   const counts = { roots: out.length, ok: out.filter((e) => e.ok === true).length, failed: out.filter((e) => e.ok === false).length,
     notCompared: out.filter((e) => e.ok === null).length, blank: cls("blank"), hiddenInSource: cls("hidden-in-source"),
-    sourceGlyphs: cls("source-glyphs"), placeholderRoots: placeholderRoots.length,
+    sourceGlyphs: cls("source-glyphs", false), sourceGlyphsNotCompared: cls("source-glyphs", null), placeholderRoots: placeholderRoots.length,
     missing: out.filter((e) => e.ok === false && /render missing/.test(e.why || "")).length };
   return { format: AUDIT_FORMAT, version: AUDIT_VERSION, snapshot: states.snapshot, runId: states.runId, tool: "tools/ir-audit.mjs",
     made: new Date().toISOString(), settings: S, identity: ctx.identity || null, counts, roots: out, placeholderRoots };
