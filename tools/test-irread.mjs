@@ -398,6 +398,18 @@ check("firstLineShift: written where the stored first baseline is more than 0.5 
   bad.nodes[idx(bad, IDS.textFromStyle)].props.firstLineShift = 0.3;
   return validate(bad).errors.some((e) => /firstLineShift/.test(e.path)) ? "a shift within 0.5 px is refused by the validator" : false;
 });
+check("a cap-height trim the text style sets is the text's: leadingTrim CAP_HEIGHT, trimmed in the source, no firstLineShift (U: 7 texts)", () => {
+  // The stored baseline 2 px above half-leading, as in U's 9 px labels, where the style's trim puts it.
+  const r = pixToIR(mutated((v, at) => {
+    const t = at(IDS.textFromStyle);
+    at(IDS.textStyle).leadingTrim = 1; delete t.leadingTrim;
+    t.lineHeight = PX(20); t.size = { x: 60, y: 20 };
+    t.textData.baselines = [{ position: { x: 0, y: 14 }, width: 40, lineY: 0, lineHeight: 20, lineAscent: 15.5, firstCharacter: 0, endCharacter: 6 }];
+    t.textData.fontMetaData = [{ key: { family: "Inter", style: "Medium", postscript: "" }, fontLineHeight: 1.21 }];
+  }));
+  const p = rec(IDS.textFromStyle, r.ir).props;
+  eq([p.leadingTrim, p.firstLineShift, r.stats.text.firstLine.trimmedInSource, r.stats.text.firstLine.shifted, r.stats.text.styleValueOverridden], ["CAP_HEIGHT", undefined, 1, 0, 0]);
+});
 check("TEXT_GLYPHS_INVALID: a text whose stored glyphs are not glyph outlines, by class; a real glyph and an empty space are not (C06)", () => {
   const read = (blobs, chars) => pixToIR(mutated((v, at) => {
     const t = at(IDS.text), first = v.blobs.length;

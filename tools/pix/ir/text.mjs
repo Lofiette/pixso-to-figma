@@ -11,20 +11,22 @@
 //   is drawn at the font's natural line height (the stored baselines say so: K, M), Figma's AUTO; every
 //   other PERCENT is the fraction × 100, PERCENT 1 included: 100 %, counted (stats.text.percentOne).
 //   Review R3 read PERCENT 1 as AUTO from the stored baselines[].lineHeight, which holds the natural
-//   height in one file; the box and the first baseline of every PERCENT 1 text in the five measured
+//   height in one file; the box and the first baseline of every PERCENT 1 text in the six measured
 //   files are the 100 % layout (§15.14, C08);
 // - a text bound to a text style is drawn with the style's fontSize (absent: 14), lineHeight,
-//   letterSpacing, textCase, textDecoration, paragraphIndent and paragraphSpacing where the style has
-//   them, whatever the node stores (P's glyphs and baselines agree with the style on every text where
-//   the two differ; U's six status labels inherit UPPER from their style and Pixso drew capitals,
-//   §15.14, C05); its font is the node's unless only the style's is in textData.fontMetaData (the fonts
-//   Pixso laid the text out in). Each node whose own value is overridden is counted
-//   (stats.text.styleValueOverridden; part F, review R2). With no style a missing fontName is counted;
+//   letterSpacing, textCase, textDecoration, paragraphIndent, paragraphSpacing and leadingTrim where
+//   the style has them, whatever the node stores (P's glyphs and baselines agree with the style on
+//   every text where the two differ; U's six status labels inherit UPPER from their style and Pixso drew
+//   capitals, §15.14, C05; U's seven 9 px labels inherit a cap-height trim and their stored first
+//   baselines sit where it puts them); its font is the node's unless only the style's is in
+//   textData.fontMetaData (the fonts Pixso laid the text out in). Each node whose own value is
+//   overridden is counted (stats.text.styleValueOverridden; part F, review R2). With no style a missing
+//   fontName is counted;
 // - a size neither the node nor its style gives is 14 (the table of absent defaults), unless every
 //   stored glyph of the base style agrees on another (Pixso draws the stored glyphs); a letter spacing
 //   neither gives is 0, unless at least three pairs of consecutive glyphs on one baseline agree on
-//   another gap (the gap is the stored letter spacing, or 0, in all but 2 of 31 930 such texts in the
-//   five measured files: textProps below). Each is counted
+//   another gap (the gap is the stored letter spacing, or 0, in 36 114 such texts of the six measured
+//   files and differs from it in 3: textProps below). Each is counted
 //   (stats.text.fontSizeFromGlyphs, letterSpacingFromGlyphs) and noted TEXT_VALUE_FROM_GLYPHS (§15.14, C07);
 // - number forms (fontVariantNumeric*), the sub/superscript position and OpenType features
 //   (toggledOnOTFeatures) have no Figma plugin value (TextNode.openTypeFeatures is read-only): each
@@ -80,8 +82,8 @@ function hyperlinkOf(h) {
 }
 
 // A glyph blob that is not a glyph outline (§15.14, C06). Glyphs are stored in em (the cap of a Latin
-// capital at about -0.7), and every real one in the five measured files spans at most 1.2 em. In U,
-// 478 texts point their glyph slots at blobs that are not glyphs, through a stale table: one reaching
+// capital at about -0.7), and every real one in the six measured files spans at most 1.2 em. In U,
+// 475 texts point their glyph slots at blobs that are not glyphs, through a stale table: one reaching
 // past 1e6 em, after which Pixso draws no part of the text (and an export of a root no ancestor clips
 // comes back empty); one wider or taller than 3 em, a slab Pixso draws where the glyph should be; one
 // with no extent for a visible character, which draws nothing. Figma builds the characters.
@@ -233,10 +235,11 @@ export function textProps(cx, n, put) {
   const base = { fontName: font, fontSize: r2(size) };
   const pick = (f) => (style && style[f] ? style[f] : n[f]);
   let ls = numberOf(cx, "Number", pick("letterSpacing"), "letterSpacing");
-  // The gap between consecutive glyphs on one baseline is the letter spacing in 31 930 texts of the five
+  // The gap between consecutive glyphs on one baseline is the letter spacing in 36 114 texts of the six
   // measured files with three or more such pairs (the stored one, PIXELS or PERCENT, or 0 where none is
-  // stored), and differs from it in two: U's one text with no spacing stored and its glyphs 0.4 px
-  // apart, read here, and one in M with -1 % stored and none drawn, which is not (a stored value stands).
+  // stored), and differs from it in three: U's one text with no spacing stored and its glyphs 0.4 px
+  // apart, read here, and one each in M and Q with -1 % stored and none drawn, which are not (a stored
+  // value stands).
   if (!ls) {
     const gap = glyphGap(td);
     if (gap !== null) { ls = { unit: "PIXELS", value: gap }; cx.stats.text.letterSpacingFromGlyphs++; fromGlyphs.push("letterSpacing " + gap + " px (absent: 0)"); }
@@ -246,7 +249,7 @@ export function textProps(cx, n, put) {
   const lh = numberOf(cx, "Number", pick("lineHeight"), "lineHeight");
   if (lh) { put("lineHeight", lh); base.lineHeight = lh; }
   for (const f of ["letterSpacing", "lineHeight"]) if (style && style[f] && n[f] && (n[f].value !== style[f].value || n[f].units !== style[f].units)) overridden = true;
-  for (const f of ["textCase", "textDecoration", "paragraphIndent", "paragraphSpacing"]) if (style && style[f] && n[f] !== undefined && n[f] !== null && n[f] !== style[f]) overridden = true;
+  for (const f of ["textCase", "textDecoration", "paragraphIndent", "paragraphSpacing", "leadingTrim"]) if (style && style[f] && n[f] !== undefined && n[f] !== null && n[f] !== style[f]) overridden = true;
   if (overridden) cx.stats.text.styleValueOverridden++;
   base.fills = paintsOf(cx, n.fillPaints);
   const indent = pick("paragraphIndent"), spacing = pick("paragraphSpacing");
@@ -269,7 +272,10 @@ export function textProps(cx, n, put) {
   const trunc = E.TEXT_TRUNCATION[cx.en("PixsoNode", "textTruncation")(n.textTruncation)];
   if (trunc) put("textTruncation", trunc);
   if (trunc === "ENDING" && Number.isInteger(n.maxLines) && n.maxLines > 0) put("maxLines", n.maxLines);
-  const lt = E.LEADING_TRIM[cx.en("PixsoNode", "leadingTrim")(n.leadingTrim)];
+  // The cap-height trim is the style's too (§15.14, measured on U, 2026-10-12: 7 of the 14 texts whose
+  // style sets it set none themselves, and their stored first baselines sit at the cap height of their
+  // 9 px boxes, where the trim puts them; no other measured file has such a text).
+  const lt = E.LEADING_TRIM[cx.en("PixsoNode", "leadingTrim")(pick("leadingTrim"))];
   if (lt) put("leadingTrim", lt);
   if (n.hangingPunctuation) put("hangingPunctuation", true);
   if (n.hangingList) put("hangingList", true);
@@ -330,10 +336,11 @@ function naturalLineHeight(cx, td, font) {
 // an untrimmed line out with half-leading: its baseline sits (lineHeight - natural) / 2 + ascent below
 // the line's top, and a box of height H puts a block of B px at 0 (TOP), (H - B) / 2 (CENTER) or H - B
 // (BOTTOM). Pixso stores the first baseline it drew, with that in-line offset rounded to a whole
-// pixel. Measured on U, 2026-10-07: 13 532 of the 13 539 texts this can be checked on are within half a
-// pixel of that place, under every line-height unit; the other 7 sit 1.86 px higher, labels in 9 px
-// boxes where a cap-height trim puts them. M, P and two more libraries have none higher (and one 0.69 px
-// lower). Returns the shift (px, positive down) where it is more than half a pixel, else undefined;
+// pixel. Measured on U, 2026-10-07: all 13 532 texts this can be checked on are within half a pixel of
+// that place, under every line-height unit (7 more, 1.86 px higher, take their cap-height trim from
+// their text style and are trimmed in the source since 2026-10-12). M, P, Q and two more libraries have
+// none off it but one, 0.69 px lower. Returns the shift (px, positive down) where it is more than half a
+// pixel, else undefined;
 // counted in stats.text.firstLine (halfLeading, shifted, unknown: no metrics, a first character laid out
 // in another size, font or line height, or a cut text; trimmedInSource).
 function firstLineShift(cx, n, td, o) {
