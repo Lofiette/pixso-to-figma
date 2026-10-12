@@ -615,10 +615,16 @@ are closed, a new key changes it too. A change updates this document, `tools/ir/
 
 **Within version 3** (`docs/M1.md` §15.14, 2026-10-07), additions an IR written before them never uses, so every such
 IR still validates; a checkout before them refuses an IR written after them (an unknown prop or code), never misreads
-it. The version stays 3, as for the `boolean-operands` class (`docs/M1.md` §15.13): a bump would refuse every
-version 3 run folder, and the new builder setting `textTrim` already gives every run a new folder:
+it:
 - the `TEXT` prop `firstLineShift`, and `lines` counting the drawn lines of a cut text;
 - the codes `TEXT_GLYPHS_INVALID` (with its classes) and `TEXT_VALUE_FROM_GLYPHS`.
+
+The other way round is not loud: a version 3 IR written before them, read by a checkout after them (`pix-run
+--from-ir` checks the version only), counts a cut text's `lines` as every stored baseline, so VERIFY does not see a
+truncation Figma leaves out, and has no `firstLineShift`, so `textTrim` `source` trims none of its texts (as it trims
+none of the six measured files'). By the rule above that is a bump. The version stays 3 for now, as for the
+`boolean-operands` class (`docs/M1.md` §15.13): no run folder of the live runs holds a version 3 IR (all 12 hold
+version 2), and whether to bump is decided once, when the branches of this round that change the schema are merged.
 
 ## 16. Complete example
 
