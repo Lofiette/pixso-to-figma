@@ -37,7 +37,19 @@
 //     a placeholder masked by what its master draws (at a scaled instance's scale, and not at all where
 //     its clipping ancestors clip it away); a text with invalid stored glyphs in its own class where the
 //     difference lies near it; a 1-device-pixel line on a pixel boundary compared by its two-row band,
-//     and every real stroke difference there still failing. Each fails under the first pass's settings.
+//     and every real stroke difference there still failing. Each fails under the first pass's settings;
+//   - which pixels a picture draws (--drawn-by, §16.5): visible leaves out what is white on both sides
+//     (a white card one engine exports opaque and the other transparent, a shadow's faint edge) and
+//     still counts a visible difference on both sides (an image placeholder against an image with white
+//     margins in a white frame, drawn here and in the fixture run), where ink makes it one of size;
+//     visible within 16 is the default (§16.6): with no flag the shadow's edge passes and a counter whose
+//     figures Pixso sets 3 px wider still fails, which within 64 it no longer does; a pass under the
+//     defaults reuses nothing from a pass by alpha;
+//   - the offline re-judge (tools/ir-rejudge.mjs): a run audited with --pictures all, judged again from
+//     its folder, reproduces itself root for root, and under another setting matches a live pass under
+//     it; an export the folder does not keep (another scale, the reports of a search's 4x pictures) is
+//     refused or named, and its root set apart; an audit recorded before --drawn-by is judged by alpha,
+//     the rule it ran, not by today's default.
 // Everything is synthetic, and everything written goes to the system's temporary folder.
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -64,8 +76,9 @@ import { SCRIPTS, assertReadOnlyScript, makeMcpClient, readOnlyProblems } from "
 import { IDENTITY_SCRIPT } from "./extract-lib.mjs";
 import { fakePixso } from "./test/fake-pixso.mjs";
 import { AUDIT_SETTINGS, GLYPH_NOTE_CODES, auditRoots, auditRun, comparePictures, defaultAuditSettings, guidIndex, parseAuditArgs, placeBox, placeholderBoxes, registration, scaleAlpha } from "./ir/render-audit.mjs";
-import { CODE } from "./ir/schema.mjs";
+import { CODE, canonicalJSON } from "./ir/schema.mjs";
 import { auditFolder, main as auditMain, readRun } from "./ir-audit.mjs";
+import { compareAudits, main as rejudgeMain, rejudge, rejudgeSettings } from "./ir-rejudge.mjs";
 import { decodePNG } from "./pngutil.mjs";
 
 let failed = 0;
@@ -258,6 +271,7 @@ const rootOf = (res, i) => res.audit.roots.find((e) => e.i === i);
   check(d.maxSide === 800 && d.ink === 191 && d.grossMax === 0.01 && d.meanMax === 5 && d.section === "crop" && d.placeholders === "mask" && d.opacity === "both" &&
     d.sizeTol === 1 && d.tileMeanMax === 0 && d.register === "bounds" && d.registerFitPx === 4 && d.sizeBy === "drawn" && d.drawnAlpha === 16 &&
     d.placeholderExtent === "drawn" && d.glyphNotes === "mask" && d.hairlines === "band" && d.blank === "not-compared" && d.hiddenInSource === "skip" &&
+    d.drawnBy === "visible" && d.drawnWhiteTol === 16 &&
     Object.keys(AUDIT_SETTINGS).every((f) => AUDIT_SETTINGS[f][2] !== undefined),
     "every policy is a setting with a stated default (" + Object.keys(AUDIT_SETTINGS).length + " settings)");
   let refused = 0;
@@ -396,6 +410,27 @@ const LP = localPixso();
   const m2 = rootOf(tightM, 2);
   check(t2 && t2.ok === false && t2.masks.imagePlaceholders === 1 && /IMAGE_PLACEHOLDER/.test(t2.why) && m2 && m2.ok === true && m2.masks.masked === 2 && m2.metrics.mean === 0,
     "an image the run could not carry differs by default and the root says it holds an IMAGE_PLACEHOLDER; --image-placeholders mask leaves it out", show([t2 && t2.why, m2 && m2.masks]));
+  // Which pixels a picture draws (--drawn-by, §16.5): inside root 2's white frame Figma draws the grey
+  // placeholder where Pixso draws nothing over the frame's white (the toy rasteriser draws no image).
+  // By visible that white counts on Pixso's side, where Figma's is grey, and every root comes out as by
+  // alpha; by ink it does not, and root 2's content difference becomes one of size. Each pass names its
+  // settings, whatever the defaults.
+  const io = { mcp: LP, figmaExport: FIG.exportJob };
+  const byAlpha = await auditOf(GOOD, io, ["--drawn-by", "alpha"]), alphaT = rootOf(await auditOf(GOOD, io, ["--mean-max", "0.1", "--drawn-by", "alpha"]), 2);
+  const unlike = [];
+  let visT = null;
+  for (const t of ["8", "16"]) {
+    const vis = await auditOf(GOOD, io, ["--drawn-by", "visible", "--drawn-white-tol", t]);
+    for (const e of vis.audit.roots) { const c = rootOf(byAlpha, e.i); if (!c || c.ok !== e.ok || c.why !== e.why) unlike.push([t, e.i, e.why]); }
+    const v2 = rootOf(await auditOf(GOOD, io, ["--mean-max", "0.1", "--drawn-by", "visible", "--drawn-white-tol", t]), 2);
+    if (!v2 || !alphaT || v2.why !== alphaT.why) unlike.push([t, 2, v2 && v2.why]);
+    visT = v2;
+  }
+  const ink2 = rootOf(await auditOf(GOOD, io, ["--drawn-by", "ink", "--drawn-white-tol", "8"]), 2);
+  check(unlike.length === 0 && byAlpha.audit.counts.failed === 0 && alphaT && alphaT.ok === false && !/differ in size/.test(alphaT.why) &&
+    ink2 && ink2.ok === false && /differ in size/.test(ink2.why || ""),
+    "by --drawn-by visible (within 8 and 16) every root of the fixture run comes out as by alpha, and root 2 under --mean-max 0.1 fails on its content alone (" +
+    (visT && visT.why) + "); by ink root 2 differs in size (" + (ink2 && ink2.why) + ")", show([unlike, alphaT && alphaT.why, ink2 && [ink2.why, ink2.metrics.drawn]]));
   // A mask that covers the whole root leaves nothing to compare: not compared, never ok.
   const all = await auditOf(GOOD, { mcp: LP, figmaExport: FIG.exportJob }, ["--mask-pad", "1000", "--blank", "compare"]);
   const n2 = rootOf(all, 2);
@@ -529,6 +564,14 @@ const LP = localPixso();
   const n2 = FIG.calls();
   const other = await auditFolder(GOOD.runDir, parseAuditArgs([GOOD.runDir, "--mean-max", "4"]), { mcp: LP, figmaExport: FIG.exportJob, log: qlog });
   check(other.code === 2 && FIG.calls() - n2 === other.audit.counts.roots, "a pass under another threshold renders every root again");
+  // §16.6 changed the default rule of what a picture draws (alpha to visible), and with it every root's
+  // key: a pass under the defaults keeps nothing from a pass made by --drawn-by alpha.
+  await auditFolder(GOOD.runDir, parseAuditArgs([GOOD.runDir, "--drawn-by", "alpha"]), { mcp: LP, figmaExport: FIG.exportJob, log: qlog });
+  const n3 = FIG.calls();
+  const byDefault = await auditFolder(GOOD.runDir, o, { mcp: LP, figmaExport: FIG.exportJob, log: qlog });
+  check(byDefault.code === 2 && byDefault.audit && FIG.calls() - n3 === byDefault.audit.counts.roots && byDefault.audit.settings.drawnBy === "visible",
+    "a pass under the defaults (--drawn-by visible) renders every root again after a pass by --drawn-by alpha, the default before §16.6 (" +
+    (FIG.calls() - n3) + " of " + (byDefault.audit ? byDefault.audit.counts.roots : "?") + " rendered)");
 
   const r = rootOf(CLEAN, 19);
   const wrong = await FIG.exportJob({ op: "export", id: r.figma.id, src: r.guid, snap: "0".repeat(16), constraint: { type: "SCALE", value: 1 } });
@@ -676,34 +719,37 @@ const LP = localPixso();
   check(refused.length === 0, "a PNG the standard does not allow, an indexed PNG without a palette, and an index past the palette are refused with a reason", show(refused));
 }
 
+// A picture drawn from rectangles with box-filter coverage, so an edge at a fraction of a pixel is
+// anti-aliased (sections 10 and 11).
+const art = (W, H, rects) => {
+  const rgba = Buffer.alloc(W * H * 4);
+  for (const q of rects || []) {
+    const [x0, y0, x1, y1] = q.box, c = q.c || [30, 30, 30], a = q.a === undefined ? 1 : q.a;
+    for (let y = Math.max(0, Math.floor(y0)); y < Math.min(H, Math.ceil(y1)); y++) {
+      const cy = Math.min(y + 1, y1) - Math.max(y, y0);
+      for (let x = Math.max(0, Math.floor(x0)); x < Math.min(W, Math.ceil(x1)); x++) {
+        const al = (Math.min(x + 1, x1) - Math.max(x, x0)) * cy * a;
+        if (al <= 0) continue;
+        const k = (y * W + x) * 4, da = rgba[k + 3] / 255, oa = al + da * (1 - al);
+        for (let ch = 0; ch < 3; ch++) rgba[k + ch] = Math.round((c[ch] * al + rgba[k + ch] * da * (1 - al)) / oa);
+        rgba[k + 3] = Math.round(oa * 255);
+      }
+    }
+  }
+  return { W, H, rgba };
+};
+
 // ============================================================================================
 // 10. what the first live pass taught the audit (docs/M1.md §16.2)
 // ============================================================================================
 // Each case is a small IR and two pictures drawn here, handed to auditRun directly: "Figma" and "Pixso"
 // answer as the plugin's export and the read-only script do (a PNG, the box, the render bounds when the
-// engine has them, the opacity). A picture is drawn from rectangles with box-filter coverage, so an
-// edge at a fraction of a pixel is anti-aliased, and it starts at what it draws, as both engines'
+// engine has them, the opacity). A picture is drawn from rectangles with box-filter coverage (art), so
+// an edge at a fraction of a pixel is anti-aliased, and it starts at what it draws, as both engines'
 // exports do. Every case is also run under the first pass's settings, where it fails.
 {
   const OLD = ["--register", "top-left", "--size-by", "picture", "--placeholder-extent", "box", "--opacity", "undo", "--blank", "compare",
     "--hidden-in-source", "compare", "--glyph-notes", "compare", "--hairlines", "pixel"];
-  const art = (W, H, rects) => {
-    const rgba = Buffer.alloc(W * H * 4);
-    for (const q of rects || []) {
-      const [x0, y0, x1, y1] = q.box, c = q.c || [30, 30, 30], a = q.a === undefined ? 1 : q.a;
-      for (let y = Math.max(0, Math.floor(y0)); y < Math.min(H, Math.ceil(y1)); y++) {
-        const cy = Math.min(y + 1, y1) - Math.max(y, y0);
-        for (let x = Math.max(0, Math.floor(x0)); x < Math.min(W, Math.ceil(x1)); x++) {
-          const al = (Math.min(x + 1, x1) - Math.max(x, x0)) * cy * a;
-          if (al <= 0) continue;
-          const k = (y * W + x) * 4, da = rgba[k + 3] / 255, oa = al + da * (1 - al);
-          for (let ch = 0; ch < 3; ch++) rgba[k + ch] = Math.round((c[ch] * al + rgba[k + ch] * da * (1 - al)) / oa);
-          rgba[k + 3] = Math.round(oa * 255);
-        }
-      }
-    }
-    return { W, H, rgba };
-  };
   let gs = 0;
   const rec = (parent, type, w, h, x, y, props, extra) => Object.assign({ parent, guid: "9:" + (++gs), type, name: type,
     props: Object.assign({ relativeTransform: [1, 0, x, 0, 1, y], width: w, height: h }, props || {}) }, extra || {});
@@ -985,6 +1031,163 @@ const LP = localPixso();
     for (const k of Object.keys(cases)) { const r = (await unit(ir, [0], F, pix(cases[k]))).e(0); if (r.ok !== false) still.push(k + ": " + show([r.ok, r.metrics, r.hairlines])); }
     check(still.length === 0, "the band hides only where the line's ink sits in it: dashes, another colour, a crisp line a row lower and a shorter line all still fail", still.join(" | "));
   }
+
+  // §16.3, §16.5: which pixels a picture draws (--drawn-by). The second pass failed 4 roots on the size
+  // rule whose pictures agree over white (means 0.47-0.54): a shadow's edge at alpha 16-19 in Figma's
+  // picture and 12-15 in Pixso's, at most 16 levels off white. visible leaves out what is white on both
+  // sides within --drawn-white-tol; alpha counts it; ink leaves out every white pixel, and so makes a
+  // content difference inside a white frame one of size. Each case names its settings, whatever the
+  // defaults.
+  {
+    const ALPHA = ["--drawn-by", "alpha"], VIS = (t) => ["--drawn-by", "visible", "--drawn-white-tol", String(t)], INK = (t) => ["--drawn-by", "ink", "--drawn-white-tol", String(t)];
+    const ir = { nodes: [rec(-1, "FRAME", 100, 40, 0, 0)], values: [], notes: [] }, box = { x: 0, y: 0, width: 100, height: 40 };
+    const text = { box: [12, 13, 50, 27], c: DARK };
+    // A white card (a shade off white, 4 levels): opaque in Figma's picture, transparent in Pixso's.
+    const F = { 0: { img: art(100, 40, [{ box: [0, 0, 100, 40], c: [251, 251, 252] }, text]), box, render: box } }, P = { 0: { img: art(100, 40, [text]), box } };
+    const run = async (args) => (await unit(ir, [0], F, P, args)).e(0);
+    const al = await run(ALPHA), vi = await run(VIS(8)), ink = await run(INK(8)), v2 = await run(VIS(2));
+    check(holds(() => al.ok === false && /differ in size/.test(al.why) && al.metrics.mean < 5 && vi.ok === true && show(vi.metrics.drawn.figma) === show([12, 13, 50, 27]) &&
+      show(vi.metrics.drawn.pixso) === show([12, 13, 50, 27]) && ink.ok === true && v2.ok === false && /differ in size/.test(v2.why)),
+      "a white card Figma exports opaque and Pixso transparent, the pictures alike over white (mean " + val(() => al.metrics.mean) + "), fails on size by alpha; " +
+      "by visible what is white on both sides is drawn by neither and it passes, as by ink; 4 levels off white is white within --drawn-white-tol 8, not 2",
+      show([al.why, vi.metrics, ink.ok, v2.why]));
+    // A shadow's faint edge (the 4 roots): a card 92x32 whose shadow reaches 6 px past it, the outer 4 px
+    // at alpha 17 in Figma's picture (13 levels off white) and 12 in Pixso's, the inner 2 px at 60 in
+    // both. The pictures are the same extent; Figma reports render bounds, Pixso none. The outer edge
+    // drawn at alpha 128 in Figma is a visible difference, and still fails.
+    const ir2 = { nodes: [rec(-1, "FRAME", 92, 32, 0, 0)], values: [], notes: [] }, b2 = { x: 0, y: 0, width: 92, height: 32 }, SH = [60, 70, 110];
+    const card = (outer) => art(104, 44, [[0, 0, 104, 4], [0, 40, 104, 44], [0, 4, 4, 40], [100, 4, 104, 40]].map((q) => ({ box: q, c: SH, a: outer / 255 }))
+      .concat([{ box: [4, 4, 100, 40], c: SH, a: 60 / 255 }, { box: [6, 6, 98, 38], c: [255, 255, 255] }, { box: [18, 19, 56, 33], c: DARK }]));
+    const SF = (outer) => ({ 0: { img: card(outer), box: b2, render: { x: -6, y: -6, width: 104, height: 44 } } }), SP = { 0: { img: card(12), box: b2 } };
+    const sh = async (outer, args) => (await unit(ir2, [0], SF(outer), SP, args)).e(0);
+    const fa = await sh(17, ALPHA), f8 = await sh(17, VIS(8)), f16 = await sh(17, VIS(16)), dv = await sh(128, VIS(16));
+    check(holds(() => fa.ok === false && /differ in size/.test(fa.why) && fa.register.rule.join() === "same extent,same extent" && fa.metrics.mean < 5 &&
+      f8.ok === false && /differ in size/.test(f8.why) && f16.ok === true && show(f16.metrics.drawn.figma) === show([-2, -2, 94, 34]) && show(f16.metrics.drawn.pixso) === show([-2, -2, 94, 34]) &&
+      dv.ok === false && /differ in size/.test(dv.why) && show(dv.metrics.drawn.figma) === show([-6, -6, 98, 38]) && show(dv.metrics.drawn.pixso) === show([-2, -2, 94, 34])),
+      "a shadow whose outer 4 px are at alpha 17 in Figma and 12 in Pixso fails on size by alpha (mean " + val(() => fa.metrics.mean) + "); by visible that edge, 13 levels " +
+      "off white on one side and 9 on the other, is white within --drawn-white-tol 16 and the card passes, not within 8; the edge at alpha 128 in Figma still fails by visible",
+      show([fa.why, f8.why, f16.metrics, dv.why]));
+    // A visible difference counts on both sides, white or not: an image placeholder (grey) in a white
+    // frame against the image, whose white margins are the frame's white. By visible both sides draw the
+    // placeholder's box (Pixso's white margins count where Figma's grey is) and the root fails on its
+    // content alone, as by alpha; by ink Pixso draws only the image, and it is a size difference too.
+    const PF = { 0: { img: art(100, 40, [{ box: [0, 0, 100, 40], c: [255, 255, 255] }, { box: [20, 8, 80, 32], c: [200, 200, 200] }]), box, render: box } };
+    const PP = { 0: { img: art(100, 40, [{ box: [0, 0, 100, 40], c: [255, 255, 255] }, { box: [30, 14, 70, 26], c: BLUE }]), box } };
+    const pr = async (args) => (await unit(ir, [0], PF, PP, args)).e(0);
+    const pa = await pr(ALPHA), pv = await pr(VIS(8)), p32 = await pr(VIS(32)), pi = await pr(INK(8));
+    check(holds(() => pa.ok === false && !/differ in size/.test(pa.why) && /mean difference/.test(pa.why) && pv.why === pa.why && p32.why === pa.why &&
+      show(pv.metrics.drawn.figma) === show([20, 8, 80, 32]) && show(pv.metrics.drawn.pixso) === show([20, 8, 80, 32]) &&
+      pi.ok === false && /differ in size/.test(pi.why) && show(pi.metrics.drawn.pixso) === show([30, 14, 70, 26])),
+      "an image placeholder against an image with white margins in a white frame fails on its content (" + pa.why + ") by alpha and by visible (within 8 and 32), " +
+      "where both sides draw the placeholder's box; by ink it is a size difference too", show([pa.why, pv.metrics.drawn, p32.why, pi.why]));
+    // §16.6: visible within 16 is the default, calibrated on U's second pass, where 12 to 48 pass the 4
+    // roots and move no other verdict while 64 also passes 2 counters whose figures Pixso sets 3 px wider
+    // (C04). A counter like those: three 2 px strokes, Pixso's second 1 px and third 2 px further right
+    // and a last column 30 levels off white (black at alpha 30), so what it draws ends 3 px further
+    // right; the strokes are grey, so neither ink on one side nor the mean sees it. With no flag the
+    // shadow's edge and the white card pass and the counter fails on size alone; within 64 its last
+    // column is white over white, its edges 2 px apart, and it passes.
+    const ir3 = { nodes: [rec(-1, "FRAME", 200, 14, 0, 0)], values: [], notes: [] }, b3 = { x: 0, y: 0, width: 200, height: 14 }, GREY = [135, 135, 135];
+    const stroke = (x) => ({ box: [x, 3, x + 2, 14], c: GREY });
+    const KF = { 0: { img: art(200, 14, [stroke(10), stroke(20), stroke(30)]), box: b3, render: b3 } };
+    const KP = { 0: { img: art(200, 14, [stroke(10), stroke(21), stroke(32), { box: [34, 3, 35, 14], c: [0, 0, 0], a: 30 / 255 }]), box: b3 } };
+    const ct = async (args) => (await unit(ir3, [0], KF, KP, args)).e(0);
+    const dS = await sh(17, []), dW = await run([]), dC = await ct([]), c64 = await ct(VIS(64)), cA = await ct(ALPHA);
+    check(holds(() => dS.ok === true && dW.ok === true && dC.ok === false && /differ in size/.test(dC.why) && !/ink on one side|mean difference/.test(dC.why) &&
+      show(dC.metrics.drawn.figma) === show([10, 3, 32, 14]) && show(dC.metrics.drawn.pixso) === show([10, 3, 35, 14]) && dC.metrics.gross === 0 && dC.metrics.mean < 5 &&
+      c64.ok === true && show(c64.metrics.drawn.pixso) === show([10, 3, 34, 14]) && cA.ok === false && cA.why === dC.why),
+      "by default (visible within 16) the shadow's faint edge and the white card pass, and a counter whose figures Pixso sets 3 px wider fails on size alone, as by alpha " +
+      "(mean " + val(() => dC.metrics.mean) + "); within 64 its last column, 30 levels off white, is left out and it passes",
+      show([dS.why, dW.why, dC.why, val(() => dC.metrics), c64.why, val(() => c64.metrics.drawn)]));
+  }
+}
+
+// ============================================================================================
+// 11. the offline re-judge (tools/ir-rejudge.mjs, docs/M1.md §16.4)
+// ============================================================================================
+// A run audited with --pictures all is judged again from its folder alone, by auditRun with the two
+// engines answering from the folder: under the recorded pass's own settings every root comes out as it
+// did; under another setting, as a live pass under that setting does. What the folder does not keep (an
+// export at another scale, the reports that came with the finer pictures of a registration search) is
+// refused or named, and the roots that needed it are apart.
+{
+  const holds = (f) => { try { return !!f(); } catch (err) { return false; } };
+  const val = (f) => { try { return f(); } catch (err) { return undefined; } };
+  // The live pass under --placeholders compare first: each audit replaces the folder's audit.
+  const liveCmp = await auditOf(GOOD, { mcp: LP, figmaExport: FIG.exportJob }, ["--placeholders", "compare"]);
+  const rec = await auditOf(GOOD, { mcp: LP, figmaExport: FIG.exportJob }, ["--pictures", "all"]);
+  const searched = rec.audit.roots.filter((e) => e.register && e.register.supersample && e.register.supersample.used !== false).map((e) => e.i);
+  const same = await rejudge(GOOD.runDir);
+  const rendered = rec.audit.roots.filter((e) => e.figma).length;
+  check(same.diff.length === 0 && same.apart.map((x) => x.i).join() === searched.join() && canonicalJSON(same.audit.counts) === canonicalJSON(rec.audit.counts) && rendered > 0,
+    "a run audited with --pictures all, re-judged from its folder under the recorded settings, reproduces every root (" + rec.audit.roots.length + ", " + rendered +
+    " rendered): ok, why, metrics and every other field", show([same.diff.slice(0, 3), same.apart, searched]));
+  const cmp = await rejudge(GOOD.runDir, { settings: rejudgeSettings(rec.audit, { placeholders: "compare" }).settings });
+  const d = compareAudits(liveCmp.audit, cmp.audit), r2 = cmp.audit.roots.find((e) => e.i === 2);
+  check(d.length === 0 && r2 && r2.ok === false && cmp.diff.some((x) => x.i === 2 && x.fields.indexOf("ok") >= 0),
+    "re-judged under --placeholders compare it is the live pass under that setting, root for root (root 2 fails: " + (r2 && r2.why) + ")", show(d.slice(0, 3)));
+  // An export at another scale is not in the folder: refused (a render missing, never ok) and apart.
+  const small = await rejudge(GOOD.runDir, { settings: rejudgeSettings(rec.audit, { maxSide: 100 }).settings });
+  const moved = small.audit.roots.filter((e) => typeof e.scale === "number" && rootOf(rec, e.i) && e.scale !== rootOf(rec, e.i).scale);
+  const apartI = small.apart.map((x) => x.i);
+  check(moved.length > 0 && moved.every((e) => e.ok === false && /^figma render missing: not kept in the run folder: /.test(e.why) && apartI.indexOf(e.i) >= 0) &&
+    small.apart.every((x) => moved.some((e) => e.i === x.i) || searched.indexOf(x.i) >= 0),
+    "under --max-side 100 the " + moved.length + " roots that would render at another scale are refused, never judged on the recorded pictures, and apart",
+    show([moved.slice(0, 2).map((e) => [e.i, e.ok, e.why]), small.apart.slice(0, 3)]));
+  const lines = [];
+  const code = await rejudgeMain([GOOD.runDir, "--check"], (m) => lines.push(m));
+  const refusedFlag = await rejudgeMain([GOOD.runDir, "--fresh"], (m) => lines.push(m));
+  check(code === 0 && refusedFlag === 1 && lines.some((l) => /^changed against the recorded pass: 0 roots/.test(l)),
+    "the command re-judges the folder (--check exit 0: nothing changed) and refuses the live audit's own flags", lines.join(" | "));
+  // An audit recorded before --drawn-by existed (U's pass of §16.3 names neither drawnBy nor
+  // drawnWhiteTol) was judged by alpha: re-judged with no setting given it is judged by alpha again and
+  // reproduces itself, where today's default visible (§16.6), given, moves the drawn extents of the
+  // roots whose white frame it leaves out; the command says what it took.
+  const byA = await auditOf(GOOD, { mcp: LP, figmaExport: FIG.exportJob }, ["--pictures", "all", "--drawn-by", "alpha"]);
+  const legacy = JSON.parse(JSON.stringify(byA.audit));
+  delete legacy.settings.drawnBy; delete legacy.settings.drawnWhiteTol;
+  writeFileSync(join(GOOD.runDir, "audit", "audit.json"), JSON.stringify(legacy));
+  const ls = rejudgeSettings(legacy, {});
+  const llines = [];
+  const lcode = await rejudgeMain([GOOD.runDir, "--check"], (m) => llines.push(m));
+  const asNow = await rejudge(GOOD.runDir, { settings: rejudgeSettings(legacy, { drawnBy: "visible" }).settings });
+  check(holds(() => rec.audit.settings.drawnBy === "visible" && ls.settings.drawnBy === "alpha" && ls.missing.join() === "drawnBy,drawnWhiteTol" && lcode === 0 &&
+    llines.some((l) => /^settings: the recorded pass's own; not in the recorded settings \(the rule before them, else the default\): drawnBy "alpha", drawnWhiteTol 16$/.test(l)) &&
+    llines.some((l) => /^changed against the recorded pass: 0 roots/.test(l)) &&
+    asNow.audit.settings.drawnBy === "visible" && asNow.diff.length > 0 && asNow.diff.every((x) => x.fields.join() === "metrics")),
+    "an audit recorded before --drawn-by is re-judged by alpha, the rule it ran, and reproduces itself (--check exit " + lcode + "), not by the default visible (a pass now " +
+    "records " + rec.audit.settings.drawnBy + "), which moves the drawn extents of " + asNow.diff.length + " roots; the command names what it took",
+    show([llines.slice(1, 2), asNow.diff.slice(0, 3)]));
+
+  // A root searched on pictures at 4x (an arrow connector, as C20 of section 10): the folder keeps the
+  // 4x pair and its sizes, not the reports that came with it.
+  const dir = join(SCRATCH, "rejudge-fine");
+  mkdirSync(join(dir, "reports"), { recursive: true });
+  const nodes = [{ parent: -1, guid: "9:900", type: "VECTOR", name: "VECTOR", props: { relativeTransform: [1, 0, 0, 0, 1, 50], width: 100, height: 0 } }];
+  writeFileSync(join(dir, "ir.json"), JSON.stringify({ nodes, values: [], notes: [] }));
+  writeFileSync(join(dir, "states.json"), JSON.stringify({ snapshot: "6".repeat(16), runId: RUN, tasks: [{ op: "build", taskNo: 1, roots: [0] }, { op: "verify", taskNo: 2, state: "built", build: 1 }] }));
+  writeFileSync(join(dir, "reports", "2-verify.json"), JSON.stringify({ taskNo: 2, roots: [{ i: 0, found: true, id: "u:0" }] }));
+  const arrow = (reach, s) => art(100 * s, Math.ceil(reach * 2 * s), [{ box: [0, (reach - 1) * s, 100 * s, (reach + 1) * s] }, { box: [96 * s, 0, 100 * s, reach * 2 * s] }]);
+  const box = { x: 0, y: 50, width: 100, height: 0 };
+  const io = { identity: { same: true, q5: true, code: null, detail: "synthetic" }, log: qlog,
+    figmaExport: async (job) => {
+      const png = pngOf(arrow(7.4, job.constraint.value));
+      return { w: 100, h: 0, type: "VECTOR", opacity: 1, box, render: { x: 0, y: 50 - 7.4, width: 100, height: 14.8 }, bytes: png.length, d: png.toString("base64") };
+    },
+    mcp: { run: async (src) => {
+      const a = JSON.parse(/^const ARGS = (.*);$/m.exec(src)[1]), png = pngOf(arrow(6.66, a.scale));
+      return { ok: true, value: { w: 100, h: 0, type: "VECTOR", opacity: 1, box, render: null, n: png.length, d: png.toString("base64") } };
+    } } };
+  const fr = await auditFolder(dir, parseAuditArgs([dir, "--pictures", "all"]), io);
+  const saved = await rejudge(dir), refused = await rejudge(dir, { fine: "refuse" });
+  const f0 = val(() => fr.audit.roots[0]), q0 = val(() => refused.audit.roots[0]);
+  check(holds(() => f0.ok === true && f0.register.supersample.k === 4 && existsSync(join(dir, "audit", "pictures", "0@4x.pixso.png")) &&
+    saved.diff.length === 0 && saved.apart.length === 1 && saved.apart[0].fine === 4 && !saved.apart[0].refused.length &&
+    q0.register.supersample.used === false && /is missing: not kept in the run folder/.test(q0.register.supersample.why) &&
+    refused.apart.length === 1 && refused.apart[0].refused.length === 1 && refused.diff.length === 1 && refused.diff[0].fields.indexOf("register") >= 0),
+    "a root searched on both engines' pictures at 4x re-judges from the saved 4x pair with the reports at the export's scale (the same result, the root apart); " +
+    "with --fine refuse the search runs on the pictures as exported (mean " + val(() => q0.metrics.mean) + " against " + val(() => f0.metrics.mean) + "), says why, and is apart",
+    show([f0 && f0.register, saved.diff, saved.apart, q0 && q0.register, refused.apart]));
 }
 
 await PX.close();
